@@ -29,6 +29,8 @@ class TrafficLightEnv(gym.Env):
         tl_id: Traffic light ID to control
         max_steps: Maximum steps per episode before truncation
         steps_per_action: Number of simulation steps between actions
+        routes_path: Path to pre-generated routes file (optional)
+        scenario: Traffic scenario for route generation (light/moderate/heavy/rush_hour)
     """
 
     metadata = {"render_modes": ["human"]}
@@ -41,6 +43,8 @@ class TrafficLightEnv(gym.Env):
         max_steps: int = 3600,
         steps_per_action: int = 5,
         gui: bool = False,
+        routes_path: str | None = None,
+        scenario: str = "moderate",
     ) -> None:
         """Initialize the traffic light environment.
 
@@ -51,6 +55,10 @@ class TrafficLightEnv(gym.Env):
             max_steps: Maximum simulation steps per episode (default: 3600 = 1 hour)
             steps_per_action: Number of simulation steps between agent actions (default: 5)
             gui: Whether to launch SUMO with GUI (default: False)
+            routes_path: Path to pre-generated .rou.xml file (optional).
+                If not provided, routes are generated automatically on reset.
+            scenario: Traffic scenario for route generation when routes_path is None.
+                Options: "light", "moderate", "heavy", "rush_hour" (default: "moderate")
         """
         super().__init__()
 
@@ -60,6 +68,8 @@ class TrafficLightEnv(gym.Env):
         self.max_steps = max_steps
         self.steps_per_action = steps_per_action
         self.gui = gui
+        self.routes_path = routes_path
+        self.scenario = scenario
 
         # State tracking
         self._current_step = 0
@@ -141,6 +151,8 @@ class TrafficLightEnv(gym.Env):
         """Reset the environment to initial state.
 
         Stops any existing simulation and starts a fresh one.
+        If no routes_path was provided at init, generates routes using route_service
+        with the configured traffic scenario.
 
         Args:
             seed: Random seed for reproducibility
@@ -155,10 +167,42 @@ class TrafficLightEnv(gym.Env):
         if sumo_service.is_simulation_running():
             sumo_service.stop_simulation()
 
-        # Start fresh simulation
+        # Generate routes if not provided
+        from pathlib import Path
+
+        from app.services import route_service
+        from app.services.route_service import TrafficScenario
+
+        if self.routes_path is None:
+            # Map scenario string to enum
+            scenario_map = {
+                "light": TrafficScenario.LIGHT,
+                "moderate": TrafficScenario.MODERATE,
+                "heavy": TrafficScenario.HEAVY,
+                "rush_hour": TrafficScenario.RUSH_HOUR,
+            }
+            scenario_enum = scenario_map.get(self.scenario, TrafficScenario.MODERATE)
+
+            output_dir = str(Path(self.network_path).parent)
+            route_result = route_service.generate_routes(
+                network_path=self.network_path,
+                output_dir=output_dir,
+                scenario=scenario_enum,
+                seed=seed,  # Use the seed from reset() for reproducibility
+            )
+            routes_path = route_result["routes_path"]
+        else:
+            routes_path = self.routes_path
+
+        # Get vtypes file
+        vtypes_path = route_service.get_vtypes_file_path()
+
+        # Start fresh simulation with routes
         sumo_service.start_simulation(
             network_path=self.network_path,
             network_id=self.network_id,
+            routes_path=routes_path,
+            additional_files=[vtypes_path],
             gui=self.gui,
         )
 
