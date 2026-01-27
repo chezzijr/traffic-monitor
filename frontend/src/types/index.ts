@@ -67,3 +67,20 @@ export interface SimulationMetrics {
   average_wait_time: number;
   throughput: number;
 }
+
+// SSE event types for simulation streaming
+export interface SSEStepEvent {
+  step: number;
+  total_vehicles: number;
+  total_wait_time: number;
+  average_wait_time: number;
+}
+
+export interface SSEStatusEvent {
+  step: number;
+  final_step?: number;
+}
+
+export interface SSEErrorEvent {
+  message: string;
+}
