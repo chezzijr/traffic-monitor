@@ -220,6 +220,16 @@ export default function App() {
             <RegionSelector />
           </MapContainer>
           <MapLegend className="absolute bottom-4 left-4 z-[1000]" />
+          {/* Loading overlay during region extraction */}
+          {isLoading && (
+            <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-[2000]">
+              <div className="bg-white rounded-lg p-6 shadow-xl flex flex-col items-center gap-3">
+                <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                <p className="text-gray-700 font-medium">Extracting road network...</p>
+                <p className="text-gray-500 text-sm">This may take 30-60 seconds</p>
+              </div>
+            </div>
+          )}
         </main>
       </div>
     </div>
