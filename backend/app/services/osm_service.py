@@ -227,6 +227,8 @@ def parse_sumo_traffic_lights(net_xml_path: Path) -> dict:
     traffic_lights = []
     for tl_logic in root.findall(".//tlLogic"):
         tl_id = tl_logic.get("id")
+        if tl_id is None:
+            continue
         tl_type = tl_logic.get("type", "static")
 
         # Get coordinates from junction with same ID
