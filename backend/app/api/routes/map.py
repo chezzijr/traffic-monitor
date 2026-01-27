@@ -1,0 +1,110 @@
+"""Map-related API routes."""
+
+from fastapi import APIRouter, HTTPException, status
+
+from app.models.schemas import BoundingBox, Intersection, NetworkInfo
+from app.services import osm_service
+
+router = APIRouter(prefix="/map", tags=["map"])
+
+
+@router.post(
+    "/extract-region",
+    response_model=NetworkInfo,
+    status_code=status.HTTP_201_CREATED,
+    summary="Extract road network from OSM",
+    description="Extract road network from OpenStreetMap for the given bounding box.",
+)
+def extract_region(bbox: BoundingBox) -> NetworkInfo:
+    """
+    Extract road network from OpenStreetMap for the given bounding box.
+
+    Returns network info including intersections and road count.
+    """
+    try:
+        result = osm_service.extract_network(bbox.as_tuple())
+        # Convert bbox dict back to BoundingBox model
+        result["bbox"] = BoundingBox(**result["bbox"])
+        # Convert intersection dicts to Intersection models
+        result["intersections"] = [Intersection(**i) for i in result["intersections"]]
+        return NetworkInfo(**result)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
+
+
+@router.get(
+    "/intersections/{network_id}",
+    response_model=list[Intersection],
+    status_code=status.HTTP_200_OK,
+    summary="Get intersections for a network",
+    description="Retrieve all intersections for a previously extracted network.",
+)
+def get_intersections(network_id: str) -> list[Intersection]:
+    """
+    Get cached intersections for a given network ID.
+
+    Returns list of intersections with their coordinates and metadata.
+    """
+    try:
+        intersections = osm_service.get_intersections(network_id)
+        return [Intersection(**i) for i in intersections]
+    except KeyError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+
+
+@router.post(
+    "/convert-to-sumo/{network_id}",
+    response_model=dict,
+    status_code=status.HTTP_201_CREATED,
+    summary="Convert network to SUMO format",
+    description="Convert a cached OSM network to SUMO simulation format.",
+)
+def convert_to_sumo(network_id: str) -> dict:
+    """
+    Convert cached OSM network to SUMO format using netconvert.
+
+    Returns path to the generated SUMO network file.
+    """
+    try:
+        sumo_path = osm_service.convert_to_sumo(network_id)
+        return {
+            "sumo_network_path": str(sumo_path),
+            "network_id": network_id,
+        }
+    except KeyError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
+
+
+@router.get(
+    "/networks",
+    response_model=list[str],
+    status_code=status.HTTP_200_OK,
+    summary="List cached networks",
+    description="Get list of all cached network IDs.",
+)
+def get_networks() -> list[str]:
+    """
+    Get list of all cached network IDs.
+
+    Returns list of network IDs that can be used with other endpoints.
+    """
+    return osm_service.get_cached_network_ids()

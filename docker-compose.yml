@@ -1,0 +1,54 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend/src:/app/src:ro
+      - ./frontend/public:/app/public:ro
+      - ./frontend/index.html:/app/index.html:ro
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    networks:
+      - traffic-network
+
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - SUMO_HOME=/usr/share/sumo
+      - CORS_ORIGINS=["http://localhost:5173","http://frontend:5173"]
+    volumes:
+      - ./backend/simulation:/app/simulation
+      - ./simulation:/app/data/simulation:ro
+    depends_on:
+      - redis
+    networks:
+      - traffic-network
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - traffic-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  traffic-network:
+    driver: bridge
+
+volumes:
+  redis-data:

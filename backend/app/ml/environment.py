@@ -1,0 +1,346 @@
+"""Gymnasium environment for traffic light optimization using SUMO.
+
+This module provides a Gymnasium-compatible environment for training
+reinforcement learning agents to optimize traffic light control.
+"""
+
+import logging
+from typing import Any
+
+import gymnasium as gym
+import numpy as np
+from gymnasium import spaces
+
+from app.services import sumo_service
+
+logger = logging.getLogger(__name__)
+
+
+class TrafficLightEnv(gym.Env):
+    """Gymnasium environment for single traffic light optimization.
+
+    The environment wraps SUMO simulation and provides:
+    - Observation: queue lengths, waiting times per lane, current phase
+    - Action: select next traffic light phase
+    - Reward: negative change in total waiting time
+
+    Attributes:
+        network_path: Path to the SUMO network file
+        tl_id: Traffic light ID to control
+        max_steps: Maximum steps per episode before truncation
+        steps_per_action: Number of simulation steps between actions
+    """
+
+    metadata = {"render_modes": ["human"]}
+
+    def __init__(
+        self,
+        network_path: str,
+        network_id: str,
+        tl_id: str,
+        max_steps: int = 3600,
+        steps_per_action: int = 5,
+        gui: bool = False,
+    ) -> None:
+        """Initialize the traffic light environment.
+
+        Args:
+            network_path: Path to the SUMO .net.xml file
+            network_id: ID of the network for SUMO service
+            tl_id: ID of the traffic light to control
+            max_steps: Maximum simulation steps per episode (default: 3600 = 1 hour)
+            steps_per_action: Number of simulation steps between agent actions (default: 5)
+            gui: Whether to launch SUMO with GUI (default: False)
+        """
+        super().__init__()
+
+        self.network_path = network_path
+        self.network_id = network_id
+        self.tl_id = tl_id
+        self.max_steps = max_steps
+        self.steps_per_action = steps_per_action
+        self.gui = gui
+
+        # State tracking
+        self._current_step = 0
+        self._prev_total_wait_time = 0.0
+        self._controlled_lanes: list[str] = []
+        self._num_phases = 0
+        self._is_initialized = False
+
+        # Spaces will be properly defined after first reset when we know the network
+        # Placeholder spaces - will be updated in reset()
+        self.action_space = spaces.Discrete(4)  # Will be updated based on actual phases
+        self.observation_space = spaces.Box(
+            low=0.0,
+            high=np.inf,
+            shape=(1,),  # Placeholder, updated in reset
+            dtype=np.float32,
+        )
+
+    def _initialize_spaces(self) -> None:
+        """Initialize action and observation spaces based on traffic light config."""
+        # Get traffic light info
+        tl_info = sumo_service.get_traffic_light(self.tl_id)
+        if tl_info is None:
+            raise RuntimeError(f"Traffic light '{self.tl_id}' not found in network")
+
+        self._controlled_lanes = tl_info["controlled_lanes"]
+
+        # Get number of phases from the traffic light program
+        self._num_phases = self._get_num_phases()
+
+        # Action space: select one of the available phases
+        self.action_space = spaces.Discrete(self._num_phases)
+
+        # Observation space:
+        # - queue_lengths: one per controlled lane
+        # - waiting_times: one per controlled lane
+        # - current_phase: one-hot encoded
+        num_lanes = len(self._controlled_lanes)
+        obs_dim = num_lanes * 2 + self._num_phases
+        self.observation_space = spaces.Box(
+            low=0.0,
+            high=np.inf,
+            shape=(obs_dim,),
+            dtype=np.float32,
+        )
+
+        self._is_initialized = True
+        logger.info(
+            f"Environment initialized: {num_lanes} lanes, {self._num_phases} phases, "
+            f"observation dim={obs_dim}"
+        )
+
+    def _get_num_phases(self) -> int:
+        """Get the number of phases for the traffic light.
+
+        Returns:
+            Number of phases in the traffic light program
+        """
+        # Access TraCI to get phase count
+        if not sumo_service.SUMO_AVAILABLE or sumo_service.traci is None:
+            return 4  # Default fallback
+
+        try:
+            logic = sumo_service.traci.trafficlight.getAllProgramLogics(self.tl_id)
+            if logic and len(logic) > 0:
+                # Get the first (current) program's phases
+                return len(logic[0].phases)
+        except Exception as e:
+            logger.warning(f"Could not get phase count for {self.tl_id}: {e}")
+
+        return 4  # Default fallback
+
+    def reset(
+        self,
+        *,
+        seed: int | None = None,
+        options: dict[str, Any] | None = None,  # noqa: ARG002
+    ) -> tuple[np.ndarray, dict[str, Any]]:
+        """Reset the environment to initial state.
+
+        Stops any existing simulation and starts a fresh one.
+
+        Args:
+            seed: Random seed for reproducibility
+            options: Additional options (unused, required by Gymnasium API)
+
+        Returns:
+            Tuple of (initial_observation, info_dict)
+        """
+        super().reset(seed=seed)
+
+        # Stop any existing simulation
+        if sumo_service.is_simulation_running():
+            sumo_service.stop_simulation()
+
+        # Start fresh simulation
+        sumo_service.start_simulation(
+            network_path=self.network_path,
+            network_id=self.network_id,
+            gui=self.gui,
+        )
+
+        # Initialize spaces if not done yet
+        if not self._is_initialized:
+            self._initialize_spaces()
+
+        # Reset state
+        self._current_step = 0
+        self._prev_total_wait_time = self._compute_total_wait_time()
+
+        observation = self._get_observation()
+        info = {
+            "step": self._current_step,
+            "tl_id": self.tl_id,
+            "num_lanes": len(self._controlled_lanes),
+            "num_phases": self._num_phases,
+        }
+
+        return observation, info
+
+    def step(
+        self, action: int
+    ) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
+        """Execute an action and advance the simulation.
+
+        Args:
+            action: Phase index to set for the traffic light
+
+        Returns:
+            Tuple of (observation, reward, terminated, truncated, info)
+        """
+        # Validate action
+        if not self.action_space.contains(action):
+            raise ValueError(f"Invalid action {action}. Must be in [0, {self._num_phases})")
+
+        # Set the traffic light phase
+        sumo_service.set_traffic_light_phase(self.tl_id, action)
+
+        # Advance simulation by steps_per_action steps
+        step_metrics = []
+        for _ in range(self.steps_per_action):
+            metrics = sumo_service.step()
+            step_metrics.append(metrics)
+            self._current_step += 1
+
+        # Compute reward (negative change in total wait time)
+        current_total_wait = self._compute_total_wait_time()
+        reward = self._compute_reward(current_total_wait)
+        self._prev_total_wait_time = current_total_wait
+
+        # Get new observation
+        observation = self._get_observation()
+
+        # Check termination conditions
+        terminated = False  # Episode doesn't naturally terminate
+        truncated = self._current_step >= self.max_steps
+
+        # Gather info
+        info = {
+            "step": self._current_step,
+            "total_wait_time": current_total_wait,
+            "action": action,
+            "total_vehicles": step_metrics[-1]["total_vehicles"] if step_metrics else 0,
+            "average_speed": step_metrics[-1].get("average_speed", 0.0) if step_metrics else 0.0,
+        }
+
+        return observation, reward, terminated, truncated, info
+
+    def _get_observation(self) -> np.ndarray:
+        """Collect current observation from SUMO.
+
+        Observation includes:
+        - Queue lengths per controlled lane
+        - Waiting times per controlled lane
+        - One-hot encoded current phase
+
+        Returns:
+            Numpy array of observations
+        """
+        if not sumo_service.SUMO_AVAILABLE or sumo_service.traci is None:
+            # Return zeros if SUMO not available
+            obs_dim = len(self._controlled_lanes) * 2 + self._num_phases
+            return np.zeros(obs_dim, dtype=np.float32)
+
+        traci = sumo_service.traci
+
+        # Collect queue lengths and waiting times per lane
+        queue_lengths = []
+        waiting_times = []
+
+        for lane_id in self._controlled_lanes:
+            try:
+                # Queue length: number of halting vehicles on the lane
+                queue_length = traci.lane.getLastStepHaltingNumber(lane_id)
+                queue_lengths.append(float(queue_length))
+
+                # Waiting time: sum of waiting times of vehicles on the lane
+                # Use accumulated waiting time from vehicles on this lane
+                vehicle_ids = traci.lane.getLastStepVehicleIDs(lane_id)
+                lane_wait_time = sum(
+                    traci.vehicle.getWaitingTime(vid) for vid in vehicle_ids
+                )
+                waiting_times.append(float(lane_wait_time))
+            except Exception as e:
+                logger.warning(f"Error getting metrics for lane {lane_id}: {e}")
+                queue_lengths.append(0.0)
+                waiting_times.append(0.0)
+
+        # Get current phase as one-hot encoding
+        current_phase = 0
+        try:
+            current_phase = traci.trafficlight.getPhase(self.tl_id)
+        except Exception as e:
+            logger.warning(f"Error getting current phase for {self.tl_id}: {e}")
+
+        phase_one_hot = np.zeros(self._num_phases, dtype=np.float32)
+        if 0 <= current_phase < self._num_phases:
+            phase_one_hot[current_phase] = 1.0
+
+        # Combine all observations
+        observation = np.concatenate([
+            np.array(queue_lengths, dtype=np.float32),
+            np.array(waiting_times, dtype=np.float32),
+            phase_one_hot,
+        ])
+
+        return observation
+
+    def _compute_total_wait_time(self) -> float:
+        """Compute total waiting time of all vehicles in the simulation.
+
+        Returns:
+            Total accumulated waiting time across all vehicles
+        """
+        if not sumo_service.SUMO_AVAILABLE or sumo_service.traci is None:
+            return 0.0
+
+        try:
+            traci = sumo_service.traci
+            vehicle_ids = traci.vehicle.getIDList()
+            total_wait = sum(traci.vehicle.getWaitingTime(vid) for vid in vehicle_ids)
+            return float(total_wait)
+        except Exception as e:
+            logger.warning(f"Error computing total wait time: {e}")
+            return 0.0
+
+    def _compute_reward(self, current_total_wait: float) -> float:
+        """Compute reward based on change in total waiting time.
+
+        The reward is the negative change in total waiting time.
+        Decreasing wait time gives positive reward.
+        Increasing wait time gives negative reward.
+
+        Args:
+            current_total_wait: Current total waiting time
+
+        Returns:
+            Reward value (negative of wait time change)
+        """
+        wait_time_change = current_total_wait - self._prev_total_wait_time
+        # Negative change in wait time -> positive reward
+        reward = -wait_time_change
+
+        # Normalize reward to reasonable scale
+        # Typical wait time changes can be in the range of 0-100+ seconds
+        reward = reward / 10.0  # Scale down for stability
+
+        return reward
+
+    def render(self) -> None:
+        """Render the environment.
+
+        If GUI mode is enabled, SUMO-GUI handles rendering.
+        Otherwise, this is a no-op.
+        """
+        # SUMO-GUI handles rendering when gui=True
+        pass
+
+    def close(self) -> None:
+        """Clean up the environment and stop SUMO simulation."""
+        if sumo_service.is_simulation_running():
+            sumo_service.stop_simulation()
+        self._is_initialized = False
+        logger.info("TrafficLightEnv closed")

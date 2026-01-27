@@ -1,0 +1,52 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+      target: production
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - traffic-network
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - SUMO_HOME=/usr/share/sumo
+      - CORS_ORIGINS=["http://localhost","http://frontend"]
+    volumes:
+      - ./backend/simulation:/app/simulation
+      - ./simulation:/app/data/simulation:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - traffic-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - traffic-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+networks:
+  traffic-network:
+    driver: bridge
+
+volumes:
+  redis-data:
