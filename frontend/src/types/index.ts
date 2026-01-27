@@ -15,6 +15,8 @@ export interface Intersection {
   lon: number;
   name?: string;
   num_roads: number;
+  has_traffic_light: boolean;
+  sumo_tl_id?: string;
 }
 
 // Matches backend NetworkInfo
