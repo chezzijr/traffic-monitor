@@ -21,6 +21,9 @@ _network_cache: dict[str, dict] = {}
 # Path: osm_service.py -> services -> app -> backend -> traffic-monitor
 SIMULATION_NETWORKS_DIR = Path(__file__).parent.parent.parent.parent / "simulation" / "networks"
 
+# Distance threshold for OSM-to-SUMO coordinate matching (~100m at equator)
+COORD_MATCH_THRESHOLD_DEG = 0.001
+
 
 def _generate_network_id(bbox: tuple[float, float, float, float]) -> str:
     """Generate a unique network ID based on bounding box coordinates."""
@@ -288,6 +291,9 @@ def _match_osm_to_sumo_traffic_lights(
         orig_boundary_str = location.get("origBoundary", "")
         if orig_boundary_str:
             orig_parts = orig_boundary_str.split(",")
+            if len(orig_parts) != 4:
+                logger.warning("Invalid origBoundary format in SUMO network")
+                return {}
             orig_west = float(orig_parts[0])
             orig_south = float(orig_parts[1])
             orig_east = float(orig_parts[2])
@@ -300,6 +306,9 @@ def _match_osm_to_sumo_traffic_lights(
         conv_boundary_str = location.get("convBoundary", "")
         if conv_boundary_str:
             conv_parts = conv_boundary_str.split(",")
+            if len(conv_parts) != 4:
+                logger.warning("Invalid convBoundary format in SUMO network")
+                return {}
             conv_west = float(conv_parts[0])
             conv_south = float(conv_parts[1])
             conv_east = float(conv_parts[2])
@@ -351,7 +360,7 @@ def _match_osm_to_sumo_traffic_lights(
                 best_match = intersection
 
         # Threshold for matching (approximately 100m in degrees)
-        if best_match and best_distance < 0.001:
+        if best_match and best_distance < COORD_MATCH_THRESHOLD_DEG:
             osm_to_sumo_map[best_match["id"]] = sumo_tl["id"]
             logger.debug(f"Matched OSM {best_match['id']} to SUMO {sumo_tl['id']} (dist: {best_distance:.6f})")
 
