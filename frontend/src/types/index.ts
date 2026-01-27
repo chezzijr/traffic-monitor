@@ -34,7 +34,29 @@ export interface TrafficLightState {
   remaining_time: number;
 }
 
-// Simulation state
+// Simulation status response from backend
+export interface SimulationStatusResponse {
+  status: 'idle' | 'running' | 'paused' | 'started' | 'stopped';
+  step: number;
+  network_id: string | null;
+}
+
+// Simulation step metrics from backend
+export interface SimulationStepMetrics {
+  step: number;
+  total_vehicles: number;
+  total_wait_time: number;
+  average_wait_time: number;
+}
+
+// Traffic light information from backend
+export interface TrafficLightInfo {
+  id: string;
+  phase: number;
+  program: string;
+}
+
+// Legacy types for backwards compatibility
 export type SimulationStatus = 'idle' | 'running' | 'paused' | 'stopped';
 
 export interface SimulationMetrics {
