@@ -26,6 +26,9 @@ def start_simulation(request: SimulationStartRequest) -> SimulationStatus:
     The network must have been previously extracted and converted to SUMO format.
     """
     try:
+        # Clear metrics from any previous simulation
+        metrics_service.clear_metrics()
+
         # Get the SUMO network path from osm_service
         network_path = osm_service.convert_to_sumo(request.network_id)
 
@@ -68,6 +71,7 @@ def step_simulation() -> SimulationStepMetrics:
     """
     try:
         result = sumo_service.step()
+        # TODO: Implement throughput tracking from SUMO departed vehicles
         metrics_service.record_metrics(
             step=result["step"],
             total_vehicles=result["total_vehicles"],
