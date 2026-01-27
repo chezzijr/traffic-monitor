@@ -74,13 +74,15 @@ def convert_to_sumo(network_id: str) -> dict:
     """
     Convert cached OSM network to SUMO format using netconvert.
 
-    Returns path to the generated SUMO network file.
+    Returns path to the generated SUMO network file, traffic light data, and OSM-to-SUMO mapping.
     """
     try:
-        sumo_path = osm_service.convert_to_sumo(network_id)
+        result = osm_service.convert_to_sumo(network_id)
         return {
-            "sumo_network_path": str(sumo_path),
+            "sumo_network_path": result["network_path"],
             "network_id": network_id,
+            "traffic_lights": result["traffic_lights"],
+            "osm_to_sumo_tl_map": result["osm_to_sumo_tl_map"],
         }
     except KeyError as e:
         raise HTTPException(

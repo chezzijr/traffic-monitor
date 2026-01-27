@@ -99,12 +99,26 @@ def test_convert_to_sumo_not_found(client: TestClient):
 
 
 def test_convert_to_sumo_success_mocked(client: TestClient, tmp_path):
-    """Convert to SUMO should return path on success (mocked)."""
+    """Convert to SUMO should return path and traffic light data on success (mocked)."""
     fake_path = tmp_path / "test.net.xml"
     fake_path.touch()
 
+    mock_result = {
+        "network_path": str(fake_path),
+        "traffic_lights": [
+            {
+                "id": "tl_1",
+                "x": 100.0,
+                "y": 200.0,
+                "type": "actuated",
+                "phases": [{"duration": 30, "state": "GGrrGGrr"}],
+            }
+        ],
+        "osm_to_sumo_tl_map": {"123456": "tl_1"},
+    }
+
     with patch("app.services.osm_service.convert_to_sumo") as mock_convert:
-        mock_convert.return_value = fake_path
+        mock_convert.return_value = mock_result
 
         response = client.post("/api/map/convert-to-sumo/test-network-id")
 
@@ -112,3 +126,7 @@ def test_convert_to_sumo_success_mocked(client: TestClient, tmp_path):
         data = response.json()
         assert data["network_id"] == "test-network-id"
         assert "sumo_network_path" in data
+        assert "traffic_lights" in data
+        assert "osm_to_sumo_tl_map" in data
+        assert len(data["traffic_lights"]) == 1
+        assert data["traffic_lights"][0]["id"] == "tl_1"

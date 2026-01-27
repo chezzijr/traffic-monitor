@@ -30,11 +30,11 @@ def start_simulation(request: SimulationStartRequest) -> SimulationStatus:
         metrics_service.clear_metrics()
 
         # Get the SUMO network path from osm_service
-        network_path = osm_service.convert_to_sumo(request.network_id)
+        sumo_result = osm_service.convert_to_sumo(request.network_id)
 
         # Start the simulation
         result = sumo_service.start_simulation(
-            network_path=str(network_path),
+            network_path=sumo_result["network_path"],
             network_id=request.network_id,
             gui=request.gui,
         )
