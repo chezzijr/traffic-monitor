@@ -13,7 +13,7 @@ from app.models.schemas import (
 )
 from app.services import osm_service
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error")
 
 router = APIRouter(prefix="/map", tags=["map"])
 
@@ -31,10 +31,10 @@ def extract_region(bbox: BoundingBox) -> NetworkInfo:
 
     Returns network info including intersections and road count.
     """
-    logger.info(f"=== Received extract-region request: {bbox} ===")
+    logger.info(f"Received extract-region request: {bbox}")
     try:
         result = osm_service.extract_network(bbox.as_tuple())
-        logger.info(f"=== Extraction complete: {len(result['intersections'])} intersections found ===")
+        logger.info(f"Extraction complete: {len(result['intersections'])} intersections found")
         # Convert bbox dict back to BoundingBox model
         result["bbox"] = BoundingBox(**result["bbox"])
         # Convert intersection dicts to Intersection models

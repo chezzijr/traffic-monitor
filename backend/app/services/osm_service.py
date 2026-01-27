@@ -112,9 +112,9 @@ def extract_network(bbox: tuple[float, float, float, float]) -> dict:
 
     try:
         # Download road network from OSM
-        # OSMnx expects bbox as (north, south, east, west) for graph_from_bbox
+        # OSMnx 2.x expects bbox as (left, bottom, right, top) = (west, south, east, north)
         graph = ox.graph_from_bbox(
-            bbox=(north, south, east, west),
+            bbox=(west, south, east, north),
             network_type="drive",
             simplify=True,
         )
