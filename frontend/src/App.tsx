@@ -4,8 +4,8 @@ import { Sidebar, Header } from './components/Layout';
 import { SimulationControl, CameraPanel } from './components/Control';
 import { MetricsPanel, SimulationStatusDisplay, MetricsChart } from './components/Dashboard';
 import { useMapStore } from './store/mapStore';
-import { mapService, simulationService } from './services';
-import type { SimulationStatus, SimulationMetrics } from './types';
+import { mapService, simulationService, SimulationSSE } from './services';
+import type { SimulationStatus, SimulationMetrics, SSEStepEvent } from './types';
 
 export default function App() {
   const { selectedRegion, setIntersections, setCurrentNetworkId, setError, setLoading, isLoading, currentNetworkId } = useMapStore();
@@ -17,8 +17,8 @@ export default function App() {
   const [metricsHistory, setMetricsHistory] = useState<Array<{step: number; vehicles: number; waitTime: number}>>([]);
   const [simError, setSimError] = useState<string | null>(null);
 
-  // Polling interval ref
-  const pollingIntervalRef = useRef<number | null>(null);
+  // SSE connection ref
+  const sseRef = useRef<SimulationSSE | null>(null);
 
   // Extract region when selected
   useEffect(() => {
@@ -41,49 +41,40 @@ export default function App() {
     extractRegion();
   }, [selectedRegion, setIntersections, setCurrentNetworkId, setError, setLoading]);
 
-  // Stop polling helper
-  const stopPolling = useCallback(() => {
-    if (pollingIntervalRef.current !== null) {
-      clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = null;
-    }
-  }, []);
-
-  // Start polling helper
-  const startPolling = useCallback(() => {
-    stopPolling(); // Clear any existing interval
-    pollingIntervalRef.current = window.setInterval(async () => {
-      try {
-        const stepMetrics = await simulationService.step();
-        setCurrentStep(stepMetrics.step);
+  // Initialize SSE on mount
+  useEffect(() => {
+    sseRef.current = new SimulationSSE({
+      onStep: (data: SSEStepEvent) => {
+        setCurrentStep(data.step);
         setMetrics({
-          current_step: stepMetrics.step,
-          total_vehicles: stepMetrics.total_vehicles,
-          average_wait_time: stepMetrics.average_wait_time,
-          throughput: stepMetrics.total_vehicles, // Using total_vehicles as throughput proxy
+          current_step: data.step,
+          total_vehicles: data.total_vehicles,
+          average_wait_time: data.average_wait_time,
+          throughput: data.total_vehicles, // Using total_vehicles as throughput proxy
         });
         setMetricsHistory(prev => [
           ...prev,
           {
-            step: stepMetrics.step,
-            vehicles: stepMetrics.total_vehicles,
-            waitTime: stepMetrics.average_wait_time,
+            step: data.step,
+            vehicles: data.total_vehicles,
+            waitTime: data.average_wait_time,
           },
         ]);
-      } catch (err) {
-        setSimError(err instanceof Error ? err.message : 'Polling step failed');
-        stopPolling();
+      },
+      onStopped: () => {
+        setSimStatus('stopped');
+      },
+      onError: (data) => {
+        setSimError(data.message);
         setSimStatus('paused');
-      }
-    }, 100); // 10 steps/second
-  }, [stopPolling]);
+      },
+    });
 
-  // Cleanup polling on unmount
-  useEffect(() => {
+    // Cleanup SSE on unmount
     return () => {
-      stopPolling();
+      sseRef.current?.disconnect();
     };
-  }, [stopPolling]);
+  }, []);
 
   // Simulation control handlers
   const handleStart = useCallback(async () => {
@@ -107,42 +98,40 @@ export default function App() {
       setMetricsHistory([]);
       setSimStatus('running');
 
-      // Start polling loop
-      startPolling();
+      // Connect to SSE stream
+      sseRef.current?.connect(100);
     } catch (err) {
       setSimError(err instanceof Error ? err.message : 'Failed to start simulation');
       setSimStatus('idle');
     } finally {
       setLoading(false);
     }
-  }, [currentNetworkId, setLoading, startPolling]);
+  }, [currentNetworkId, setLoading]);
 
   const handlePause = useCallback(async () => {
     setSimError(null);
     try {
-      stopPolling();
       await simulationService.pause();
       setSimStatus('paused');
     } catch (err) {
       setSimError(err instanceof Error ? err.message : 'Failed to pause simulation');
     }
-  }, [stopPolling]);
+  }, []);
 
   const handleResume = useCallback(async () => {
     setSimError(null);
     try {
       await simulationService.resume();
       setSimStatus('running');
-      startPolling();
     } catch (err) {
       setSimError(err instanceof Error ? err.message : 'Failed to resume simulation');
     }
-  }, [startPolling]);
+  }, []);
 
   const handleStop = useCallback(async () => {
     setSimError(null);
     try {
-      stopPolling();
+      sseRef.current?.disconnect();
       await simulationService.stop();
       setSimStatus('stopped');
       setMetrics(null);
@@ -151,7 +140,7 @@ export default function App() {
     } catch (err) {
       setSimError(err instanceof Error ? err.message : 'Failed to stop simulation');
     }
-  }, [stopPolling]);
+  }, []);
 
   const handleStep = useCallback(async () => {
     setSimError(null);
