@@ -8,6 +8,7 @@ traffic scenarios.
 import logging
 import os
 import subprocess
+import xml.etree.ElementTree as ET
 from enum import Enum
 from pathlib import Path
 
@@ -53,14 +54,6 @@ def _check_sumo_tools() -> None:
         raise RuntimeError(f"randomTrips.py not found at {random_trips_path}")
     if not duarouter_path.exists():
         raise RuntimeError(f"duarouter not found at {duarouter_path}")
-
-
-def _build_trip_attributes() -> str:
-    """Build trip attributes string for vehicle type distribution."""
-    # Format: "type1:prob1 type2:prob2 ..."
-    # randomTrips.py uses this for --trip-attributes with type distribution
-    type_dist = " ".join(f'type="{vtype}"' for vtype in VEHICLE_DISTRIBUTION.keys())
-    return type_dist
 
 
 def generate_routes(
@@ -120,101 +113,159 @@ def generate_routes(
         f"(period={period:.2f}s, ~{estimated_trips} trips over {duration}s)"
     )
 
-    # Step 1: Generate random trips using randomTrips.py
+    # SUMO tool paths
     random_trips_path = Path(SUMO_HOME) / "tools" / "randomTrips.py"
-
-    # Build vehicle type distribution string for --vehicle-class
-    # We generate trips for each vehicle class proportionally
-    trips_cmd = [
-        "python3",
-        str(random_trips_path),
-        "-n", str(network_path),
-        "-o", str(trips_file),
-        "-e", str(duration),
-        "-p", str(period),
-        "--additional-file", str(VTYPES_FILE),
-        "--vehicle-class", "motorcycle",  # Allow motorcycles on the network
-        "--validate",
-    ]
-
-    if seed is not None:
-        trips_cmd.extend(["--seed", str(seed)])
-
-    # Add fringe factor to prefer starting/ending at network edges
-    trips_cmd.extend(["--fringe-factor", "5"])
-
-    logger.info(f"Running randomTrips: {' '.join(trips_cmd)}")
-
-    try:
-        result = subprocess.run(
-            trips_cmd,
-            capture_output=True,
-            text=True,
-            timeout=300,
-            cwd=str(output_path),
-        )
-
-        if result.returncode != 0:
-            logger.error(f"randomTrips failed: {result.stderr}")
-            raise RuntimeError(f"randomTrips failed: {result.stderr}")
-
-        logger.info("Random trips generated successfully")
-
-    except subprocess.TimeoutExpired:
-        logger.error("randomTrips timed out after 5 minutes")
-        raise RuntimeError("randomTrips timed out after 5 minutes")
-
-    except FileNotFoundError as e:
-        logger.error(f"Failed to run randomTrips: {e}")
-        raise RuntimeError(f"Failed to run randomTrips: {e}")
-
-    # Step 2: Convert trips to routes using duarouter
     duarouter_path = Path(SUMO_HOME) / "bin" / "duarouter"
 
-    dua_cmd = [
-        str(duarouter_path),
-        "-n", str(network_path),
-        "-t", str(trips_file),
-        "-o", str(routes_file),
-        "--additional-files", str(VTYPES_FILE),
-        "--ignore-errors",
-        "--no-warnings",
-    ]
+    # Map vehicle types to their SUMO vehicle classes
+    vtype_to_vclass = {
+        "motorbike": "motorcycle",
+        "car": "passenger",
+        "bus": "bus",
+    }
 
-    if seed is not None:
-        dua_cmd.extend(["--seed", str(seed)])
-
-    logger.info(f"Running duarouter: {' '.join(dua_cmd)}")
+    # Track temp files for cleanup
+    temp_trip_files: list[Path] = []
 
     try:
-        result = subprocess.run(
-            dua_cmd,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
+        # Step 1: Generate trips for each vehicle type with proportional rates
+        for vtype, proportion in VEHICLE_DISTRIBUTION.items():
+            if proportion <= 0:
+                continue
 
-        if result.returncode != 0:
-            logger.error(f"duarouter failed: {result.stderr}")
-            raise RuntimeError(f"duarouter failed: {result.stderr}")
+            # Adjust period for this vehicle type's proportion
+            # E.g., for MODERATE (period=1.25s) and motorbike (80%):
+            # type_period = 1.25 / 0.80 = 1.5625s between motorbikes
+            type_period = period / proportion
+            type_trips_file = output_path / f"{network_name}_{scenario.value}_{vtype}.trips.xml"
+            temp_trip_files.append(type_trips_file)
 
-        logger.info(f"Routes generated successfully: {routes_file}")
+            vclass = vtype_to_vclass.get(vtype, "passenger")
 
-    except subprocess.TimeoutExpired:
-        logger.error("duarouter timed out after 5 minutes")
-        raise RuntimeError("duarouter timed out after 5 minutes")
+            trips_cmd = [
+                "python3",
+                str(random_trips_path),
+                "-n", str(network_path),
+                "-o", str(type_trips_file),
+                "-e", str(duration),
+                "-p", str(type_period),
+                "--additional-file", str(VTYPES_FILE),
+                "--vehicle-class", vclass,
+                "--trip-attributes", f'type="{vtype}"',
+                "--validate",
+                "--fringe-factor", "5",
+            ]
 
-    except FileNotFoundError as e:
-        logger.error(f"Failed to run duarouter: {e}")
-        raise RuntimeError(f"Failed to run duarouter: {e}")
+            if seed is not None:
+                # Use different seed for each type but deterministic
+                type_seed = seed + hash(vtype) % 1000
+                trips_cmd.extend(["--seed", str(type_seed)])
 
-    # Clean up intermediate trips file
-    if trips_file.exists():
+            logger.info(f"Generating {vtype} trips (period={type_period:.2f}s): {' '.join(trips_cmd)}")
+
+            try:
+                result = subprocess.run(
+                    trips_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                    cwd=str(output_path),
+                )
+
+                if result.returncode != 0:
+                    logger.error(f"randomTrips failed for {vtype}: {result.stderr}")
+                    raise RuntimeError(f"randomTrips failed for {vtype}: {result.stderr}")
+
+                logger.info(f"Generated trips for {vtype}")
+
+            except subprocess.TimeoutExpired:
+                logger.error(f"randomTrips timed out for {vtype}")
+                raise RuntimeError(f"randomTrips timed out for {vtype} after 5 minutes")
+
+            except FileNotFoundError as e:
+                logger.error(f"Failed to run randomTrips: {e}")
+                raise RuntimeError(f"Failed to run randomTrips: {e}")
+
+        # Step 2: Merge all trip files into a single combined file
+        logger.info("Merging trip files from all vehicle types")
+
+        all_trips: list[ET.Element] = []
+        for trip_file in temp_trip_files:
+            if trip_file.exists():
+                tree = ET.parse(trip_file)
+                root = tree.getroot()
+                for trip in root.findall("trip"):
+                    all_trips.append(trip)
+
+        # Sort trips by departure time
+        all_trips.sort(key=lambda t: float(t.get("depart", "0")))
+
+        # Create combined trips file
+        combined_root = ET.Element("routes")
+        for trip in all_trips:
+            combined_root.append(trip)
+
+        combined_tree = ET.ElementTree(combined_root)
+        ET.indent(combined_tree, space="    ")
+        combined_tree.write(trips_file, encoding="unicode", xml_declaration=True)
+
+        logger.info(f"Combined {len(all_trips)} trips into {trips_file}")
+
+        # Step 3: Convert trips to routes using duarouter
+        dua_cmd = [
+            str(duarouter_path),
+            "-n", str(network_path),
+            "-t", str(trips_file),
+            "-o", str(routes_file),
+            "--additional-files", str(VTYPES_FILE),
+            "--ignore-errors",
+            "--no-warnings",
+        ]
+
+        if seed is not None:
+            dua_cmd.extend(["--seed", str(seed)])
+
+        logger.info(f"Running duarouter: {' '.join(dua_cmd)}")
+
         try:
-            trips_file.unlink()
-            logger.debug(f"Cleaned up trips file: {trips_file}")
-        except OSError as e:
-            logger.warning(f"Failed to clean up trips file: {e}")
+            result = subprocess.run(
+                dua_cmd,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+
+            if result.returncode != 0:
+                logger.error(f"duarouter failed: {result.stderr}")
+                raise RuntimeError(f"duarouter failed: {result.stderr}")
+
+            logger.info(f"Routes generated successfully: {routes_file}")
+
+        except subprocess.TimeoutExpired:
+            logger.error("duarouter timed out after 5 minutes")
+            raise RuntimeError("duarouter timed out after 5 minutes")
+
+        except FileNotFoundError as e:
+            logger.error(f"Failed to run duarouter: {e}")
+            raise RuntimeError(f"Failed to run duarouter: {e}")
+
+    finally:
+        # Clean up all temporary trip files
+        for temp_file in temp_trip_files:
+            if temp_file.exists():
+                try:
+                    temp_file.unlink()
+                    logger.debug(f"Cleaned up temp trip file: {temp_file}")
+                except OSError as e:
+                    logger.warning(f"Failed to clean up temp trip file {temp_file}: {e}")
+
+        # Clean up combined trips file
+        if trips_file.exists():
+            try:
+                trips_file.unlink()
+                logger.debug(f"Cleaned up combined trips file: {trips_file}")
+            except OSError as e:
+                logger.warning(f"Failed to clean up trips file: {e}")
 
     return {
         "routes_path": str(routes_file),
