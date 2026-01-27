@@ -9,6 +9,7 @@ services:
       - ./frontend/src:/app/src:ro
       - ./frontend/public:/app/public:ro
       - ./frontend/index.html:/app/index.html:ro
+      - ./frontend/vite.config.ts:/app/vite.config.ts:ro
     environment:
       - VITE_API_URL=http://backend:8000
     depends_on:
