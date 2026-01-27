@@ -116,7 +116,7 @@ def extract_network(bbox: tuple[float, float, float, float]) -> dict:
         graph = ox.graph_from_bbox(
             bbox=(west, south, east, north),
             network_type="drive",
-            simplify=True,
+            simplify=False,  # Must be False for save_graph_xml() to work
         )
     except Exception as e:
         logger.error(f"Failed to download OSM network: {e}")
