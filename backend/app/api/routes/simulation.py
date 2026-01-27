@@ -10,8 +10,9 @@ from app.models.schemas import (
     SimulationStartRequest,
     SimulationStatus,
     SimulationStepMetrics,
+    TrafficScenario,
 )
-from app.services import osm_service, sumo_service, metrics_service
+from app.services import osm_service, sumo_service, metrics_service, route_service
 
 router = APIRouter(prefix="/simulation", tags=["simulation"])
 
@@ -28,6 +29,7 @@ def start_simulation(request: SimulationStartRequest) -> SimulationStatus:
     Start a SUMO simulation for the given network.
 
     The network must have been previously extracted and converted to SUMO format.
+    Routes are auto-generated with Vietnamese traffic patterns if not already present.
     """
     try:
         # Clear metrics from any previous simulation
@@ -35,11 +37,36 @@ def start_simulation(request: SimulationStartRequest) -> SimulationStatus:
 
         # Get the SUMO network path from osm_service
         sumo_result = osm_service.convert_to_sumo(request.network_id)
+        network_path = sumo_result["network_path"]
 
-        # Start the simulation
+        # Map API scenario to service scenario
+        from app.services.route_service import TrafficScenario as ServiceScenario
+        scenario_map = {
+            TrafficScenario.LIGHT: ServiceScenario.LIGHT,
+            TrafficScenario.MODERATE: ServiceScenario.MODERATE,
+            TrafficScenario.HEAVY: ServiceScenario.HEAVY,
+            TrafficScenario.RUSH_HOUR: ServiceScenario.RUSH_HOUR,
+        }
+
+        # Generate routes with Vietnamese traffic patterns
+        from pathlib import Path
+        output_dir = str(Path(network_path).parent)
+        route_result = route_service.generate_routes(
+            network_path=network_path,
+            output_dir=output_dir,
+            scenario=scenario_map[request.scenario],
+        )
+        routes_path = route_result["routes_path"]
+
+        # Get vtypes file
+        vtypes_path = route_service.get_vtypes_file_path()
+
+        # Start the simulation with routes and vtypes
         result = sumo_service.start_simulation(
-            network_path=sumo_result["network_path"],
+            network_path=network_path,
             network_id=request.network_id,
+            routes_path=routes_path,
+            additional_files=[vtypes_path],
             gui=request.gui,
         )
 
