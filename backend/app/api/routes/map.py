@@ -2,7 +2,13 @@
 
 from fastapi import APIRouter, HTTPException, status
 
-from app.models.schemas import BoundingBox, Intersection, NetworkInfo
+from app.models.schemas import (
+    BoundingBox,
+    ConvertToSumoResponse,
+    Intersection,
+    NetworkInfo,
+    SUMOTrafficLight,
+)
 from app.services import osm_service
 
 router = APIRouter(prefix="/map", tags=["map"])
@@ -65,12 +71,12 @@ def get_intersections(network_id: str) -> list[Intersection]:
 
 @router.post(
     "/convert-to-sumo/{network_id}",
-    response_model=dict,
+    response_model=ConvertToSumoResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Convert network to SUMO format",
     description="Convert a cached OSM network to SUMO simulation format.",
 )
-def convert_to_sumo(network_id: str) -> dict:
+def convert_to_sumo(network_id: str) -> ConvertToSumoResponse:
     """
     Convert cached OSM network to SUMO format using netconvert.
 
@@ -78,12 +84,22 @@ def convert_to_sumo(network_id: str) -> dict:
     """
     try:
         result = osm_service.convert_to_sumo(network_id)
-        return {
-            "sumo_network_path": result["network_path"],
-            "network_id": network_id,
-            "traffic_lights": result["traffic_lights"],
-            "osm_to_sumo_tl_map": result["osm_to_sumo_tl_map"],
-        }
+        # Convert traffic light dicts to SUMOTrafficLight models
+        traffic_lights = [
+            SUMOTrafficLight(
+                id=tl["id"],
+                type=tl["type"],
+                program_id=tl.get("program_id", "0"),
+                num_phases=len(tl.get("phases", [])),
+            )
+            for tl in result["traffic_lights"]
+        ]
+        return ConvertToSumoResponse(
+            sumo_network_path=result["network_path"],
+            network_id=network_id,
+            traffic_lights=traffic_lights,
+            osm_sumo_mapping=result["osm_to_sumo_tl_map"],
+        )
     except KeyError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

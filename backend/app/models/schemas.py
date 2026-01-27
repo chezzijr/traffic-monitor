@@ -26,6 +26,8 @@ class Intersection(BaseModel):
     lon: float = Field(..., ge=-180, le=180, description="Longitude coordinate")
     name: str | None = Field(None, description="Street name at intersection (if available)")
     num_roads: int = Field(..., ge=1, description="Number of roads meeting at this intersection")
+    has_traffic_light: bool = Field(default=False, description="Whether this intersection has a traffic light")
+    sumo_tl_id: str | None = Field(None, description="SUMO traffic light ID (if converted and mapped)")
 
 
 class NetworkInfo(BaseModel):
@@ -93,3 +95,25 @@ class SetPhaseRequest(BaseModel):
     """Request body for setting a traffic light phase."""
 
     phase: int = Field(..., ge=0, description="Phase index to set (0-indexed)")
+
+
+class SUMOTrafficLight(BaseModel):
+    """Traffic light data from SUMO network."""
+
+    id: str = Field(..., description="SUMO traffic light ID")
+    type: str = Field(..., description="Traffic light type (e.g., 'static', 'actuated')")
+    program_id: str = Field(..., description="Traffic light program ID")
+    num_phases: int = Field(..., ge=1, description="Number of phases in the traffic light program")
+
+
+class ConvertToSumoResponse(BaseModel):
+    """Response model for converting OSM network to SUMO format."""
+
+    sumo_network_path: str = Field(..., description="Path to the generated SUMO .net.xml file")
+    network_id: str = Field(..., description="Unique network identifier")
+    traffic_lights: list[SUMOTrafficLight] = Field(
+        default_factory=list, description="List of traffic lights in the SUMO network"
+    )
+    osm_sumo_mapping: dict[str, str] = Field(
+        default_factory=dict, description="Mapping from OSM intersection ID to SUMO traffic light ID"
+    )

@@ -127,6 +127,10 @@ def test_convert_to_sumo_success_mocked(client: TestClient, tmp_path):
         assert data["network_id"] == "test-network-id"
         assert "sumo_network_path" in data
         assert "traffic_lights" in data
-        assert "osm_to_sumo_tl_map" in data
+        assert "osm_sumo_mapping" in data
         assert len(data["traffic_lights"]) == 1
         assert data["traffic_lights"][0]["id"] == "tl_1"
+        # Verify new schema fields
+        assert data["traffic_lights"][0]["type"] == "actuated"
+        assert data["traffic_lights"][0]["program_id"] == "0"
+        assert data["traffic_lights"][0]["num_phases"] == 1
