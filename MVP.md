@@ -2,6 +2,57 @@
 
 ---
 
+## 🏛️ Two-System Architecture
+
+This project implements two distinct but related systems:
+
+### SYSTEM 1: Training Environment (Current MVP Focus)
+
+Uses SUMO simulation for RL agent training:
+
+```
+Region Selection → OSM Extraction → Route Generation → SUMO Simulation
+                                         ↓
+                           Vietnamese Traffic Patterns
+                           (80% motorbikes, 15% cars, 5% buses)
+                                         ↓
+                              RL Agent Training (DQN/PPO)
+                                         ↓
+                              Export Trained Model
+```
+
+**Key Components:**
+- Interactive map for region selection
+- OSM data extraction and SUMO network conversion
+- Route generation with Vietnamese vehicle types
+- Gymnasium environment wrapping SUMO
+- Stable-Baselines3 for training
+
+### SYSTEM 2: Real-Time Monitoring (Future Phase)
+
+Uses camera feeds for real-world deployment:
+
+```
+Camera Input → Vehicle Detection (YOLO) → Traffic State Estimation
+                                                    ↓
+                                          Trained Model Inference
+                                                    ↓
+                                        Traffic Light Control
+```
+
+**Key Components (Future):**
+- Camera feed integration (video/stream/mock)
+- YOLOv8 vehicle detection
+- Real-time state estimation
+- Trained model inference
+- Traffic light actuation
+
+---
+
+**Current Status:** System 1 is the MVP focus. System 2 is planned for future development after successful training results.
+
+---
+
 ## 📋 MVP Scope (6 Weeks)
 
 ### Must Have (Phase 1)
@@ -59,6 +110,9 @@
 │      SUMO Simulator | sumo-rl Environment | RL Agent     │
 └──────────────────────────────────────────────────────────┘
 ```
+
+> **Note:** This architecture shows the current MVP (System 1 - Training).
+> Camera integration (System 2 - Monitoring) will be added in future phases.
 
 ---
 
