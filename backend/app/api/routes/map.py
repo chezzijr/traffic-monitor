@@ -1,6 +1,7 @@
 """Map-related API routes."""
 
 import logging
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, status
 
@@ -9,7 +10,10 @@ from app.models.schemas import (
     ConvertToSumoResponse,
     Intersection,
     NetworkInfo,
+    RouteGenerationRequest,
+    RouteGenerationResponse,
     SUMOTrafficLight,
+    TrafficScenario,
 )
 from app.services import osm_service
 
@@ -137,3 +141,47 @@ def get_networks() -> list[str]:
     Returns list of network IDs that can be used with other endpoints.
     """
     return osm_service.get_cached_network_ids()
+
+
+@router.post(
+    "/generate-routes/{network_id}",
+    response_model=RouteGenerationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Generate routes for a network",
+    description="Generate vehicle routes with Vietnamese traffic patterns.",
+)
+def generate_routes(network_id: str, request: RouteGenerationRequest) -> RouteGenerationResponse:
+    """Generate routes for a SUMO network with Vietnamese traffic patterns."""
+    try:
+        # Get the SUMO network path
+        sumo_result = osm_service.convert_to_sumo(network_id)
+        network_path = sumo_result["network_path"]
+
+        # Generate routes using route_service
+        from app.services import route_service
+        from app.services.route_service import TrafficScenario as ServiceScenario
+
+        # Map API scenario to service scenario
+        scenario_map = {
+            TrafficScenario.LIGHT: ServiceScenario.LIGHT,
+            TrafficScenario.MODERATE: ServiceScenario.MODERATE,
+            TrafficScenario.HEAVY: ServiceScenario.HEAVY,
+            TrafficScenario.RUSH_HOUR: ServiceScenario.RUSH_HOUR,
+        }
+
+        # Output directory for routes (same as network)
+        output_dir = str(Path(network_path).parent)
+
+        result = route_service.generate_routes(
+            network_path=network_path,
+            output_dir=output_dir,
+            scenario=scenario_map[request.scenario],
+            duration=request.duration,
+            seed=request.seed,
+        )
+
+        return RouteGenerationResponse(**result)
+    except KeyError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except (RuntimeError, FileNotFoundError) as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))

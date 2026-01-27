@@ -1,6 +1,7 @@
 # Pydantic schemas for API request/response validation
 
 from datetime import datetime
+from enum import Enum
 
 from pydantic import BaseModel, Field
 
@@ -39,10 +40,20 @@ class NetworkInfo(BaseModel):
     bbox: BoundingBox = Field(..., description="Bounding box of the network")
 
 
+class TrafficScenario(str, Enum):
+    """Traffic scenario for route generation."""
+
+    LIGHT = "light"
+    MODERATE = "moderate"
+    HEAVY = "heavy"
+    RUSH_HOUR = "rush_hour"
+
+
 class SimulationStartRequest(BaseModel):
     """Request body for starting a simulation."""
 
     network_id: str = Field(..., description="ID of the network to simulate")
+    scenario: TrafficScenario = Field(default=TrafficScenario.MODERATE, description="Traffic scenario for route generation")
     gui: bool = Field(default=False, description="Whether to use SUMO-GUI (False for headless)")
 
 
@@ -117,3 +128,19 @@ class ConvertToSumoResponse(BaseModel):
     osm_sumo_mapping: dict[str, str] = Field(
         default_factory=dict, description="Mapping from OSM intersection ID to SUMO traffic light ID"
     )
+
+
+class RouteGenerationRequest(BaseModel):
+    """Request body for generating routes."""
+
+    scenario: TrafficScenario = Field(default=TrafficScenario.MODERATE, description="Traffic scenario")
+    duration: int = Field(default=3600, ge=60, le=86400, description="Simulation duration in seconds")
+    seed: int | None = Field(default=None, description="Random seed for reproducibility")
+
+
+class RouteGenerationResponse(BaseModel):
+    """Response model for route generation."""
+
+    routes_path: str = Field(..., description="Path to the generated .rou.xml file")
+    trip_count: int = Field(..., ge=0, description="Estimated number of generated trips")
+    vehicle_distribution: dict[str, float] = Field(..., description="Vehicle type percentages")
