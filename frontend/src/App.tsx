@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import toast, { Toaster } from 'react-hot-toast';
 import { MapContainer, IntersectionMarkers, RegionSelector, MapLegend } from './components/Map';
 import { Sidebar, Header } from './components/Layout';
 import { SimulationControl, CameraPanel } from './components/Control';
@@ -14,8 +15,7 @@ export default function App() {
   const [simStatus, setSimStatus] = useState<SimulationStatus>('idle');
   const [currentStep, setCurrentStep] = useState(0);
   const [metrics, setMetrics] = useState<SimulationMetrics | null>(null);
-  const [metricsHistory, setMetricsHistory] = useState<Array<{step: number; vehicles: number; waitTime: number}>>([]);
-  const [simError, setSimError] = useState<string | null>(null);
+  const [metricsHistory, setMetricsHistory] = useState<Array<{step: number; vehicles: number; waitTime: number}>>([])
 
   // SSE connection ref
   const sseRef = useRef<SimulationSSE | null>(null);
@@ -31,8 +31,11 @@ export default function App() {
         const result = await mapService.extractRegion(selectedRegion);
         setIntersections(result.intersections);
         setCurrentNetworkId(result.network_id);
+        toast.success('Region extracted successfully');
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to extract region');
+        const message = err instanceof Error ? err.message : 'Failed to extract region';
+        setError(message);
+        toast.error(message);
       } finally {
         setLoading(false);
       }
@@ -65,7 +68,7 @@ export default function App() {
         setSimStatus('stopped');
       },
       onError: (data) => {
-        setSimError(data.message);
+        toast.error(data.message);
         setSimStatus('paused');
       },
     });
@@ -79,11 +82,10 @@ export default function App() {
   // Simulation control handlers
   const handleStart = useCallback(async () => {
     if (!currentNetworkId) {
-      setSimError('No network selected. Please select a region first.');
+      toast.error('No network selected. Please select a region first.');
       return;
     }
 
-    setSimError(null);
     setLoading(true);
     try {
       // Convert to SUMO format
@@ -101,7 +103,7 @@ export default function App() {
       // Connect to SSE stream
       sseRef.current?.connect(100);
     } catch (err) {
-      setSimError(err instanceof Error ? err.message : 'Failed to start simulation');
+      toast.error(err instanceof Error ? err.message : 'Failed to start simulation');
       setSimStatus('idle');
     } finally {
       setLoading(false);
@@ -109,27 +111,24 @@ export default function App() {
   }, [currentNetworkId, setLoading]);
 
   const handlePause = useCallback(async () => {
-    setSimError(null);
     try {
       await simulationService.pause();
       setSimStatus('paused');
     } catch (err) {
-      setSimError(err instanceof Error ? err.message : 'Failed to pause simulation');
+      toast.error(err instanceof Error ? err.message : 'Failed to pause simulation');
     }
   }, []);
 
   const handleResume = useCallback(async () => {
-    setSimError(null);
     try {
       await simulationService.resume();
       setSimStatus('running');
     } catch (err) {
-      setSimError(err instanceof Error ? err.message : 'Failed to resume simulation');
+      toast.error(err instanceof Error ? err.message : 'Failed to resume simulation');
     }
   }, []);
 
   const handleStop = useCallback(async () => {
-    setSimError(null);
     try {
       sseRef.current?.disconnect();
       await simulationService.stop();
@@ -138,12 +137,11 @@ export default function App() {
       setMetricsHistory([]);
       setCurrentStep(0);
     } catch (err) {
-      setSimError(err instanceof Error ? err.message : 'Failed to stop simulation');
+      toast.error(err instanceof Error ? err.message : 'Failed to stop simulation');
     }
   }, []);
 
   const handleStep = useCallback(async () => {
-    setSimError(null);
     try {
       const stepMetrics = await simulationService.step();
       setCurrentStep(stepMetrics.step);
@@ -162,29 +160,16 @@ export default function App() {
         },
       ]);
     } catch (err) {
-      setSimError(err instanceof Error ? err.message : 'Failed to execute step');
+      toast.error(err instanceof Error ? err.message : 'Failed to execute step');
     }
   }, []);
 
   return (
     <div className="h-screen flex flex-col">
+      <Toaster position="top-right" />
       <Header />
       <div className="flex-1 flex overflow-hidden">
         <Sidebar>
-          {/* Error banner */}
-          {simError && (
-            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4" role="alert">
-              <strong className="font-bold">Error: </strong>
-              <span className="block sm:inline">{simError}</span>
-              <button
-                className="absolute top-0 bottom-0 right-0 px-4 py-3"
-                onClick={() => setSimError(null)}
-                aria-label="Dismiss error"
-              >
-                <span className="text-red-500 text-xl">&times;</span>
-              </button>
-            </div>
-          )}
           <SimulationControl
             status={simStatus}
             currentStep={currentStep}
