@@ -101,9 +101,6 @@ export default function App() {
       // Start simulation
       await simulationService.start(currentNetworkId);
 
-      // Fetch traffic lights (optional, for future use)
-      await simulationService.getTrafficLights();
-
       // Reset state
       setCurrentStep(0);
       setMetrics(null);
@@ -211,7 +208,7 @@ export default function App() {
           <SimulationStatusDisplay
             status={simStatus}
             currentStep={currentStep}
-            networkId={useMapStore.getState().currentNetworkId}
+            networkId={currentNetworkId}
           />
           <MetricsPanel metrics={metrics} isLoading={isLoading} />
           <MetricsChart data={metricsHistory} />
