@@ -7,6 +7,7 @@ Note: SUMO's traci module is accessed via SUMO_HOME/tools, not pip installed.
 The service gracefully handles cases where SUMO is not installed.
 """
 
+import asyncio
 import logging
 import os
 import sys
@@ -561,3 +562,21 @@ def is_sumo_available() -> bool:
         True if SUMO traci module is available, False otherwise
     """
     return SUMO_AVAILABLE
+
+
+async def step_async() -> dict:
+    """Run step() in thread pool to not block event loop."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, step)
+
+
+def get_is_paused() -> bool:
+    """Check if simulation is currently paused."""
+    with _state._lock:
+        return _state.is_paused
+
+
+def get_is_running() -> bool:
+    """Check if simulation is currently running."""
+    with _state._lock:
+        return _state.is_running
