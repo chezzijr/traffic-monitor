@@ -76,12 +76,20 @@ class SimulationState:
 _state = SimulationState()
 
 
-def start_simulation(network_path: str, network_id: str, gui: bool = False) -> dict:
+def start_simulation(
+    network_path: str,
+    network_id: str,
+    routes_path: str | None = None,
+    additional_files: list[str] | None = None,
+    gui: bool = False,
+) -> dict:
     """Start a SUMO simulation.
 
     Args:
         network_path: Path to the SUMO .net.xml file
         network_id: ID of the network being simulated
+        routes_path: Path to the .rou.xml route file (optional)
+        additional_files: List of additional files to load (e.g., vtypes) (optional)
         gui: Whether to use SUMO-GUI (False for headless)
 
     Returns:
@@ -116,6 +124,15 @@ def start_simulation(network_path: str, network_id: str, gui: bool = False) -> d
             "--step-length",
             "1",  # 1 second per step
         ]
+
+        # Add route file if provided
+        if routes_path:
+            sumo_cmd.extend(["-r", str(routes_path)])
+
+        # Add additional files if provided
+        if additional_files:
+            for f in additional_files:
+                sumo_cmd.extend(["-a", str(f)])
 
         try:
             logger.info(f"Starting SUMO simulation with command: {' '.join(sumo_cmd)}")
