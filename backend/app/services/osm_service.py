@@ -411,6 +411,14 @@ def convert_to_sumo(network_id: str) -> dict:
 
     graph = cached["graph"]
 
+    # Validate graph has edges (roads) - too small regions may have only nodes
+    if graph.number_of_edges() == 0:
+        raise ValueError(
+            "Selected region is too small - it contains no road segments. "
+            "Please select a larger area (at least 300-500 meters) that includes "
+            "multiple intersections and the roads connecting them."
+        )
+
     # Save graph as OSM XML to temporary file
     with tempfile.NamedTemporaryFile(mode="w", suffix=".osm", delete=False) as osm_file:
         osm_temp_path = osm_file.name
