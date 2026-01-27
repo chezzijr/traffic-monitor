@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Vietnamese vehicle type definitions for SUMO -->
+<!-- Based on Vietnamese traffic patterns: 80% motorbikes, 15% cars, 5% buses -->
+<additional xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/additional_file.xsd">
+
+    <!-- Motorbike: Most common vehicle type in Vietnamese traffic -->
+    <!-- length=2.0m, maxSpeed=60km/h (16.67 m/s), minGap=1.0m -->
+    <vType id="motorbike"
+           vClass="motorcycle"
+           length="2.0"
+           minGap="1.0"
+           maxSpeed="16.67"
+           accel="2.6"
+           decel="4.5"
+           sigma="0.5"
+           color="0.8,0.2,0.2"/>
+
+    <!-- Car: Standard passenger vehicle -->
+    <!-- length=4.5m, maxSpeed=80km/h (22.22 m/s), minGap=2.5m -->
+    <vType id="car"
+           vClass="passenger"
+           length="4.5"
+           minGap="2.5"
+           maxSpeed="22.22"
+           accel="2.6"
+           decel="4.5"
+           sigma="0.5"
+           color="0.2,0.4,0.8"/>
+
+    <!-- Bus: Public transport vehicle -->
+    <!-- length=12.0m, maxSpeed=50km/h (13.89 m/s), minGap=3.0m -->
+    <vType id="bus"
+           vClass="bus"
+           length="12.0"
+           minGap="3.0"
+           maxSpeed="13.89"
+           accel="1.2"
+           decel="4.0"
+           sigma="0.5"
+           color="0.2,0.6,0.2"/>
+
+</additional>
