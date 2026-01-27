@@ -170,8 +170,8 @@ class TrafficLightEnv(gym.Env):
         # Generate routes if not provided
         from pathlib import Path
 
+        from app.models.schemas import TrafficScenario
         from app.services import route_service
-        from app.services.route_service import TrafficScenario
 
         if self.routes_path is None:
             # Map scenario string to enum

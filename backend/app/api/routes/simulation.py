@@ -39,22 +39,13 @@ def start_simulation(request: SimulationStartRequest) -> SimulationStatus:
         sumo_result = osm_service.convert_to_sumo(request.network_id)
         network_path = sumo_result["network_path"]
 
-        # Map API scenario to service scenario
-        from app.services.route_service import TrafficScenario as ServiceScenario
-        scenario_map = {
-            TrafficScenario.LIGHT: ServiceScenario.LIGHT,
-            TrafficScenario.MODERATE: ServiceScenario.MODERATE,
-            TrafficScenario.HEAVY: ServiceScenario.HEAVY,
-            TrafficScenario.RUSH_HOUR: ServiceScenario.RUSH_HOUR,
-        }
-
         # Generate routes with Vietnamese traffic patterns
         from pathlib import Path
         output_dir = str(Path(network_path).parent)
         route_result = route_service.generate_routes(
             network_path=network_path,
             output_dir=output_dir,
-            scenario=scenario_map[request.scenario],
+            scenario=request.scenario,
         )
         routes_path = route_result["routes_path"]
 

@@ -13,7 +13,6 @@ from app.models.schemas import (
     RouteGenerationRequest,
     RouteGenerationResponse,
     SUMOTrafficLight,
-    TrafficScenario,
 )
 from app.services import osm_service
 
@@ -159,15 +158,6 @@ def generate_routes(network_id: str, request: RouteGenerationRequest) -> RouteGe
 
         # Generate routes using route_service
         from app.services import route_service
-        from app.services.route_service import TrafficScenario as ServiceScenario
-
-        # Map API scenario to service scenario
-        scenario_map = {
-            TrafficScenario.LIGHT: ServiceScenario.LIGHT,
-            TrafficScenario.MODERATE: ServiceScenario.MODERATE,
-            TrafficScenario.HEAVY: ServiceScenario.HEAVY,
-            TrafficScenario.RUSH_HOUR: ServiceScenario.RUSH_HOUR,
-        }
 
         # Output directory for routes (same as network)
         output_dir = str(Path(network_path).parent)
@@ -175,7 +165,7 @@ def generate_routes(network_id: str, request: RouteGenerationRequest) -> RouteGe
         result = route_service.generate_routes(
             network_path=network_path,
             output_dir=output_dir,
-            scenario=scenario_map[request.scenario],
+            scenario=request.scenario,
             duration=request.duration,
             seed=request.seed,
         )

@@ -9,8 +9,9 @@ import logging
 import os
 import subprocess
 import xml.etree.ElementTree as ET
-from enum import Enum
 from pathlib import Path
+
+from app.models.schemas import TrafficScenario
 
 logger = logging.getLogger(__name__)
 
@@ -19,14 +20,6 @@ SUMO_HOME = os.environ.get("SUMO_HOME", "/usr/share/sumo")
 
 # Vietnamese vehicle types file path
 VTYPES_FILE = Path(__file__).parent.parent.parent.parent / "simulation" / "vtypes" / "vietnamese_vtypes.add.xml"
-
-
-class TrafficScenario(Enum):
-    """Traffic scenario definitions with vehicle generation rates."""
-    LIGHT = "light"         # 0.3 veh/s
-    MODERATE = "moderate"   # 0.8 veh/s
-    HEAVY = "heavy"         # 1.5 veh/s
-    RUSH_HOUR = "rush_hour" # 2.0 veh/s with peak patterns
 
 
 # Vehicle generation periods (seconds between vehicles) for each scenario
