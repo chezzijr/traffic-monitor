@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { MapContainer, IntersectionMarkers, RegionSelector } from './components/Map';
+import { MapContainer, IntersectionMarkers, RegionSelector, MapLegend } from './components/Map';
 import { Sidebar, Header } from './components/Layout';
 import { SimulationControl, CameraPanel } from './components/Control';
 import { MetricsPanel, SimulationStatusDisplay, MetricsChart } from './components/Dashboard';
@@ -214,11 +214,12 @@ export default function App() {
           <MetricsChart data={metricsHistory} />
           <CameraPanel />
         </Sidebar>
-        <main className="flex-1">
+        <main className="flex-1 relative">
           <MapContainer>
             <IntersectionMarkers />
             <RegionSelector />
           </MapContainer>
+          <MapLegend className="absolute bottom-4 left-4 z-[1000]" />
         </main>
       </div>
     </div>
