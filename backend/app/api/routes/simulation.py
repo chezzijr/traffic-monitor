@@ -7,7 +7,7 @@ from app.models.schemas import (
     SimulationStatus,
     SimulationStepMetrics,
 )
-from app.services import osm_service, sumo_service
+from app.services import osm_service, sumo_service, metrics_service
 
 router = APIRouter(prefix="/simulation", tags=["simulation"])
 
@@ -68,6 +68,13 @@ def step_simulation() -> SimulationStepMetrics:
     """
     try:
         result = sumo_service.step()
+        metrics_service.record_metrics(
+            step=result["step"],
+            total_vehicles=result["total_vehicles"],
+            total_wait_time=result["total_wait_time"],
+            average_wait_time=result["average_wait_time"],
+            throughput=0,
+        )
         return SimulationStepMetrics(
             step=result["step"],
             total_vehicles=result["total_vehicles"],
