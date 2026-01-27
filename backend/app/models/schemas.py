@@ -103,7 +103,7 @@ class SUMOTrafficLight(BaseModel):
     id: str = Field(..., description="SUMO traffic light ID")
     type: str = Field(..., description="Traffic light type (e.g., 'static', 'actuated')")
     program_id: str = Field(..., description="Traffic light program ID")
-    num_phases: int = Field(..., ge=1, description="Number of phases in the traffic light program")
+    num_phases: int = Field(..., ge=0, description="Number of phases in the traffic light program")
 
 
 class ConvertToSumoResponse(BaseModel):
