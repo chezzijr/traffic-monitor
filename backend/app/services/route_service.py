@@ -183,9 +183,10 @@ def generate_routes(
         # Sort trips by departure time
         all_trips.sort(key=lambda t: float(t.get("depart", "0")))
 
-        # Create combined trips file
+        # Create combined trips file with renumbered IDs to avoid duplicates
         combined_root = ET.Element("routes")
-        for trip in all_trips:
+        for idx, trip in enumerate(all_trips):
+            trip.set("id", str(idx))  # Renumber to ensure unique IDs
             combined_root.append(trip)
 
         combined_tree = ET.ElementTree(combined_root)
@@ -198,7 +199,7 @@ def generate_routes(
         dua_cmd = [
             str(duarouter_path),
             "-n", str(network_path),
-            "-t", str(trips_file),
+            "--route-files", str(trips_file),
             "-o", str(routes_file),
             "--additional-files", str(VTYPES_FILE),
             "--ignore-errors",
