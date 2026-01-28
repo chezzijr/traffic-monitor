@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useReducer } from 'react';
 import toast, { Toaster } from 'react-hot-toast';
 import { MapContainer, IntersectionMarkers, RegionSelector, MapLegend } from './components/Map';
 import { Sidebar, Header } from './components/Layout';
@@ -8,14 +8,48 @@ import { useMapStore } from './store/mapStore';
 import { mapService, simulationService, SimulationSSE } from './services';
 import type { SimulationStatus, SimulationMetrics, SSEStepEvent } from './types';
 
+const MAX_HISTORY_POINTS = 500;
+
+interface SimState {
+  step: number;
+  metrics: SimulationMetrics | null;
+  history: Array<{step: number; vehicles: number; waitTime: number}>;
+}
+
+type SimAction =
+  | { type: 'step'; data: SSEStepEvent }
+  | { type: 'reset' };
+
+function simReducer(state: SimState, action: SimAction): SimState {
+  switch (action.type) {
+    case 'step': {
+      const { data } = action;
+      const point = { step: data.step, vehicles: data.total_vehicles, waitTime: data.average_wait_time };
+      const history = state.history.length >= MAX_HISTORY_POINTS
+        ? [...state.history.slice(-MAX_HISTORY_POINTS + 1), point]
+        : [...state.history, point];
+      return {
+        step: data.step,
+        metrics: {
+          current_step: data.step,
+          total_vehicles: data.total_vehicles,
+          average_wait_time: data.average_wait_time,
+          throughput: data.total_vehicles,
+        },
+        history,
+      };
+    }
+    case 'reset':
+      return { step: 0, metrics: null, history: [] };
+  }
+}
+
 export default function App() {
   const { selectedRegion, setIntersections, setCurrentNetworkId, setError, setLoading, isLoading, currentNetworkId } = useMapStore();
 
-  // Simulation state
+  // Simulation state - batched in reducer to minimize re-renders
   const [simStatus, setSimStatus] = useState<SimulationStatus>('idle');
-  const [currentStep, setCurrentStep] = useState(0);
-  const [metrics, setMetrics] = useState<SimulationMetrics | null>(null);
-  const [metricsHistory, setMetricsHistory] = useState<Array<{step: number; vehicles: number; waitTime: number}>>([])
+  const [sim, dispatchSim] = useReducer(simReducer, { step: 0, metrics: null, history: [] });
 
   // SSE connection ref
   const sseRef = useRef<SimulationSSE | null>(null);
@@ -48,21 +82,7 @@ export default function App() {
   useEffect(() => {
     sseRef.current = new SimulationSSE({
       onStep: (data: SSEStepEvent) => {
-        setCurrentStep(data.step);
-        setMetrics({
-          current_step: data.step,
-          total_vehicles: data.total_vehicles,
-          average_wait_time: data.average_wait_time,
-          throughput: data.total_vehicles, // Using total_vehicles as throughput proxy
-        });
-        setMetricsHistory(prev => [
-          ...prev,
-          {
-            step: data.step,
-            vehicles: data.total_vehicles,
-            waitTime: data.average_wait_time,
-          },
-        ]);
+        dispatchSim({ type: 'step', data });
       },
       onStopped: () => {
         setSimStatus('stopped');
@@ -95,9 +115,7 @@ export default function App() {
       await simulationService.start(currentNetworkId);
 
       // Reset state
-      setCurrentStep(0);
-      setMetrics(null);
-      setMetricsHistory([]);
+      dispatchSim({ type: 'reset' });
       setSimStatus('running');
 
       // Connect to SSE stream
@@ -133,9 +151,7 @@ export default function App() {
       sseRef.current?.disconnect();
       await simulationService.stop();
       setSimStatus('stopped');
-      setMetrics(null);
-      setMetricsHistory([]);
-      setCurrentStep(0);
+      dispatchSim({ type: 'reset' });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to stop simulation');
     }
@@ -144,21 +160,15 @@ export default function App() {
   const handleStep = useCallback(async () => {
     try {
       const stepMetrics = await simulationService.step();
-      setCurrentStep(stepMetrics.step);
-      setMetrics({
-        current_step: stepMetrics.step,
-        total_vehicles: stepMetrics.total_vehicles,
-        average_wait_time: stepMetrics.average_wait_time,
-        throughput: stepMetrics.total_vehicles,
-      });
-      setMetricsHistory(prev => [
-        ...prev,
-        {
+      dispatchSim({
+        type: 'step',
+        data: {
           step: stepMetrics.step,
-          vehicles: stepMetrics.total_vehicles,
-          waitTime: stepMetrics.average_wait_time,
+          total_vehicles: stepMetrics.total_vehicles,
+          total_wait_time: stepMetrics.total_wait_time,
+          average_wait_time: stepMetrics.average_wait_time,
         },
-      ]);
+      });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to execute step');
     }
@@ -172,7 +182,7 @@ export default function App() {
         <Sidebar>
           <SimulationControl
             status={simStatus}
-            currentStep={currentStep}
+            currentStep={sim.step}
             onStart={handleStart}
             onPause={handlePause}
             onResume={handleResume}
@@ -181,11 +191,11 @@ export default function App() {
           />
           <SimulationStatusDisplay
             status={simStatus}
-            currentStep={currentStep}
+            currentStep={sim.step}
             networkId={currentNetworkId}
           />
-          <MetricsPanel metrics={metrics} isLoading={isLoading} />
-          <MetricsChart data={metricsHistory} />
+          <MetricsPanel metrics={sim.metrics} isLoading={isLoading} />
+          <MetricsChart data={sim.history} />
           <CameraPanel />
         </Sidebar>
         <main className="flex-1 relative">

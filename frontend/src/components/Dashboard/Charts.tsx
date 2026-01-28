@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 interface ChartDataPoint {
@@ -10,7 +11,7 @@ interface ChartsProps {
   data: ChartDataPoint[];
 }
 
-export function MetricsChart({ data }: ChartsProps) {
+export const MetricsChart = memo(function MetricsChart({ data }: ChartsProps) {
   if (data.length === 0) {
     return (
       <div className="bg-white rounded-lg shadow p-4 h-64 flex items-center justify-center text-gray-400">
@@ -35,4 +36,4 @@ export function MetricsChart({ data }: ChartsProps) {
       </div>
     </div>
   );
-}
+});
