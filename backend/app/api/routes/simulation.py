@@ -10,7 +10,6 @@ from app.models.schemas import (
     SimulationStartRequest,
     SimulationStatus,
     SimulationStepMetrics,
-    TrafficScenario,
 )
 from app.services import osm_service, sumo_service, metrics_service, route_service
 
@@ -49,15 +48,12 @@ def start_simulation(request: SimulationStartRequest) -> SimulationStatus:
         )
         routes_path = route_result["routes_path"]
 
-        # Get vtypes file
-        vtypes_path = route_service.get_vtypes_file_path()
-
-        # Start the simulation with routes and vtypes
+        # Start the simulation with routes
+        # Note: vtypes are already embedded in the routes file by duarouter
         result = sumo_service.start_simulation(
             network_path=network_path,
             network_id=request.network_id,
             routes_path=routes_path,
-            additional_files=[vtypes_path],
             gui=request.gui,
         )
 

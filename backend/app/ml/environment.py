@@ -194,15 +194,12 @@ class TrafficLightEnv(gym.Env):
         else:
             routes_path = self.routes_path
 
-        # Get vtypes file
-        vtypes_path = route_service.get_vtypes_file_path()
-
         # Start fresh simulation with routes
+        # Note: vtypes are already embedded in the routes file by duarouter
         sumo_service.start_simulation(
             network_path=self.network_path,
             network_id=self.network_id,
             routes_path=routes_path,
-            additional_files=[vtypes_path],
             gui=self.gui,
         )
 
