@@ -110,13 +110,6 @@ def generate_routes(
     random_trips_path = Path(SUMO_HOME) / "tools" / "randomTrips.py"
     duarouter_path = Path(SUMO_HOME) / "bin" / "duarouter"
 
-    # Map vehicle types to their SUMO vehicle classes
-    vtype_to_vclass = {
-        "motorbike": "motorcycle",
-        "car": "passenger",
-        "bus": "bus",
-    }
-
     # Track temp files for cleanup
     temp_trip_files: list[Path] = []
 
@@ -133,8 +126,6 @@ def generate_routes(
             type_trips_file = output_path / f"{network_name}_{scenario.value}_{vtype}.trips.xml"
             temp_trip_files.append(type_trips_file)
 
-            vclass = vtype_to_vclass.get(vtype, "passenger")
-
             trips_cmd = [
                 "python3",
                 str(random_trips_path),
@@ -143,7 +134,6 @@ def generate_routes(
                 "-e", str(duration),
                 "-p", str(type_period),
                 "--additional-file", str(VTYPES_FILE),
-                "--vehicle-class", vclass,
                 "--trip-attributes", f'type="{vtype}"',
                 "--validate",
                 "--fringe-factor", "5",
