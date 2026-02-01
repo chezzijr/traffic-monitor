@@ -73,6 +73,50 @@ def _extract_traffic_signals(bbox: tuple[float, float, float, float]) -> set[int
         return set()
 
 
+def get_traffic_signals_by_point(
+    lat: float,
+    lon: float,
+    radius: int = 500
+) -> list[dict]:
+    """
+    Lấy danh sách traffic signals từ OSM quanh 1 điểm lat/lon.
+
+    Args:
+        lat: vĩ độ
+        lon: kinh độ
+        radius: bán kính tìm kiếm (m), mặc định 500m
+
+    Returns:
+        List các traffic signal:
+        [
+            {
+                "osm_id": int,
+                "lat": float,
+                "lon": float
+            }
+        ]
+    """
+    try:
+        gdf = ox.features_from_point(
+            (lat, lon),
+            tags={"highway": "traffic_signals"},
+            dist=radius
+        )
+    except Exception:
+        return []
+
+    results = []
+    for (elem_type, osm_id), row in gdf.iterrows():
+        if elem_type != "node":
+            continue
+        results.append({
+            "osm_id": osm_id,
+            "lat": row.geometry.y,
+            "lon": row.geometry.x,
+        })
+
+    return results
+
 def extract_network(bbox: tuple[float, float, float, float]) -> dict:
     """
     Extract road network from OpenStreetMap for the given bounding box.

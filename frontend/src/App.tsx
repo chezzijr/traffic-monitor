@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef, useReducer } from 'react';
 import toast, { Toaster } from 'react-hot-toast';
-import { MapContainer, IntersectionMarkers, RegionSelector, MapLegend } from './components/Map';
+import { MapContainer, IntersectionMarkers, TrafficSignalMarkers, RegionSelector, MapLegend } from './components/Map';
 import { Sidebar, Header } from './components/Layout';
-import { SimulationControl, CameraPanel } from './components/Control';
+import { SimulationControl, CameraPanel, TrafficSignalSearch } from './components/Control';
 import { MetricsPanel, SimulationStatusDisplay, MetricsChart } from './components/Dashboard';
 import { useMapStore } from './store/mapStore';
 import { mapService, simulationService, SimulationSSE } from './services';
@@ -13,7 +13,7 @@ const MAX_HISTORY_POINTS = 500;
 interface SimState {
   step: number;
   metrics: SimulationMetrics | null;
-  history: Array<{step: number; vehicles: number; waitTime: number}>;
+  history: Array<{ step: number; vehicles: number; waitTime: number }>;
 }
 
 type SimAction =
@@ -180,6 +180,7 @@ export default function App() {
       <Header />
       <div className="flex-1 flex overflow-hidden">
         <Sidebar>
+          <TrafficSignalSearch />
           <SimulationControl
             status={simStatus}
             currentStep={sim.step}
@@ -201,6 +202,7 @@ export default function App() {
         <main className="flex-1 relative">
           <MapContainer>
             <IntersectionMarkers />
+            <TrafficSignalMarkers />
             <RegionSelector />
           </MapContainer>
           <MapLegend className="absolute bottom-4 left-4 z-[1000]" />

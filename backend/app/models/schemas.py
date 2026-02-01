@@ -31,6 +31,14 @@ class Intersection(BaseModel):
     sumo_tl_id: str | None = Field(None, description="SUMO traffic light ID (if converted and mapped)")
 
 
+class TrafficSignal(BaseModel):
+    """Traffic signal (traffic_light) node from OSM."""
+
+    osm_id: int = Field(..., description="OSM node ID")
+    lat: float = Field(..., ge=-90, le=90, description="Latitude coordinate")
+    lon: float = Field(..., ge=-180, le=180, description="Longitude coordinate")
+
+
 class NetworkInfo(BaseModel):
     """Information about an extracted OSM road network."""
 

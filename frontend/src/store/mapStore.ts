@@ -1,9 +1,10 @@
 import { create } from 'zustand';
-import type { BoundingBox, Intersection } from '../types';
+import type { BoundingBox, Intersection, TrafficSignal } from '../types';
 
 interface MapState {
   // State
   intersections: Intersection[];
+  trafficSignals: TrafficSignal[];
   selectedRegion: BoundingBox | null;
   currentNetworkId: string | null;
   selectionMode: boolean;
@@ -12,6 +13,7 @@ interface MapState {
 
   // Actions
   setIntersections: (intersections: Intersection[]) => void;
+  setTrafficSignals: (signals: TrafficSignal[]) => void;
   setSelectedRegion: (bbox: BoundingBox | null) => void;
   setCurrentNetworkId: (id: string | null) => void;
   setSelectionMode: (mode: boolean) => void;
@@ -22,6 +24,7 @@ interface MapState {
 
 const initialState = {
   intersections: [],
+  trafficSignals: [],
   selectedRegion: null,
   currentNetworkId: null,
   selectionMode: false,
@@ -35,6 +38,7 @@ export const useMapStore = create<MapState>((set) => ({
 
   // Actions
   setIntersections: (intersections) => set({ intersections }),
+  setTrafficSignals: (signals) => set({ trafficSignals: signals }),
   setSelectedRegion: (bbox) => set({ selectedRegion: bbox }),
   setCurrentNetworkId: (id) => set({ currentNetworkId: id }),
   setSelectionMode: (mode) => set({ selectionMode: mode }),

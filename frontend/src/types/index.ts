@@ -19,6 +19,13 @@ export interface Intersection {
   sumo_tl_id?: string;
 }
 
+// OSM traffic signal
+export interface TrafficSignal {
+  osm_id: number;
+  lat: number;
+  lon: number;
+}
+
 // Matches backend NetworkInfo
 export interface NetworkInfo {
   network_id: string;

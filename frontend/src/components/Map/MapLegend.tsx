@@ -32,6 +32,11 @@ export function MapLegend({ className = '' }: MapLegendProps) {
           </div>
           <span className="text-xs text-gray-600">Traffic Light</span>
         </div>
+        {/* OSM traffic signal */}
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 bg-orange-500 rounded-full border-2 border-white shadow-sm" />
+          <span className="text-xs text-gray-600">OSM Traffic Signal</span>
+        </div>
       </div>
     </div>
   );
