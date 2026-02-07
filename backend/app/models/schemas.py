@@ -32,7 +32,15 @@ class Intersection(BaseModel):
 
 
 class TrafficSignal(BaseModel):
-    """Traffic signal (traffic_light) node from OSM."""
+    """Traffic signal node from OSM (legacy name)."""
+
+    osm_id: int = Field(..., description="OSM node ID")
+    lat: float = Field(..., ge=-90, le=90, description="Latitude coordinate")
+    lon: float = Field(..., ge=-180, le=180, description="Longitude coordinate")
+
+
+class TrafficLight(BaseModel):
+    """Traffic light node from OSM."""
 
     osm_id: int = Field(..., description="OSM node ID")
     lat: float = Field(..., ge=-90, le=90, description="Latitude coordinate")
@@ -152,3 +160,31 @@ class RouteGenerationResponse(BaseModel):
     routes_path: str = Field(..., description="Path to the generated .rou.xml file")
     trip_count: int = Field(..., ge=0, description="Estimated number of generated trips")
     vehicle_distribution: dict[str, float] = Field(..., description="Vehicle type percentages")
+
+
+class CameraSnapshot(BaseModel):
+    """Snapshot data for a camera at an intersection."""
+
+    id: str = Field(..., description="Unique snapshot ID")
+    intersection_id: str = Field(..., description="ID of the intersection")
+    timestamp: datetime = Field(..., description="Timestamp when snapshot was taken")
+    snapshot_data: str = Field(..., description="Base64 encoded image/video data")
+    media_type: str = Field(default="image/jpeg", description="MIME type of the media")
+    step: int = Field(..., ge=0, description="Simulation step when snapshot was taken")
+
+
+class CameraStreamInfo(BaseModel):
+    """Information about a live stream for an intersection."""
+
+    intersection_id: str = Field(..., description="ID of the intersection")
+    stream_url: str | None = Field(None, description="URL to the live stream (RTSP, MJPEG, etc)")
+    is_available: bool = Field(default=False, description="Whether live stream is currently available")
+    last_snapshot_timestamp: datetime | None = Field(None, description="Timestamp of last snapshot")
+
+
+class CameraResponse(BaseModel):
+    """Response with camera snapshot and stream info."""
+
+    snapshot: CameraSnapshot | None = Field(None, description="Latest snapshot if available")
+    stream: CameraStreamInfo = Field(..., description="Stream information")
+    available_snapshots: list[CameraSnapshot] = Field(default_factory=list, description="List of recent snapshots")

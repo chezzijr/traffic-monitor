@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import (
+    camera_router,
     control_router,
     map_router,
     metrics_router,
@@ -27,6 +28,7 @@ app.add_middleware(
 )
 
 # Include routers with API prefix
+app.include_router(camera_router, prefix=settings.api_prefix)
 app.include_router(map_router, prefix=settings.api_prefix)
 app.include_router(simulation_router, prefix=settings.api_prefix)
 app.include_router(metrics_router, prefix=settings.api_prefix)

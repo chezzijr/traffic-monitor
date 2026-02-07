@@ -1,5 +1,5 @@
 import { api } from './api';
-import type { BoundingBox, NetworkInfo, Intersection, TrafficSignal } from '../types';
+import type { BoundingBox, NetworkInfo, Intersection, TrafficSignal, TrafficLight } from '../types';
 
 export const mapService = {
   // Extract network from OSM for a given bounding box
@@ -31,7 +31,13 @@ export const mapService = {
 
   // Get OSM traffic signals around a point
   async getTrafficSignals(params: { lat: number; lng: number; radius: number }): Promise<TrafficSignal[]> {
-    const response = await api.get<TrafficSignal[]>('/map/traffic-signals', { params });
+    const response = await api.get<TrafficSignal[]>('/map/traffic-lights', { params });
+    return response.data;
+  },
+
+  // Get OSM traffic lights around a point
+  async getTrafficLights(params: { lat: number; lng: number; radius: number }): Promise<TrafficLight[]> {
+    const response = await api.get<TrafficLight[]>('/map/traffic-lights', { params });
     return response.data;
   },
 };

@@ -1,5 +1,11 @@
 // TypeScript interfaces matching backend schemas
 
+// Coordinates
+export interface LatLng {
+  lat: number;
+  lng: number;
+}
+
 // Matches backend BoundingBox
 export interface BoundingBox {
   south: number;
@@ -21,6 +27,13 @@ export interface Intersection {
 
 // OSM traffic signal
 export interface TrafficSignal {
+  osm_id: number;
+  lat: number;
+  lon: number;
+}
+
+// OSM traffic light (preferred name)
+export interface TrafficLight {
   osm_id: number;
   lat: number;
   lon: number;
@@ -90,4 +103,28 @@ export interface SSEStatusEvent {
 
 export interface SSEErrorEvent {
   message: string;
+}
+// Camera snapshot data
+export interface CameraSnapshot {
+  id: string;
+  intersection_id: string;
+  timestamp: string;
+  snapshot_data: string;
+  media_type: string;
+  step: number;
+}
+
+// Live stream information
+export interface CameraStreamInfo {
+  intersection_id: string;
+  stream_url: string | null;
+  is_available: boolean;
+  last_snapshot_timestamp: string | null;
+}
+
+// Camera response with snapshot and stream
+export interface CameraResponse {
+  snapshot: CameraSnapshot | null;
+  stream: CameraStreamInfo;
+  available_snapshots: CameraSnapshot[];
 }

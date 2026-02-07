@@ -117,6 +117,19 @@ def get_traffic_signals_by_point(
 
     return results
 
+
+def get_traffic_lights_by_point(
+    lat: float,
+    lon: float,
+    radius: int = 500
+) -> list[dict]:
+    """
+    Lấy danh sách traffic lights từ OSM quanh 1 điểm lat/lon.
+
+    Đây là alias cho traffic_signals (OSM dùng highway=traffic_signals).
+    """
+    return get_traffic_signals_by_point(lat=lat, lon=lon, radius=radius)
+
 def extract_network(bbox: tuple[float, float, float, float]) -> dict:
     """
     Extract road network from OpenStreetMap for the given bounding box.
