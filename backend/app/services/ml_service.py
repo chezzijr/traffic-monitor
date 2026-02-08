@@ -29,6 +29,47 @@ logger = logging.getLogger(__name__)
 MODELS_DIR = Path(__file__).parent.parent.parent.parent / "simulation" / "models"
 
 
+def _save_model_metadata(
+    model_path: Path,
+    network_id: str,
+    tl_id: str,
+    algorithm: Algorithm,
+    total_timesteps: int,
+    env: Any,
+) -> None:
+    """Save model metadata to a JSON file.
+
+    Args:
+        model_path: Path to the model file (without .zip extension)
+        network_id: ID of the network
+        tl_id: Traffic light ID
+        algorithm: Algorithm used
+        total_timesteps: Total training timesteps
+        env: The training environment (for observation/action space info)
+    """
+    import json
+    from datetime import datetime
+
+    metadata = {
+        "network_id": network_id,
+        "tl_id": tl_id,
+        "algorithm": algorithm.value,
+        "total_timesteps": total_timesteps,
+        "observation_dim": env.observation_space.shape[0] if hasattr(env.observation_space, 'shape') else 0,
+        "action_dim": env.action_space.n if hasattr(env.action_space, 'n') else 0,
+        "num_phases": getattr(env, '_num_phases', 4),
+        "controlled_lanes": getattr(env, '_controlled_lanes', []),
+        "trained_on_scenarios": [getattr(env, 'scenario', 'moderate')],
+        "created_at": datetime.now().isoformat(),
+    }
+
+    metadata_path = Path(str(model_path) + ".metadata.json")
+    with open(metadata_path, "w") as f:
+        json.dump(metadata, f, indent=2)
+
+    logger.info(f"Saved model metadata to {metadata_path}")
+
+
 class TrainingStatus(str, Enum):
     """Status of a training job."""
 
@@ -211,6 +252,16 @@ def _run_training(
             model_path = MODELS_DIR / model_filename
             trainer.save(model_path)
             job.model_path = str(model_path) + ".zip"
+
+            # Save model metadata
+            _save_model_metadata(
+                model_path=model_path,
+                network_id=network_id,
+                tl_id=tl_id,
+                algorithm=algorithm,
+                total_timesteps=total_timesteps,
+                env=env,
+            )
 
             # Save final metrics
             job.episode_rewards = metrics_callback.episode_rewards
@@ -605,3 +656,27 @@ def is_model_loaded() -> bool:
     """
     with _state._lock:
         return _state._loaded_model is not None
+
+
+def get_model_metadata(model_path: str) -> dict[str, Any] | None:
+    """Load model metadata from JSON file.
+
+    Args:
+        model_path: Path to the model .zip file
+
+    Returns:
+        Metadata dict or None if not found
+    """
+    import json
+
+    # Handle both .zip and non-.zip paths
+    path = Path(model_path)
+    if path.suffix == ".zip":
+        metadata_path = path.with_suffix(".metadata.json")
+    else:
+        metadata_path = Path(str(path) + ".metadata.json")
+
+    if metadata_path.exists():
+        with open(metadata_path) as f:
+            return json.load(f)
+    return None
