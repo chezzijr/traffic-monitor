@@ -144,3 +144,89 @@ class RouteGenerationResponse(BaseModel):
     routes_path: str = Field(..., description="Path to the generated .rou.xml file")
     trip_count: int = Field(..., ge=0, description="Estimated number of generated trips")
     vehicle_distribution: dict[str, float] = Field(..., description="Vehicle type percentages")
+
+
+# =============================================================================
+# ML Training Schemas
+# =============================================================================
+
+
+class TrainingAlgorithm(str, Enum):
+    """Supported RL training algorithms."""
+
+    DQN = "dqn"
+    PPO = "ppo"
+
+
+class TrainingStartRequest(BaseModel):
+    """Request body for starting a training job."""
+
+    network_id: str = Field(..., description="ID of the network to train on")
+    tl_id: str = Field(..., description="Traffic light ID to optimize")
+    algorithm: TrainingAlgorithm = Field(default=TrainingAlgorithm.DQN, description="RL algorithm to use")
+    total_timesteps: int = Field(default=10000, ge=100, le=100000, description="Total training timesteps")
+    scenarios: list[TrafficScenario] | None = Field(
+        default=None, description="Traffic scenarios for training (None = use moderate)"
+    )
+
+
+class TrainingJobInfo(BaseModel):
+    """Information about a training job."""
+
+    network_id: str = Field(..., description="Network ID")
+    tl_id: str = Field(..., description="Traffic light ID")
+    algorithm: str = Field(..., description="Algorithm used")
+    total_timesteps: int = Field(..., description="Total timesteps to train")
+    current_timestep: int = Field(default=0, ge=0, description="Current training timestep")
+    progress: float = Field(default=0.0, ge=0.0, le=1.0, description="Training progress (0-1)")
+    start_time: datetime | None = Field(default=None, description="Training start time")
+    end_time: datetime | None = Field(default=None, description="Training end time")
+    error_message: str | None = Field(default=None, description="Error message if failed")
+    model_path: str | None = Field(default=None, description="Path to saved model")
+    total_episodes: int = Field(default=0, ge=0, description="Total episodes completed")
+    mean_reward: float = Field(default=0.0, description="Mean reward of recent episodes")
+    std_reward: float = Field(default=0.0, ge=0.0, description="Std dev of recent episode rewards")
+
+
+class TrainingStatusResponse(BaseModel):
+    """Response for training status."""
+
+    status: str = Field(..., description="Training status: idle, running, completed, failed, stopping")
+    job: TrainingJobInfo | None = Field(default=None, description="Current or last training job info")
+
+
+class ModelInfo(BaseModel):
+    """Information about a trained model."""
+
+    id: str = Field(..., description="Model ID (filename without .zip)")
+    path: str = Field(..., description="Full path to model file")
+    filename: str = Field(..., description="Model filename")
+    network_id: str = Field(..., description="Network this model was trained on")
+    tl_id: str = Field(..., description="Traffic light this model controls")
+    algorithm: str = Field(..., description="Algorithm used for training")
+    timestamp: str = Field(..., description="Training timestamp")
+    size_bytes: int = Field(..., ge=0, description="Model file size in bytes")
+    created_at: str = Field(..., description="File creation time (ISO format)")
+
+
+class DeployRequest(BaseModel):
+    """Request body for deploying a model."""
+
+    tl_id: str = Field(..., description="Traffic light ID to deploy model to")
+
+
+class DeploymentInfo(BaseModel):
+    """Information about an active deployment."""
+
+    tl_id: str = Field(..., description="Traffic light ID")
+    model_id: str = Field(..., description="Deployed model ID")
+    model_path: str = Field(..., description="Path to deployed model")
+    network_id: str = Field(..., description="Network ID the model was trained on")
+    ai_control_enabled: bool = Field(default=True, description="Whether AI control is enabled")
+
+
+class ToggleAIRequest(BaseModel):
+    """Request body for toggling AI control."""
+
+    tl_id: str = Field(..., description="Traffic light ID")
+    enabled: bool = Field(..., description="Whether to enable AI control")
