@@ -2,16 +2,19 @@
 
 import asyncio
 import json
+import logging
 
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
+
+logger = logging.getLogger(__name__)
 
 from app.models.schemas import (
     SimulationStartRequest,
     SimulationStatus,
     SimulationStepMetrics,
 )
-from app.services import osm_service, sumo_service, metrics_service, route_service
+from app.services import osm_service, sumo_service, metrics_service, route_service, deployment_service
 
 router = APIRouter(prefix="/simulation", tags=["simulation"])
 
@@ -237,12 +240,22 @@ async def _simulation_event_generator(step_interval: int):
                         throughput=sumo_service.get_arrived_vehicles_count(),
                     )
 
+                    # Apply AI control for deployed models
+                    ai_actions = {}
+                    for dep in deployment_service.get_active_deployments():
+                        try:
+                            action = deployment_service.apply_ai_action(dep.tl_id)
+                            ai_actions[dep.tl_id] = action
+                        except Exception as e:
+                            logger.warning(f"AI action failed for {dep.tl_id}: {e}")
+
                     # Yield step event
                     step_data = {
                         "step": result["step"],
                         "total_vehicles": result["total_vehicles"],
                         "total_wait_time": result["total_wait_time"],
                         "average_wait_time": result["average_wait_time"],
+                        "ai_actions": ai_actions,
                     }
                     yield f"event: step\ndata: {json.dumps(step_data)}\n\n"
                 except RuntimeError:
