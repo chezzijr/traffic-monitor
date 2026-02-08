@@ -100,7 +100,7 @@ export default function App() {
   }, []);
 
   // Simulation control handlers
-  const handleStart = useCallback(async () => {
+  const handleStart = useCallback(async (scenario: string) => {
     if (!currentNetworkId) {
       toast.error('No network selected. Please select a region first.');
       return;
@@ -111,8 +111,8 @@ export default function App() {
       // Convert to SUMO format
       await mapService.convertToSumo(currentNetworkId);
 
-      // Start simulation
-      await simulationService.start(currentNetworkId);
+      // Start simulation with selected scenario
+      await simulationService.start(currentNetworkId, scenario);
 
       // Reset state
       dispatchSim({ type: 'reset' });

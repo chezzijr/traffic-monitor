@@ -7,9 +7,10 @@ import type {
 
 export const simulationService = {
   // Start a simulation for the given network
-  async start(networkId: string, gui?: boolean): Promise<SimulationStatusResponse> {
+  async start(networkId: string, scenario?: string, gui?: boolean): Promise<SimulationStatusResponse> {
     const response = await api.post<SimulationStatusResponse>('/simulation/start', {
       network_id: networkId,
+      scenario: scenario ?? 'moderate',
       gui: gui ?? false,
     });
     return response.data;
