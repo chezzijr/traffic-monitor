@@ -6,7 +6,7 @@ import type { SimulationStatus } from '../../types';
 interface SimulationControlProps {
   status: SimulationStatus;
   currentStep: number;
-  onStart: () => Promise<void>;
+  onStart: (scenario: string) => Promise<void>;
   onPause: () => Promise<void>;
   onResume: () => Promise<void>;
   onStop: () => Promise<void>;
@@ -23,6 +23,7 @@ export function SimulationControl({
   onStep,
 }: SimulationControlProps) {
   const [isLoading, setIsLoading] = useState(false);
+  const [scenario, setScenario] = useState<'light' | 'moderate' | 'heavy' | 'rush_hour'>('moderate');
   const networkId = useMapStore((state) => state.currentNetworkId);
 
   const handleAction = async (action: () => Promise<void>) => {
@@ -51,11 +52,31 @@ export function SimulationControl({
         {!isIdle && <span className="text-sm text-gray-500">Step: {currentStep}</span>}
       </div>
 
+      {/* Scenario selector - only show when idle */}
+      {isIdle && (
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Traffic Scenario
+          </label>
+          <select
+            value={scenario}
+            onChange={(e) => setScenario(e.target.value as typeof scenario)}
+            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            disabled={!networkId}
+          >
+            <option value="light">Light Traffic</option>
+            <option value="moderate">Moderate Traffic</option>
+            <option value="heavy">Heavy Traffic</option>
+            <option value="rush_hour">Rush Hour</option>
+          </select>
+        </div>
+      )}
+
       {/* Control buttons */}
       <div className="flex gap-2">
         {isIdle ? (
           <button
-            onClick={() => handleAction(onStart)}
+            onClick={() => handleAction(() => onStart(scenario))}
             disabled={isLoading || !networkId}
             className="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
           >
