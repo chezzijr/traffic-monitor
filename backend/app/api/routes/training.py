@@ -7,12 +7,15 @@ from fastapi import APIRouter, HTTPException, Path, status
 from fastapi.responses import StreamingResponse
 
 from app.models.schemas import (
+    DeploymentInfo,
+    DeployRequest,
     ModelInfo,
+    ToggleAIRequest,
     TrainingJobInfo,
     TrainingStartRequest,
     TrainingStatusResponse,
 )
-from app.services import ml_service
+from app.services import deployment_service, ml_service
 
 router = APIRouter(tags=["training"])
 
@@ -163,3 +166,96 @@ def delete_model(model_id: str = Path(..., description="Model ID (filename witho
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post(
+    "/models/{model_id}/deploy",
+    response_model=dict,
+    status_code=status.HTTP_200_OK,
+    summary="Deploy model to traffic light",
+    description="Deploy a trained model to control a specific traffic light.",
+)
+def deploy_model(
+    model_id: str = Path(..., description="Model ID (filename without .zip)"),
+    request: DeployRequest = ...,
+) -> dict:
+    """Deploy a model to a traffic light."""
+    # Find model path
+    models = ml_service.list_models()
+    model_path = None
+    for m in models:
+        if m["filename"].replace(".zip", "") == model_id:
+            model_path = m["path"]
+            break
+
+    if not model_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Model '{model_id}' not found",
+        )
+
+    try:
+        return deployment_service.deploy_model(model_path, request.tl_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@router.post(
+    "/models/{model_id}/undeploy",
+    response_model=dict,
+    status_code=status.HTTP_200_OK,
+    summary="Undeploy model",
+    description="Remove a model deployment from its traffic light.",
+)
+def undeploy_model(
+    model_id: str = Path(..., description="Model ID (filename without .zip)"),
+) -> dict:
+    """Undeploy a model from its traffic light."""
+    # Find which TL this model is deployed to
+    deployments = deployment_service.get_deployments()
+    tl_id = None
+    for d in deployments:
+        if d["model_id"] == model_id:
+            tl_id = d["tl_id"]
+            break
+
+    if not tl_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Model '{model_id}' is not deployed",
+        )
+
+    try:
+        return deployment_service.undeploy_model(tl_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get(
+    "/deployment/status",
+    response_model=list[DeploymentInfo],
+    status_code=status.HTTP_200_OK,
+    summary="Get deployment status",
+    description="Get all active model deployments.",
+)
+def get_deployment_status() -> list[DeploymentInfo]:
+    """Get all active deployments."""
+    deployments = deployment_service.get_deployments()
+    return [DeploymentInfo(**d) for d in deployments]
+
+
+@router.post(
+    "/deployment/toggle",
+    response_model=dict,
+    status_code=status.HTTP_200_OK,
+    summary="Toggle AI control",
+    description="Enable or disable AI control for a deployed traffic light.",
+)
+def toggle_ai_control(request: ToggleAIRequest) -> dict:
+    """Toggle AI control for a traffic light."""
+    try:
+        return deployment_service.toggle_ai_control(request.tl_id, request.enabled)
+    except RuntimeError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
