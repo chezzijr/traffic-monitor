@@ -89,13 +89,12 @@ def step_simulation() -> SimulationStepMetrics:
     """
     try:
         result = sumo_service.step()
-        # TODO: Implement throughput tracking from SUMO departed vehicles
         metrics_service.record_metrics(
             step=result["step"],
             total_vehicles=result["total_vehicles"],
             total_wait_time=result["total_wait_time"],
             average_wait_time=result["average_wait_time"],
-            throughput=0,
+            throughput=sumo_service.get_arrived_vehicles_count(),
         )
         return SimulationStepMetrics(
             step=result["step"],
@@ -235,7 +234,7 @@ async def _simulation_event_generator(step_interval: int):
                         total_vehicles=result["total_vehicles"],
                         total_wait_time=result["total_wait_time"],
                         average_wait_time=result["average_wait_time"],
-                        throughput=0,
+                        throughput=sumo_service.get_arrived_vehicles_count(),
                     )
 
                     # Yield step event
