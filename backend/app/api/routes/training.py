@@ -176,8 +176,8 @@ def delete_model(model_id: str = Path(..., description="Model ID (filename witho
     description="Deploy a trained model to control a specific traffic light.",
 )
 def deploy_model(
+    request: DeployRequest,
     model_id: str = Path(..., description="Model ID (filename without .zip)"),
-    request: DeployRequest = ...,
 ) -> dict:
     """Deploy a model to a traffic light."""
     # Find model path
