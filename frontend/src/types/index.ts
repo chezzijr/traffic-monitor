@@ -84,3 +84,6 @@ export interface SSEStatusEvent {
 export interface SSEErrorEvent {
   message: string;
 }
+
+// ML types
+export * from './ml';
