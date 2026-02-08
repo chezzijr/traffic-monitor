@@ -385,3 +385,100 @@ class TrafficLightEnv(gym.Env):
             sumo_service.stop_simulation()
         self._is_initialized = False
         logger.info("TrafficLightEnv closed")
+
+
+class MultiScenarioEnvWrapper(gym.Wrapper):
+    """Wrapper that rotates scenarios during training for generalization.
+
+    This wrapper changes the traffic scenario on each reset, allowing the agent
+    to learn across different traffic conditions (light, moderate, heavy, rush_hour).
+
+    Attributes:
+        scenarios: List of scenario names to rotate through
+        mode: Scenario selection mode ('round_robin', 'random', or 'curriculum')
+    """
+
+    def __init__(
+        self,
+        env: TrafficLightEnv,
+        scenarios: list[str] | None = None,
+        mode: str = "round_robin",
+    ) -> None:
+        """Initialize the multi-scenario wrapper.
+
+        Args:
+            env: The TrafficLightEnv to wrap
+            scenarios: List of scenario names. Defaults to all scenarios.
+            mode: Selection mode:
+                - 'round_robin': Cycle through scenarios in order
+                - 'random': Randomly select scenario each reset
+                - 'curriculum': Progress from easy to hard as training advances
+        """
+        super().__init__(env)
+        self.scenarios = scenarios or ["light", "moderate", "heavy", "rush_hour"]
+        self.mode = mode
+        self._scenario_idx = 0
+        self._episode_count = 0
+        self._curriculum_threshold = 50  # Episodes before advancing difficulty
+
+    def reset(
+        self,
+        *,
+        seed: int | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> tuple[np.ndarray, dict[str, Any]]:
+        """Reset with a new scenario based on the selection mode.
+
+        Args:
+            seed: Random seed for reproducibility
+            options: Additional options (passed to wrapped env)
+
+        Returns:
+            Tuple of (initial_observation, info_dict)
+        """
+        # Select scenario based on mode
+        if self.mode == "round_robin":
+            scenario = self.scenarios[self._scenario_idx % len(self.scenarios)]
+            self._scenario_idx += 1
+        elif self.mode == "random":
+            scenario = np.random.choice(self.scenarios)
+        elif self.mode == "curriculum":
+            # Progress through scenarios based on episode count
+            # Stay on easier scenarios longer, then advance
+            progress = self._episode_count / (self._curriculum_threshold * len(self.scenarios))
+            idx = min(int(progress * len(self.scenarios)), len(self.scenarios) - 1)
+            scenario = self.scenarios[idx]
+        else:
+            scenario = self.scenarios[0]
+
+        # Update the wrapped environment's scenario
+        self.env.scenario = scenario
+        self._episode_count += 1
+
+        # Log scenario change
+        logger.debug(f"Episode {self._episode_count}: Using scenario '{scenario}'")
+
+        # Call parent reset
+        obs, info = self.env.reset(seed=seed, options=options)
+
+        # Add scenario info
+        info["scenario"] = scenario
+        info["episode_count"] = self._episode_count
+
+        return obs, info
+
+    def get_current_scenario(self) -> str:
+        """Get the current scenario name.
+
+        Returns:
+            Current scenario name
+        """
+        return getattr(self.env, 'scenario', 'unknown')
+
+    def set_curriculum_threshold(self, threshold: int) -> None:
+        """Set the number of episodes before advancing curriculum difficulty.
+
+        Args:
+            threshold: Episodes per difficulty level
+        """
+        self._curriculum_threshold = threshold
