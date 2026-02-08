@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException, status
 
 from app.models.schemas import SetPhaseRequest, TrafficLightInfo
-from app.services import sumo_service
+from app.services import sumo_service, deployment_service
 
 router = APIRouter(prefix="/control", tags=["control"])
 
@@ -72,6 +72,16 @@ def set_traffic_light_phase(tl_id: str, request: SetPhaseRequest) -> TrafficLigh
 
     Returns the updated traffic light state after setting the phase.
     """
+    # Check if TL is under AI control
+    if deployment_service.is_ai_controlling(tl_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error_code": "AI_CONTROL_ACTIVE",
+                "message": f"Traffic light '{tl_id}' is under AI control. Disable AI control first.",
+            },
+        )
+
     try:
         sumo_service.set_traffic_light_phase(tl_id, request.phase)
         # Get full traffic light info after setting phase
