@@ -1,17 +1,22 @@
 import { useState } from 'react';
-import { MapPin } from 'lucide-react';
+import { MapPin, X } from 'lucide-react';
 import { useMapStore } from '../../store/mapStore';
 import { TrainingPanel, ModelsPanel, DeploymentPanel } from '../ML';
+import type { SimulationStatus } from '../../types';
 
 type TabType = 'simulation' | 'training' | 'models' | 'deployment';
 
 interface SidebarProps {
   children: React.ReactNode;  // Simulation controls passed from App
+  simStatus?: SimulationStatus;  // Current simulation status
 }
 
-export function Sidebar({ children }: SidebarProps) {
+export function Sidebar({ children, simStatus = 'idle' }: SidebarProps) {
   const [activeTab, setActiveTab] = useState<TabType>('simulation');
-  const { selectionMode, setSelectionMode, currentNetworkId } = useMapStore();
+  const { selectionMode, setSelectionMode, currentNetworkId, reset } = useMapStore();
+
+  // Can only clear network when simulation is idle or stopped
+  const canClearNetwork = currentNetworkId && (simStatus === 'idle' || simStatus === 'stopped');
 
   const tabs: { id: TabType; label: string }[] = [
     { id: 'simulation', label: 'Simulation' },
@@ -41,9 +46,20 @@ export function Sidebar({ children }: SidebarProps) {
           {selectionMode ? 'Cancel Selection' : 'Select Region'}
         </button>
         {currentNetworkId && (
-          <p className="mt-2 text-sm text-gray-500 truncate">
-            Network: {currentNetworkId}
-          </p>
+          <div className="flex items-center gap-2 mt-2">
+            <p className="text-sm text-gray-500 truncate flex-1" title={currentNetworkId}>
+              Network: {currentNetworkId.slice(0, 8)}...
+            </p>
+            {canClearNetwork && (
+              <button
+                onClick={() => reset()}
+                className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                title="Clear network and start fresh"
+              >
+                <X size={16} />
+              </button>
+            )}
+          </div>
         )}
       </div>
 

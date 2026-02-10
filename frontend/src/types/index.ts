@@ -74,6 +74,7 @@ export interface SSEStepEvent {
   total_vehicles: number;
   total_wait_time: number;
   average_wait_time: number;
+  throughput?: number;  // Vehicles that completed their trip
 }
 
 export interface SSEStatusEvent {

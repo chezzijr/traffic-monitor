@@ -255,6 +255,7 @@ async def _simulation_event_generator(step_interval: int):
                         "total_vehicles": result["total_vehicles"],
                         "total_wait_time": result["total_wait_time"],
                         "average_wait_time": result["average_wait_time"],
+                        "throughput": sumo_service.get_arrived_vehicles_count(),
                         "ai_actions": ai_actions,
                     }
                     yield f"event: step\ndata: {json.dumps(step_data)}\n\n"

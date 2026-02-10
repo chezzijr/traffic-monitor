@@ -15,10 +15,16 @@ export const mapService = {
   },
 
   // Convert network to SUMO format
-  async convertToSumo(networkId: string): Promise<{ sumo_network_path: string; network_id: string }> {
-    const response = await api.post<{ sumo_network_path: string; network_id: string }>(
-      `/map/convert-to-sumo/${networkId}`
-    );
+  async convertToSumo(networkId: string): Promise<{
+    sumo_network_path: string;
+    network_id: string;
+    osm_sumo_mapping: Record<string, string>;
+  }> {
+    const response = await api.post<{
+      sumo_network_path: string;
+      network_id: string;
+      osm_sumo_mapping: Record<string, string>;
+    }>(`/map/convert-to-sumo/${networkId}`);
     return response.data;
   },
 
