@@ -1,0 +1,146 @@
+{
+    "intersections": [
+        {
+            "id": "ba_thang_hai__ly_thuong_kiet",
+            "name": "Ba Thang Hai - Ly Thuong Kiet",
+            "osm_query": [
+                "Ba Thang Hai",
+                "Ly Thuong Kiet"
+            ],
+            "lat": null,
+            "lon": null,
+            "approaches": [
+                {
+                    "direction": "north",
+                    "bearing": 0,
+                    "cameras": [
+                        "5deb576d1dc17d7c5515ad23"
+                    ]
+                },
+                {
+                    "direction": "south",
+                    "bearing": 180,
+                    "cameras": [
+                        "63ae7af4bfd3d90017e8f32c"
+                    ]
+                },
+                {
+                    "direction": "east",
+                    "bearing": 90,
+                    "cameras": []
+                },
+                {
+                    "direction": "west",
+                    "bearing": 270,
+                    "cameras": []
+                }
+            ]
+        },
+        {
+            "id": "ly_thuong_kiet__to_hien_thanh",
+            "name": "Ly Thuong Kiet - To Hien Thanh",
+            "osm_query": [
+                "Ly Thuong Kiet",
+                "To Hien Thanh"
+            ],
+            "lat": null,
+            "lon": null,
+            "approaches": [
+                {
+                    "direction": "north",
+                    "bearing": 0,
+                    "cameras": [
+                        "63ae7c53bfd3d90017e8f3d8"
+                    ]
+                },
+                {
+                    "direction": "south",
+                    "bearing": 180,
+                    "cameras": [
+                        "63ae7c73bfd3d90017e8f3ed"
+                    ]
+                },
+                {
+                    "direction": "east",
+                    "bearing": 90,
+                    "cameras": []
+                },
+                {
+                    "direction": "west",
+                    "bearing": 270,
+                    "cameras": []
+                }
+            ]
+        },
+        {
+            "id": "ba_thang_hai__thanh_thai",
+            "name": "Ba Thang Hai - Thanh Thai",
+            "osm_query": [
+                "Ba Thang Hai",
+                "Thanh Thai"
+            ],
+            "lat": null,
+            "lon": null,
+            "approaches": [
+                {
+                    "direction": "north",
+                    "bearing": 0,
+                    "cameras": [
+                        "66b1c34d779f74001867409e"
+                    ]
+                },
+                {
+                    "direction": "south",
+                    "bearing": 180,
+                    "cameras": []
+                },
+                {
+                    "direction": "east",
+                    "bearing": 90,
+                    "cameras": []
+                },
+                {
+                    "direction": "west",
+                    "bearing": 270,
+                    "cameras": []
+                }
+            ]
+        },
+        {
+            "id": "to_hien_thanh__thanh_thai",
+            "name": "To Hien Thanh - Thanh Thai",
+            "osm_query": [
+                "To Hien Thanh",
+                "Thanh Thai"
+            ],
+            "lat": null,
+            "lon": null,
+            "approaches": [
+                {
+                    "direction": "north",
+                    "bearing": 0,
+                    "cameras": [
+                        "66b1c370779f7400186740b3"
+                    ]
+                },
+                {
+                    "direction": "south",
+                    "bearing": 180,
+                    "cameras": []
+                },
+                {
+                    "direction": "east",
+                    "bearing": 90,
+                    "cameras": [
+                        "66b1c3f1779f7400186740a4"
+                    ]
+                },
+                {
+                    "direction": "west",
+                    "bearing": 270,
+                    "cameras": []
+                }
+            ]
+        }
+    ]
+}
