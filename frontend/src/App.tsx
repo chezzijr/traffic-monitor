@@ -75,6 +75,7 @@ export default function App() {
       num_roads: 0,
       has_traffic_light: true,
       sumo_tl_id: undefined,
+      trafficLight: light,
     };
     setSelectedIntersection(intersection);
     setCameraModalOpen(true);

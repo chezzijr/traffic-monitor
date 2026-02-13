@@ -5,7 +5,7 @@ interface MapState {
   // State
   intersections: Intersection[];
   trafficSignals: TrafficSignal[];
-  trafficLights: TrafficSignal[];
+  trafficLights: TrafficLight[];
   selectedLocation: LatLng | null;
   isSelectingLocation: boolean;
   selectedRegion: BoundingBox | null;

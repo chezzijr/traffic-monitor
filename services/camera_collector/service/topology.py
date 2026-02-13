@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from service.naming import make_intersection_id
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TOPOLOGY_PATH = BASE_DIR / "intersection.json"
@@ -12,7 +13,9 @@ CAM_TO_DIRECTION = {}
 INTERSECTIONS = {}
 
 for inter in data["intersections"]:
-    inter_id = inter["id"]
+    r1, r2 = inter["osm_query"]
+    inter_id = make_intersection_id(r1, r2)
+
     INTERSECTIONS[inter_id] = inter
 
     for app in inter["approaches"]:

@@ -73,29 +73,8 @@ def _extract_traffic_signals(bbox: tuple[float, float, float, float]) -> set[int
         return set()
 
 
-def get_traffic_signals_by_point(
-    lat: float,
-    lon: float,
-    radius: int = 500
-) -> list[dict]:
-    """
-    Lấy danh sách traffic signals từ OSM quanh 1 điểm lat/lon.
+def get_traffic_lights_by_point(lat: float, lon: float, radius: int = 700) -> list[dict]:
 
-    Args:
-        lat: vĩ độ
-        lon: kinh độ
-        radius: bán kính tìm kiếm (m), mặc định 500m
-
-    Returns:
-        List các traffic signal:
-        [
-            {
-                "osm_id": int,
-                "lat": float,
-                "lon": float
-            }
-        ]
-    """
     try:
         gdf = ox.features_from_point(
             (lat, lon),
@@ -106,9 +85,14 @@ def get_traffic_signals_by_point(
         return []
 
     results = []
+    node_ids = []
+
     for (elem_type, osm_id), row in gdf.iterrows():
         if elem_type != "node":
             continue
+
+        node_ids.append(osm_id)
+
         results.append({
             "osm_id": osm_id,
             "lat": row.geometry.y,
@@ -116,19 +100,6 @@ def get_traffic_signals_by_point(
         })
 
     return results
-
-
-def get_traffic_lights_by_point(
-    lat: float,
-    lon: float,
-    radius: int = 500
-) -> list[dict]:
-    """
-    Lấy danh sách traffic lights từ OSM quanh 1 điểm lat/lon.
-
-    Đây là alias cho traffic_signals (OSM dùng highway=traffic_signals).
-    """
-    return get_traffic_signals_by_point(lat=lat, lon=lon, radius=radius)
 
 def extract_network(bbox: tuple[float, float, float, float]) -> dict:
     """

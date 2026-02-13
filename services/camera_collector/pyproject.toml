@@ -5,6 +5,7 @@ description = "This is service to collect picture from camera in HoChiMinhCity"
 requires-python = ">=3.13"
 dependencies = [
     "collector>=0.4.6",
+    "daytime>=0.4",
     "dotenv>=0.9.9",
     "imagehash>=4.3.2",
     "redis>=7.1.0",

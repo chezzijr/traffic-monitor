@@ -196,18 +196,3 @@ def get_traffic_lights(
     return [TrafficLight(**l) for l in lights]
 
 
-@router.get(
-    "/traffic-signals",
-    response_model=list[TrafficSignal],
-    status_code=status.HTTP_200_OK,
-    summary="Get traffic signals around a point",
-    description="Retrieve OSM traffic signals within a radius of a lat/lng point.",
-)
-def get_traffic_signals(
-    lat: float = Query(..., ge=-90, le=90, description="Latitude"),
-    lng: float = Query(..., ge=-180, le=180, description="Longitude"),
-    radius: int = Query(500, ge=1, le=50000, description="Search radius in meters"),
-) -> list[TrafficSignal]:
-    """Get traffic signals from OSM around a given point."""
-    signals = osm_service.get_traffic_signals_by_point(lat=lat, lon=lng, radius=radius)
-    return [TrafficSignal(**s) for s in signals]

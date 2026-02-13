@@ -104,27 +104,25 @@ export interface SSEStatusEvent {
 export interface SSEErrorEvent {
   message: string;
 }
-// Camera snapshot data
-export interface CameraSnapshot {
+
+export interface DirectionFrame {
+  direction: string;
+  image: string | null;
+}
+
+export interface IntersectionFrames {
+  intersection_id?: string | number;
+  roads?: string[];
+  frames: DirectionFrame[];
+}
+
+export interface Intersection {
   id: string;
-  intersection_id: string;
-  timestamp: string;
-  snapshot_data: string;
-  media_type: string;
-  step: number;
-}
-
-// Live stream information
-export interface CameraStreamInfo {
-  intersection_id: string;
-  stream_url: string | null;
-  is_available: boolean;
-  last_snapshot_timestamp: string | null;
-}
-
-// Camera response with snapshot and stream
-export interface CameraResponse {
-  snapshot: CameraSnapshot | null;
-  stream: CameraStreamInfo;
-  available_snapshots: CameraSnapshot[];
+  lat: number;
+  lon: number;
+  name?: string;
+  num_roads: number;
+  has_traffic_light: boolean;
+  sumo_tl_id?: string;
+  trafficLight?: TrafficLight;
 }
