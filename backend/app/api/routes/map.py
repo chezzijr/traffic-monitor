@@ -13,6 +13,7 @@ from app.models.schemas import (
     RouteGenerationRequest,
     RouteGenerationResponse,
     SUMOTrafficLight,
+    SumoJunction,
 )
 from app.services import osm_service
 
@@ -103,11 +104,25 @@ def convert_to_sumo(network_id: str) -> ConvertToSumoResponse:
             )
             for tl in result["traffic_lights"]
         ]
+        # Convert junction dicts to SumoJunction models
+        sumo_junctions = [
+            SumoJunction(
+                id=j["id"],
+                tl_id=j.get("tl_id"),
+                lat=j["lat"],
+                lon=j["lon"],
+                junction_type=j["junction_type"],
+                incoming_lanes=j["incoming_lanes"],
+                name=j.get("name"),
+            )
+            for j in result["sumo_junctions"]
+        ]
         return ConvertToSumoResponse(
             sumo_network_path=result["network_path"],
             network_id=network_id,
             traffic_lights=traffic_lights,
             osm_sumo_mapping=result["osm_to_sumo_tl_map"],
+            sumo_junctions=sumo_junctions,
         )
     except KeyError as e:
         raise HTTPException(
