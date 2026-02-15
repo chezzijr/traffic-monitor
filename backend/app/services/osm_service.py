@@ -259,6 +259,141 @@ def parse_sumo_traffic_lights(net_xml_path: Path) -> dict:
     return {"traffic_lights": traffic_lights}
 
 
+def _parse_sumo_junctions(net_xml_path: Path) -> list[dict]:
+    """
+    Parse SUMO network XML for junction data including coordinates and traffic light associations.
+
+    Extracts junctions from .net.xml file, converts SUMO coordinates to lat/lon,
+    and counts incoming lanes for each junction.
+
+    Args:
+        net_xml_path: Path to the SUMO .net.xml file
+
+    Returns:
+        List of junction dicts with keys:
+        - id: SUMO junction ID
+        - tl_id: Traffic light ID (if signalized, else None)
+        - lat: Latitude coordinate
+        - lon: Longitude coordinate
+        - junction_type: Junction type (e.g., "traffic_light", "priority")
+        - incoming_lanes: Number of incoming lanes
+        - name: Always None (OSM name matching not implemented yet)
+    """
+    try:
+        tree = ET.parse(net_xml_path)
+        root = tree.getroot()
+    except ET.ParseError as e:
+        logger.error(f"Failed to parse SUMO network XML for junctions: {e}")
+        return []
+
+    # Parse location info for coordinate projection
+    location = root.find(".//location")
+    if location is None:
+        logger.warning("No location element found in SUMO network, cannot convert coordinates")
+        return []
+
+    # Get original boundary (lat/lon)
+    orig_boundary_str = location.get("origBoundary", "")
+    if not orig_boundary_str:
+        logger.warning("No origBoundary in SUMO network, cannot convert coordinates")
+        return []
+
+    orig_parts = orig_boundary_str.split(",")
+    if len(orig_parts) != 4:
+        logger.warning("Invalid origBoundary format in SUMO network")
+        return []
+
+    try:
+        orig_west = float(orig_parts[0])
+        orig_south = float(orig_parts[1])
+        orig_east = float(orig_parts[2])
+        orig_north = float(orig_parts[3])
+    except ValueError as e:
+        logger.warning(f"Failed to parse origBoundary values: {e}")
+        return []
+
+    # Get converted boundary (SUMO x/y)
+    conv_boundary_str = location.get("convBoundary", "")
+    if not conv_boundary_str:
+        logger.warning("No convBoundary in SUMO network, cannot convert coordinates")
+        return []
+
+    conv_parts = conv_boundary_str.split(",")
+    if len(conv_parts) != 4:
+        logger.warning("Invalid convBoundary format in SUMO network")
+        return []
+
+    try:
+        conv_west = float(conv_parts[0])
+        conv_south = float(conv_parts[1])
+        conv_east = float(conv_parts[2])
+        conv_north = float(conv_parts[3])
+    except ValueError as e:
+        logger.warning(f"Failed to parse convBoundary values: {e}")
+        return []
+
+    # Calculate scale factors for coordinate conversion
+    lon_scale = (orig_east - orig_west) / (conv_east - conv_west) if conv_east != conv_west else 1.0
+    lat_scale = (orig_north - orig_south) / (conv_north - conv_south) if conv_north != conv_south else 1.0
+
+    # Build traffic light ID lookup from tlLogic elements
+    # A junction may have a different tl_id than its junction id
+    tl_ids: set[str] = set()
+    for tl_logic in root.findall(".//tlLogic"):
+        tl_id = tl_logic.get("id")
+        if tl_id:
+            tl_ids.add(tl_id)
+
+    # Parse junctions
+    junctions = []
+    for junction in root.findall(".//junction"):
+        jid = junction.get("id")
+        jtype = junction.get("type", "unknown")
+
+        # Skip internal junctions (they have IDs starting with ":")
+        if not jid or jid.startswith(":"):
+            continue
+
+        # Get coordinates
+        try:
+            sumo_x = float(junction.get("x", 0))
+            sumo_y = float(junction.get("y", 0))
+        except ValueError:
+            logger.warning(f"Invalid coordinates for junction {jid}")
+            continue
+
+        # Convert SUMO coordinates to lat/lon
+        lon = orig_west + (sumo_x - conv_west) * lon_scale
+        lat = orig_south + (sumo_y - conv_south) * lat_scale
+
+        # Count incoming lanes from incLanes attribute
+        inc_lanes_str = junction.get("incLanes", "")
+        if inc_lanes_str:
+            # incLanes is space-separated list of lane IDs
+            incoming_lanes = len(inc_lanes_str.split())
+        else:
+            incoming_lanes = 0
+
+        # Determine traffic light ID
+        # For traffic_light junctions, the tl_id is typically the junction id
+        tl_id = None
+        if jtype == "traffic_light" and jid in tl_ids:
+            tl_id = jid
+
+        junctions.append({
+            "id": jid,
+            "tl_id": tl_id,
+            "lat": lat,
+            "lon": lon,
+            "junction_type": jtype,
+            "incoming_lanes": incoming_lanes,
+            "name": None,  # OSM name matching not implemented
+        })
+
+    logger.info(f"Parsed {len(junctions)} junctions from SUMO network")
+    return junctions
+
+
 def _match_osm_to_sumo_traffic_lights(
     intersections: list[dict],
     sumo_traffic_lights: list[dict],
@@ -407,6 +542,7 @@ def convert_to_sumo(network_id: str) -> dict:
         - network_path: Path to the generated SUMO .net.xml file (as string)
         - traffic_lights: List of traffic light dicts with id, type, phases
         - osm_to_sumo_tl_map: Dict mapping OSM intersection ID to SUMO traffic light ID
+        - sumo_junctions: List of junction dicts with id, tl_id, lat, lon, junction_type, incoming_lanes
 
     Raises:
         KeyError: If network_id is not found in cache
@@ -432,10 +568,13 @@ def convert_to_sumo(network_id: str) -> dict:
         )
         # Populate sumo_tl_id on cached intersections
         _populate_sumo_tl_ids(cached["intersections"], osm_to_sumo_map)
+        # Parse junctions from SUMO network
+        sumo_junctions = _parse_sumo_junctions(output_path)
         return {
             "network_path": str(output_path),
             "traffic_lights": tl_data["traffic_lights"],
             "osm_to_sumo_tl_map": osm_to_sumo_map,
+            "sumo_junctions": sumo_junctions,
         }
 
     graph = cached["graph"]
@@ -506,10 +645,14 @@ def convert_to_sumo(network_id: str) -> dict:
         # Populate sumo_tl_id on cached intersections
         _populate_sumo_tl_ids(cached["intersections"], osm_to_sumo_map)
 
+        # Parse junctions from SUMO network
+        sumo_junctions = _parse_sumo_junctions(output_path)
+
         return {
             "network_path": str(output_path),
             "traffic_lights": tl_data["traffic_lights"],
             "osm_to_sumo_tl_map": osm_to_sumo_map,
+            "sumo_junctions": sumo_junctions,
         }
 
     except subprocess.TimeoutExpired:
