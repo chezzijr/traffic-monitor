@@ -2,8 +2,13 @@
 
 This module provides a trainer class for training reinforcement learning agents
 to optimize traffic light control using Stable-Baselines3.
+
+Network architectures are configured via policy_kwargs to match LibSignal/DaRL specs:
+- DQN: 3-layer MLP with hidden_dim=20
+- PPO: Actor-Critic with hidden_dim=64, clip_range=0.1, n_steps=360
 """
 
+import copy
 import logging
 from dataclasses import dataclass
 from enum import Enum
@@ -141,28 +146,44 @@ class TrafficLightTrainer:
     """
 
     # Default hyperparameters for each algorithm
+    # DQN: 3-layer MLP with hidden=20, RMSprop-like learning rate (per LibSignal/DaRL specs)
     DEFAULT_DQN_PARAMS: dict[str, Any] = {
-        "learning_rate": 1e-4,
+        "learning_rate": 1e-3,  # RMSprop-like learning rate
         "buffer_size": 100_000,
         "learning_starts": 1000,
         "batch_size": 64,
         "tau": 0.005,
-        "gamma": 0.99,
+        "gamma": 0.95,  # LibSignal default
         "train_freq": 4,
-        "target_update_interval": 1000,
+        "target_update_interval": 100,  # More frequent target updates
         "exploration_fraction": 0.1,
-        "exploration_final_eps": 0.05,
+        "exploration_initial_eps": 0.5,  # Higher initial exploration
+        "exploration_final_eps": 0.01,
+        # Custom network architecture: 3-layer MLP with hidden_dim=20
+        "policy_kwargs": {
+            "net_arch": [20, 20],  # Two hidden layers of 20 units each
+        },
     }
 
+    # PPO: Actor-Critic with hidden=64 (per LibSignal specs)
     DEFAULT_PPO_PARAMS: dict[str, Any] = {
         "learning_rate": 3e-4,
-        "n_steps": 2048,
-        "batch_size": 64,
-        "n_epochs": 10,
+        "n_steps": 360,  # Update interval per LibSignal spec
+        "batch_size": 360,  # Minibatch size per LibSignal spec
+        "n_epochs": 4,  # Training epochs per LibSignal spec
         "gamma": 0.99,
         "gae_lambda": 0.95,
-        "clip_range": 0.2,
-        "ent_coef": 0.01,
+        "clip_range": 0.1,  # Clip epsilon per LibSignal spec (not 0.2)
+        "ent_coef": 0.001,  # Entropy coefficient per LibSignal spec
+        "vf_coef": 0.5,  # Value function coefficient
+        "max_grad_norm": 0.5,  # Gradient clipping for stability
+        # Custom network architecture: 2-layer Actor-Critic with hidden_dim=64
+        "policy_kwargs": {
+            "net_arch": {
+                "pi": [64, 64],  # Policy (actor) network
+                "vf": [64, 64],  # Value function (critic) network
+            },
+        },
     }
 
     def __init__(
@@ -196,6 +217,8 @@ class TrafficLightTrainer:
     def _get_default_params(self, algorithm: Algorithm) -> dict[str, Any]:
         """Get default hyperparameters for the algorithm.
 
+        Uses deep copy to properly handle nested policy_kwargs.
+
         Args:
             algorithm: The RL algorithm
 
@@ -203,9 +226,9 @@ class TrafficLightTrainer:
             Dictionary of default hyperparameters
         """
         if algorithm == Algorithm.DQN:
-            return self.DEFAULT_DQN_PARAMS.copy()
+            return copy.deepcopy(self.DEFAULT_DQN_PARAMS)
         # algorithm == Algorithm.PPO
-        return self.DEFAULT_PPO_PARAMS.copy()
+        return copy.deepcopy(self.DEFAULT_PPO_PARAMS)
 
     def _create_model(self, params: dict[str, Any]) -> BaseAlgorithm:
         """Create a new model with the given parameters.
