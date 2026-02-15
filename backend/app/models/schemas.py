@@ -230,3 +230,71 @@ class ToggleAIRequest(BaseModel):
 
     tl_id: str = Field(..., description="Traffic light ID")
     enabled: bool = Field(..., description="Whether to enable AI control")
+
+
+# =============================================================================
+# Task Management Schemas
+# =============================================================================
+
+
+class TaskAlgorithm(str, Enum):
+    """Supported algorithms for task-based training."""
+
+    DQN = "DQN"
+    PPO = "PPO"
+
+
+class CreateTrainingTaskRequest(BaseModel):
+    """Request body for creating a training task."""
+
+    network_id: str = Field(..., description="ID of the network to train on")
+    traffic_light_id: str = Field(..., description="Traffic light ID to optimize")
+    algorithm: TaskAlgorithm = Field(default=TaskAlgorithm.DQN, description="RL algorithm to use")
+    total_timesteps: int = Field(default=10000, ge=100, le=100000, description="Total training timesteps")
+    scenario: TrafficScenario = Field(default=TrafficScenario.MODERATE, description="Traffic scenario for training")
+
+
+class CreateTrainingTaskResponse(BaseModel):
+    """Response for creating a training task."""
+
+    task_id: str = Field(..., description="Unique task identifier (UUID)")
+    status: str = Field(..., description="Initial task status (PENDING)")
+    created_at: str = Field(..., description="Task creation timestamp (ISO8601)")
+
+
+class TaskMetadata(BaseModel):
+    """Metadata associated with a task."""
+
+    network_id: str | None = Field(None, description="Network ID")
+    tl_id: str | None = Field(None, description="Traffic light ID")
+    algorithm: str | None = Field(None, description="Algorithm used")
+    total_timesteps: int | None = Field(None, description="Total timesteps")
+    scenario: str | None = Field(None, description="Traffic scenario")
+    created_at: str | None = Field(None, description="Creation timestamp")
+
+
+class TaskInfo(BaseModel):
+    """Runtime information about a task."""
+
+    progress: float | None = Field(None, description="Progress (0-1)")
+    timestep: int | None = Field(None, description="Current timestep")
+    mean_reward: float | None = Field(None, description="Mean reward")
+    episode_count: int | None = Field(None, description="Episode count")
+    model_path: str | None = Field(None, description="Path to saved model")
+
+
+class TaskResponse(BaseModel):
+    """Response for a single task."""
+
+    task_id: str = Field(..., description="Task ID")
+    status: str = Field(..., description="Task status (PENDING, STARTED, SUCCESS, FAILURE, REVOKED)")
+    metadata: TaskMetadata = Field(default_factory=TaskMetadata, description="Task metadata")
+    info: TaskInfo = Field(default_factory=TaskInfo, description="Runtime info")
+    error: str | None = Field(None, description="Error message if failed")
+
+
+class CancelTaskResponse(BaseModel):
+    """Response for cancelling a task."""
+
+    status: str = Field(..., description="Cancellation status")
+    task_id: str = Field(..., description="Cancelled task ID")
