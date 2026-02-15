@@ -20,7 +20,34 @@ function downsample(data: ChartDataPoint[], maxPoints: number): ChartDataPoint[]
   return data.filter((_, i) => i % step === 0 || i === data.length - 1);
 }
 
-export const MetricsChart = memo(function MetricsChart({ data }: ChartsProps) {
+// Custom comparison function for memo - prevents re-renders when data content is identical
+function arePropsEqual(prevProps: ChartsProps, nextProps: ChartsProps): boolean {
+  const prevData = prevProps.data;
+  const nextData = nextProps.data;
+
+  // Fast path: same reference
+  if (prevData === nextData) return true;
+
+  // Different lengths means data changed
+  if (prevData.length !== nextData.length) return false;
+
+  // Empty arrays are equal
+  if (prevData.length === 0) return true;
+
+  // Compare only the last data point for efficiency
+  // Since data is append-only (new points added to end), if last point matches
+  // and lengths are equal, the data hasn't changed
+  const prevLast = prevData[prevData.length - 1];
+  const nextLast = nextData[nextData.length - 1];
+
+  return (
+    prevLast.step === nextLast.step &&
+    prevLast.vehicles === nextLast.vehicles &&
+    prevLast.waitTime === nextLast.waitTime
+  );
+}
+
+function MetricsChartComponent({ data }: ChartsProps) {
   // Downsample large datasets for rendering performance
   const displayData = useMemo(() => downsample(data, MAX_DISPLAY_POINTS), [data]);
 
@@ -91,4 +118,6 @@ export const MetricsChart = memo(function MetricsChart({ data }: ChartsProps) {
       </div>
     </div>
   );
-});
+}
+
+export const MetricsChart = memo(MetricsChartComponent, arePropsEqual);
