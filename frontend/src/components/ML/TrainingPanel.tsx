@@ -1,17 +1,20 @@
 import { useState } from 'react';
 import toast from 'react-hot-toast';
-import { Play, Brain } from 'lucide-react';
+import { Play, Brain, RefreshCw } from 'lucide-react';
 import { useMapStore } from '../../store/mapStore';
 import { taskService } from '../../services/taskService';
+import { mapService } from '../../services/mapService';
 import type { TrainingAlgorithm } from '../../types/ml';
 
 export function TrainingPanel() {
   const [algorithm, setAlgorithm] = useState<TrainingAlgorithm>('dqn');
   const [totalTimesteps, setTotalTimesteps] = useState(10000);
   const [isLoading, setIsLoading] = useState(false);
+  const [isPreparing, setIsPreparing] = useState(false);
 
   const networkId = useMapStore((state) => state.currentNetworkId);
   const intersections = useMapStore((state) => state.intersections);
+  const setIntersections = useMapStore((state) => state.setIntersections);
   const tlId = useMapStore((state) => state.selectedTrafficLightId);
   const setTlId = useMapStore((state) => state.setSelectedTrafficLightId);
 
@@ -19,6 +22,32 @@ export function TrainingPanel() {
   const trafficLights = intersections.filter((i) => i.has_traffic_light);
   // Only TLs with SUMO IDs can be used for training
   const usableTrafficLights = trafficLights.filter((i) => i.sumo_tl_id);
+
+  // Prepare network by converting to SUMO format and getting TL IDs
+  const handlePrepareNetwork = async () => {
+    if (!networkId) return;
+
+    setIsPreparing(true);
+    try {
+      const sumoResult = await mapService.convertToSumo(networkId);
+
+      // Update intersections with SUMO TL IDs
+      if (sumoResult.osm_sumo_mapping && Object.keys(sumoResult.osm_sumo_mapping).length > 0) {
+        const updatedIntersections = intersections.map((intersection) => {
+          const sumoTlId = sumoResult.osm_sumo_mapping[intersection.id];
+          return sumoTlId ? { ...intersection, sumo_tl_id: sumoTlId } : intersection;
+        });
+        setIntersections(updatedIntersections);
+        toast.success(`Found ${Object.keys(sumoResult.osm_sumo_mapping).length} traffic lights with SUMO IDs`);
+      } else {
+        toast.error('No traffic lights found in the network');
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to prepare network');
+    } finally {
+      setIsPreparing(false);
+    }
+  };
 
   const handleStartTraining = async () => {
     if (!networkId || !tlId) return;
@@ -72,9 +101,19 @@ export function TrainingPanel() {
           ))}
         </select>
         {usableTrafficLights.length === 0 && networkId && (
-          <p className="text-xs text-amber-600 mt-1">
-            No traffic lights with SUMO IDs found. Network may need re-extraction.
-          </p>
+          <div className="mt-2">
+            <p className="text-xs text-amber-600 mb-2">
+              No traffic lights with SUMO IDs found. Click below to prepare the network.
+            </p>
+            <button
+              onClick={handlePrepareNetwork}
+              disabled={isPreparing}
+              className="w-full flex items-center justify-center gap-2 px-3 py-1.5 text-sm bg-amber-100 text-amber-700 rounded hover:bg-amber-200 disabled:opacity-50"
+            >
+              <RefreshCw size={14} className={isPreparing ? 'animate-spin' : ''} />
+              {isPreparing ? 'Preparing...' : 'Prepare Network for Training'}
+            </button>
+          </div>
         )}
       </div>
 
