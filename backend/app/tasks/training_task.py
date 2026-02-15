@@ -341,6 +341,7 @@ def run_training(
             tl_id=traffic_light_id,
             gui=False,  # Background task - no GUI
             scenario=scenario,
+            algorithm=algo_enum,  # Pass algorithm for reward function selection
         )
 
         # Create trainer
