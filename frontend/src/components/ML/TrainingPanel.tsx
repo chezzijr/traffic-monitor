@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import toast from 'react-hot-toast';
-import { Play, Brain, RefreshCw } from 'lucide-react';
+import { Play, Brain, RefreshCw, Info } from 'lucide-react';
 import { useMapStore } from '../../store/mapStore';
 import { taskService } from '../../services/taskService';
 import { mapService } from '../../services/mapService';
@@ -13,17 +13,15 @@ export function TrainingPanel() {
   const [isPreparing, setIsPreparing] = useState(false);
 
   const networkId = useMapStore((state) => state.currentNetworkId);
-  const intersections = useMapStore((state) => state.intersections);
-  const setIntersections = useMapStore((state) => state.setIntersections);
+  const sumoJunctions = useMapStore((state) => state.sumoJunctions);
+  const setSumoJunctions = useMapStore((state) => state.setSumoJunctions);
   const tlId = useMapStore((state) => state.selectedTrafficLightId);
   const setTlId = useMapStore((state) => state.setSelectedTrafficLightId);
 
-  // Get traffic lights from intersections (all TLs, not just those with SUMO IDs)
-  const trafficLights = intersections.filter((i) => i.has_traffic_light);
-  // Only TLs with SUMO IDs can be used for training
-  const usableTrafficLights = trafficLights.filter((i) => i.sumo_tl_id);
+  // Filter to only signalized junctions (those with a traffic light ID)
+  const signalizedJunctions = sumoJunctions.filter((j) => j.tl_id !== null);
 
-  // Prepare network by converting to SUMO format and getting TL IDs
+  // Prepare network by converting to SUMO format and getting junctions
   const handlePrepareNetwork = async () => {
     if (!networkId) return;
 
@@ -31,16 +29,13 @@ export function TrainingPanel() {
     try {
       const sumoResult = await mapService.convertToSumo(networkId);
 
-      // Update intersections with SUMO TL IDs
-      if (sumoResult.osm_sumo_mapping && Object.keys(sumoResult.osm_sumo_mapping).length > 0) {
-        const updatedIntersections = intersections.map((intersection) => {
-          const sumoTlId = sumoResult.osm_sumo_mapping[intersection.id];
-          return sumoTlId ? { ...intersection, sumo_tl_id: sumoTlId } : intersection;
-        });
-        setIntersections(updatedIntersections);
-        toast.success(`Found ${Object.keys(sumoResult.osm_sumo_mapping).length} traffic lights with SUMO IDs`);
+      // Update sumoJunctions from the conversion result
+      if (sumoResult.sumo_junctions && sumoResult.sumo_junctions.length > 0) {
+        setSumoJunctions(sumoResult.sumo_junctions);
+        const signalized = sumoResult.sumo_junctions.filter((j) => j.tl_id !== null);
+        toast.success(`Found ${signalized.length} signalized junctions`);
       } else {
-        toast.error('No traffic lights found in the network');
+        toast.error('No junctions found in the network');
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to prepare network');
@@ -76,34 +71,37 @@ export function TrainingPanel() {
         Training
       </h3>
 
+      {/* Info text explaining training */}
+      <div className="mb-4 p-3 bg-blue-50 rounded-md flex gap-2">
+        <Info size={16} className="text-blue-600 flex-shrink-0 mt-0.5" />
+        <p className="text-xs text-blue-700">
+          Training uses reinforcement learning to optimize traffic light timing at the selected junction.
+          The agent learns to minimize vehicle waiting times by adjusting signal phases.
+        </p>
+      </div>
+
       {/* Traffic light selector */}
       <div className="mb-4">
         <label className="block text-sm font-medium text-gray-700 mb-1">
-          Traffic Light
+          Traffic Light Junction
         </label>
         <select
           value={tlId ?? ''}
           onChange={(e) => setTlId(e.target.value || null)}
           className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-          disabled={!networkId || usableTrafficLights.length === 0}
+          disabled={!networkId || signalizedJunctions.length === 0}
         >
-          <option value="">Select a traffic light</option>
-          {trafficLights.map((tl) => (
-            <option
-              key={tl.sumo_tl_id ?? tl.id}
-              value={tl.sumo_tl_id ?? ''}
-              disabled={!tl.sumo_tl_id}
-            >
-              {tl.sumo_tl_id
-                ? `${tl.sumo_tl_id} ${tl.name ? `(${tl.name})` : ''}`
-                : `${tl.name || `Intersection ${tl.id}`} (not available)`}
+          <option value="">Select a junction</option>
+          {signalizedJunctions.map((junction) => (
+            <option key={junction.tl_id} value={junction.tl_id!}>
+              {junction.tl_id} ({junction.name || `Junction ${junction.id}`})
             </option>
           ))}
         </select>
-        {usableTrafficLights.length === 0 && networkId && (
+        {signalizedJunctions.length === 0 && networkId && (
           <div className="mt-2">
             <p className="text-xs text-amber-600 mb-2">
-              No traffic lights with SUMO IDs found. Click below to prepare the network.
+              No signalized junctions found. Click below to prepare the network.
             </p>
             <button
               onClick={handlePrepareNetwork}

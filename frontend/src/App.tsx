@@ -18,7 +18,7 @@ export interface ChartDataPoint {
 }
 
 export default function App() {
-  const { selectedRegion, intersections, setIntersections, setCurrentNetworkId, setError, setLoading, isLoading, currentNetworkId } = useMapStore();
+  const { selectedRegion, intersections, setIntersections, setSumoJunctions, setCurrentNetworkId, setError, setLoading, isLoading, currentNetworkId } = useMapStore();
 
   // Simulation state
   const [simStatus, setSimStatus] = useState<SimulationStatus>('idle');
@@ -132,10 +132,15 @@ export default function App() {
 
     setLoading(true);
     try {
-      // Convert to SUMO format and get TL mappings
+      // Convert to SUMO format and get junctions
       const sumoResult = await mapService.convertToSumo(currentNetworkId);
 
-      // Update intersections with SUMO TL IDs for Training panel
+      // Store SUMO junctions for Training panel
+      if (sumoResult.sumo_junctions && sumoResult.sumo_junctions.length > 0) {
+        setSumoJunctions(sumoResult.sumo_junctions);
+      }
+
+      // Update intersections with SUMO TL IDs for backwards compatibility
       if (sumoResult.osm_sumo_mapping && Object.keys(sumoResult.osm_sumo_mapping).length > 0) {
         const updatedIntersections = intersections.map((intersection) => {
           const sumoTlId = sumoResult.osm_sumo_mapping[intersection.id];
@@ -159,7 +164,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [currentNetworkId, setLoading, intersections, setIntersections, resetSimState]);
+  }, [currentNetworkId, setLoading, intersections, setIntersections, setSumoJunctions, resetSimState]);
 
   const handlePause = useCallback(async () => {
     try {

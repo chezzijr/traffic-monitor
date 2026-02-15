@@ -1,5 +1,5 @@
 import { api } from './api';
-import type { BoundingBox, NetworkInfo, Intersection } from '../types';
+import type { BoundingBox, NetworkInfo, Intersection, SumoJunction } from '../types';
 
 export const mapService = {
   // Extract network from OSM for a given bounding box
@@ -19,11 +19,13 @@ export const mapService = {
     sumo_network_path: string;
     network_id: string;
     osm_sumo_mapping: Record<string, string>;
+    sumo_junctions: SumoJunction[];
   }> {
     const response = await api.post<{
       sumo_network_path: string;
       network_id: string;
       osm_sumo_mapping: Record<string, string>;
+      sumo_junctions: SumoJunction[];
     }>(`/map/convert-to-sumo/${networkId}`);
     return response.data;
   },
