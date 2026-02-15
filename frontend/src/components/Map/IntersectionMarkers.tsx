@@ -1,7 +1,8 @@
+import { memo } from 'react';
 import { useMapStore } from '../../store/mapStore';
 import { IntersectionMarker } from './IntersectionMarker';
 
-export function IntersectionMarkers() {
+export const IntersectionMarkers = memo(function IntersectionMarkers() {
   const intersections = useMapStore((state) => state.intersections);
 
   return (
@@ -11,4 +12,4 @@ export function IntersectionMarkers() {
       ))}
     </>
   );
-}
+});
