@@ -368,6 +368,33 @@ def _match_osm_to_sumo_traffic_lights(
     return osm_to_sumo_map
 
 
+def _populate_sumo_tl_ids(
+    intersections: list[dict],
+    osm_to_sumo_map: dict[str, str],
+) -> None:
+    """
+    Populate sumo_tl_id on intersections using the OSM-to-SUMO mapping.
+
+    This modifies intersections in-place, allowing ML training to proceed
+    without running a simulation first.
+
+    Args:
+        intersections: List of intersection dicts (modified in-place)
+        osm_to_sumo_map: Dict mapping OSM intersection ID to SUMO traffic light ID
+    """
+    updated_count = 0
+    for intersection in intersections:
+        osm_id = intersection["id"]
+        if osm_id in osm_to_sumo_map:
+            intersection["sumo_tl_id"] = osm_to_sumo_map[osm_id]
+            updated_count += 1
+        else:
+            # Ensure field exists even if not mapped
+            intersection.setdefault("sumo_tl_id", None)
+
+    logger.info(f"Populated sumo_tl_id on {updated_count} intersections")
+
+
 def convert_to_sumo(network_id: str) -> dict:
     """
     Convert cached OSM network to SUMO format using netconvert.
@@ -403,6 +430,8 @@ def convert_to_sumo(network_id: str) -> dict:
             tl_data["traffic_lights"],
             output_path,
         )
+        # Populate sumo_tl_id on cached intersections
+        _populate_sumo_tl_ids(cached["intersections"], osm_to_sumo_map)
         return {
             "network_path": str(output_path),
             "traffic_lights": tl_data["traffic_lights"],
@@ -473,6 +502,9 @@ def convert_to_sumo(network_id: str) -> dict:
             tl_data["traffic_lights"],
             output_path,
         )
+
+        # Populate sumo_tl_id on cached intersections
+        _populate_sumo_tl_ids(cached["intersections"], osm_to_sumo_map)
 
         return {
             "network_path": str(output_path),
