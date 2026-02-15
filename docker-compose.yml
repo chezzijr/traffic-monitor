@@ -47,6 +47,21 @@ services:
       timeout: 5s
       retries: 5
 
+  celery-worker:
+    build:
+      context: ./backend
+    command: celery -A app.celery_app worker --concurrency=3 --loglevel=info
+    environment:
+      - SUMO_HOME=/usr/share/sumo
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    volumes:
+      - ./backend/simulation:/app/simulation
+      - ./simulation:/app/data/simulation:ro
+    depends_on:
+      - redis
+    networks:
+      - traffic-network
+
 networks:
   traffic-network:
     driver: bridge
