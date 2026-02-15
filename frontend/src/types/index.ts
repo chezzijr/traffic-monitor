@@ -86,5 +86,35 @@ export interface SSEErrorEvent {
   message: string;
 }
 
+// Task types for background job tracking
+export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export type TaskType = 'training';
+
+export interface TaskMetrics {
+  current_timestep: number;
+  total_timesteps: number;
+  mean_reward: number;
+  episode_count: number;
+}
+
+export interface Task {
+  task_id: string;
+  status: TaskStatus;
+  type: TaskType;
+  progress: number;
+  network_id: string;
+  traffic_light_id: string;
+  algorithm: 'DQN' | 'PPO';
+  total_timesteps: number;
+  current_timestep: number;
+  mean_reward: number;
+  episode_count: number;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  error_message: string | null;
+}
+
 // ML types
 export * from './ml';
