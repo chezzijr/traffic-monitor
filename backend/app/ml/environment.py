@@ -20,9 +20,17 @@ class TrafficLightEnv(gym.Env):
     """Gymnasium environment for single traffic light optimization.
 
     The environment wraps SUMO simulation and provides:
-    - Observation: queue lengths, waiting times per lane, current phase
+    - Observation: vehicle counts per incoming lane + current phase (one-hot)
+      Following LibSignal/DaRL observation format for compatibility.
     - Action: select next traffic light phase
     - Reward: negative change in total waiting time
+
+    Observation format (LibSignal standard):
+        obs = [
+            *lane_vehicle_counts,  # Vehicle count per incoming lane [num_lanes]
+            *phase_one_hot,        # Current phase one-hot encoding [num_phases]
+        ]
+        Typical shape: [8-12] lanes + [4-8] phases = [12-20] total
 
     Attributes:
         network_path: Path to the SUMO network file
@@ -89,7 +97,13 @@ class TrafficLightEnv(gym.Env):
         )
 
     def _initialize_spaces(self) -> None:
-        """Initialize action and observation spaces based on traffic light config."""
+        """Initialize action and observation spaces based on traffic light config.
+
+        Observation space follows LibSignal/DaRL format:
+        - Vehicle counts per incoming lane [num_lanes]
+        - Current phase one-hot encoding [num_phases]
+        Total observation dimension: num_lanes + num_phases
+        """
         # Get traffic light info
         tl_info = sumo_service.get_traffic_light(self.tl_id)
         if tl_info is None:
@@ -103,12 +117,11 @@ class TrafficLightEnv(gym.Env):
         # Action space: select one of the available phases
         self.action_space = spaces.Discrete(self._num_phases)
 
-        # Observation space:
-        # - queue_lengths: one per controlled lane
-        # - waiting_times: one per controlled lane
-        # - current_phase: one-hot encoded
+        # Observation space (LibSignal format):
+        # - lane_vehicle_counts: vehicle count per incoming lane [num_lanes]
+        # - phase_one_hot: current phase one-hot encoding [num_phases]
         num_lanes = len(self._controlled_lanes)
-        obs_dim = num_lanes * 2 + self._num_phases
+        obs_dim = num_lanes + self._num_phases
         self.observation_space = spaces.Box(
             low=0.0,
             high=np.inf,
@@ -119,7 +132,7 @@ class TrafficLightEnv(gym.Env):
         self._is_initialized = True
         logger.info(
             f"Environment initialized: {num_lanes} lanes, {self._num_phases} phases, "
-            f"observation dim={obs_dim}"
+            f"observation dim={obs_dim} (LibSignal format)"
         )
 
     def _get_num_phases(self) -> int:
@@ -270,44 +283,35 @@ class TrafficLightEnv(gym.Env):
         return observation, reward, terminated, truncated, info
 
     def _get_observation(self) -> np.ndarray:
-        """Collect current observation from SUMO.
+        """Collect current observation from SUMO using LibSignal format.
 
-        Observation includes:
-        - Queue lengths per controlled lane
-        - Waiting times per controlled lane
-        - One-hot encoded current phase
+        Observation format (LibSignal/DaRL standard):
+            obs = [
+                *lane_vehicle_counts,  # Vehicle count per incoming lane [num_lanes]
+                *phase_one_hot,        # Current phase one-hot encoding [num_phases]
+            ]
 
         Returns:
-            Numpy array of observations
+            Numpy array of observations with shape (num_lanes + num_phases,)
         """
         if not sumo_service.SUMO_AVAILABLE or sumo_service.traci is None:
             # Return zeros if SUMO not available
-            obs_dim = len(self._controlled_lanes) * 2 + self._num_phases
+            obs_dim = len(self._controlled_lanes) + self._num_phases
             return np.zeros(obs_dim, dtype=np.float32)
 
         traci = sumo_service.traci
 
-        # Collect queue lengths and waiting times per lane
-        queue_lengths = []
-        waiting_times = []
+        # Collect vehicle counts per lane (LibSignal format)
+        lane_vehicle_counts = []
 
         for lane_id in self._controlled_lanes:
             try:
-                # Queue length: number of halting vehicles on the lane
-                queue_length = traci.lane.getLastStepHaltingNumber(lane_id)
-                queue_lengths.append(float(queue_length))
-
-                # Waiting time: sum of waiting times of vehicles on the lane
-                # Use accumulated waiting time from vehicles on this lane
-                vehicle_ids = traci.lane.getLastStepVehicleIDs(lane_id)
-                lane_wait_time = sum(
-                    traci.vehicle.getWaitingTime(vid) for vid in vehicle_ids
-                )
-                waiting_times.append(float(lane_wait_time))
+                # Vehicle count: total number of vehicles on the lane
+                vehicle_count = traci.lane.getLastStepVehicleNumber(lane_id)
+                lane_vehicle_counts.append(float(vehicle_count))
             except Exception as e:
-                logger.warning(f"Error getting metrics for lane {lane_id}: {e}")
-                queue_lengths.append(0.0)
-                waiting_times.append(0.0)
+                logger.warning(f"Error getting vehicle count for lane {lane_id}: {e}")
+                lane_vehicle_counts.append(0.0)
 
         # Get current phase as one-hot encoding
         current_phase = 0
@@ -320,10 +324,9 @@ class TrafficLightEnv(gym.Env):
         if 0 <= current_phase < self._num_phases:
             phase_one_hot[current_phase] = 1.0
 
-        # Combine all observations
+        # Combine all observations (LibSignal format: lane counts + phase)
         observation = np.concatenate([
-            np.array(queue_lengths, dtype=np.float32),
-            np.array(waiting_times, dtype=np.float32),
+            np.array(lane_vehicle_counts, dtype=np.float32),
             phase_one_hot,
         ])
 
