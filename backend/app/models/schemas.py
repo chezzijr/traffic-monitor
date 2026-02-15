@@ -117,6 +117,18 @@ class SUMOTrafficLight(BaseModel):
     num_phases: int = Field(..., ge=0, description="Number of phases in the traffic light program")
 
 
+class SumoJunction(BaseModel):
+    """Junction data extracted from SUMO network .net.xml file."""
+
+    id: str = Field(..., description="SUMO junction ID")
+    tl_id: str | None = Field(None, description="Traffic light ID (if signalized)")
+    lat: float = Field(..., ge=-90, le=90, description="Latitude coordinate")
+    lon: float = Field(..., ge=-180, le=180, description="Longitude coordinate")
+    junction_type: str = Field(..., description="Junction type (e.g., 'traffic_light', 'priority')")
+    incoming_lanes: int = Field(..., ge=0, description="Number of incoming lanes")
+    name: str | None = Field(None, description="Closest OSM name (if available)")
+
+
 class ConvertToSumoResponse(BaseModel):
     """Response model for converting OSM network to SUMO format."""
 
@@ -127,6 +139,9 @@ class ConvertToSumoResponse(BaseModel):
     )
     osm_sumo_mapping: dict[str, str] = Field(
         default_factory=dict, description="Mapping from OSM intersection ID to SUMO traffic light ID"
+    )
+    sumo_junctions: list[SumoJunction] = Field(
+        default_factory=list, description="List of junctions extracted from SUMO network"
     )
 
 
