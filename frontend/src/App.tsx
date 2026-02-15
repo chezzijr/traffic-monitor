@@ -8,7 +8,7 @@ import { useMapStore } from './store/mapStore';
 import { mapService, simulationService, SimulationSSE } from './services';
 import type { SimulationStatus, SimulationMetrics, SSEStepEvent } from './types';
 
-const MAX_HISTORY_POINTS = 500;
+const MAX_HISTORY_POINTS = 100;
 const CHART_UPDATE_INTERVAL = 500; // Update chart every 500ms to reduce re-renders
 
 export interface ChartDataPoint {
