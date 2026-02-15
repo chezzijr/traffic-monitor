@@ -27,6 +27,17 @@ export interface NetworkInfo {
   bbox: BoundingBox;
 }
 
+// Matches backend SumoJunction
+export interface SumoJunction {
+  id: string;
+  tl_id: string | null;
+  lat: number;
+  lon: number;
+  junction_type: string;
+  incoming_lanes: number;
+  name: string | null;
+}
+
 // Traffic light state
 export type TrafficLightPhase = 'red' | 'yellow' | 'green';
 
