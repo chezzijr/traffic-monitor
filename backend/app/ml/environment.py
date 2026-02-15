@@ -53,6 +53,7 @@ class TrafficLightEnv(gym.Env):
         gui: bool = False,
         routes_path: str | None = None,
         scenario: str = "moderate",
+        algorithm: str = "dqn",
     ) -> None:
         """Initialize the traffic light environment.
 
@@ -67,6 +68,10 @@ class TrafficLightEnv(gym.Env):
                 If not provided, routes are generated automatically on reset.
             scenario: Traffic scenario for route generation when routes_path is None.
                 Options: "light", "moderate", "heavy", "rush_hour" (default: "moderate")
+            algorithm: RL algorithm type for reward computation.
+                Options: "dqn", "colight", "ppo" (default: "dqn")
+                - "dqn"/"colight": Uses lane waiting counts with reward = -mean(counts) * 12
+                - "ppo": Uses lane waiting times with reward = clip(-mean(times) / 224, -4, 4)
         """
         super().__init__()
 
@@ -78,6 +83,7 @@ class TrafficLightEnv(gym.Env):
         self.gui = gui
         self.routes_path = routes_path
         self.scenario = scenario
+        self.algorithm = algorithm.lower()
 
         # State tracking
         self._current_step = 0
@@ -132,7 +138,7 @@ class TrafficLightEnv(gym.Env):
         self._is_initialized = True
         logger.info(
             f"Environment initialized: {num_lanes} lanes, {self._num_phases} phases, "
-            f"observation dim={obs_dim} (LibSignal format)"
+            f"observation dim={obs_dim}, algorithm={self.algorithm} (LibSignal format)"
         )
 
     def _get_num_phases(self) -> int:
@@ -230,6 +236,7 @@ class TrafficLightEnv(gym.Env):
             "tl_id": self.tl_id,
             "num_lanes": len(self._controlled_lanes),
             "num_phases": self._num_phases,
+            "algorithm": self.algorithm,
         }
 
         return observation, info
@@ -259,7 +266,7 @@ class TrafficLightEnv(gym.Env):
             step_metrics.append(metrics)
             self._current_step += 1
 
-        # Compute reward (negative change in total wait time)
+        # Compute reward using algorithm-specific formula (LibSignal/DaRL)
         current_total_wait = self._compute_total_wait_time()
         reward = self._compute_reward(current_total_wait)
         self._prev_total_wait_time = current_total_wait
@@ -350,28 +357,97 @@ class TrafficLightEnv(gym.Env):
             logger.warning(f"Error computing total wait time: {e}")
             return 0.0
 
-    def _compute_reward(self, current_total_wait: float) -> float:
-        """Compute reward based on change in total waiting time.
+    def _get_lane_waiting_counts(self) -> np.ndarray:
+        """Get the number of halting (waiting) vehicles per controlled lane.
 
-        The reward is the negative change in total waiting time.
-        Decreasing wait time gives positive reward.
-        Increasing wait time gives negative reward.
-
-        Args:
-            current_total_wait: Current total waiting time
+        Uses SUMO's getLastStepHaltingNumber which counts vehicles with
+        speed < 0.1 m/s on each lane.
 
         Returns:
-            Reward value (negative of wait time change)
+            Numpy array of halting vehicle counts per lane
         """
-        wait_time_change = current_total_wait - self._prev_total_wait_time
-        # Negative change in wait time -> positive reward
-        reward = -wait_time_change
+        if not sumo_service.SUMO_AVAILABLE or sumo_service.traci is None:
+            return np.zeros(len(self._controlled_lanes), dtype=np.float32)
 
-        # Normalize reward to reasonable scale
-        # Typical wait time changes can be in the range of 0-100+ seconds
-        reward = reward / 10.0  # Scale down for stability
+        traci = sumo_service.traci
+        waiting_counts = []
 
-        return reward
+        for lane_id in self._controlled_lanes:
+            try:
+                # Halting number: vehicles with speed < 0.1 m/s
+                halting_count = traci.lane.getLastStepHaltingNumber(lane_id)
+                waiting_counts.append(float(halting_count))
+            except Exception as e:
+                logger.warning(f"Error getting halting count for lane {lane_id}: {e}")
+                waiting_counts.append(0.0)
+
+        return np.array(waiting_counts, dtype=np.float32)
+
+    def _get_lane_waiting_times(self) -> np.ndarray:
+        """Get the total waiting time per controlled lane.
+
+        Sums the waiting time of all vehicles on each controlled lane.
+
+        Returns:
+            Numpy array of total waiting times per lane (in seconds)
+        """
+        if not sumo_service.SUMO_AVAILABLE or sumo_service.traci is None:
+            return np.zeros(len(self._controlled_lanes), dtype=np.float32)
+
+        traci = sumo_service.traci
+        waiting_times = []
+
+        for lane_id in self._controlled_lanes:
+            try:
+                # Get all vehicles on this lane and sum their waiting times
+                vehicle_ids = traci.lane.getLastStepVehicleIDs(lane_id)
+                lane_wait_time = sum(
+                    traci.vehicle.getWaitingTime(vid) for vid in vehicle_ids
+                )
+                waiting_times.append(float(lane_wait_time))
+            except Exception as e:
+                logger.warning(f"Error getting waiting times for lane {lane_id}: {e}")
+                waiting_times.append(0.0)
+
+        return np.array(waiting_times, dtype=np.float32)
+
+    def _compute_reward(self, current_total_wait: float) -> float:
+        """Compute reward based on algorithm type using LibSignal/DaRL formulas.
+
+        Reward functions:
+        - DQN/CoLight: reward = -mean(lane_waiting_counts) * 12
+            Penalizes average NUMBER of waiting vehicles on incoming lanes
+        - PPO: reward = clip(-mean(lane_waiting_times) / 224, -4, 4)
+            Penalizes average waiting TIME (normalized and clipped)
+
+        Args:
+            current_total_wait: Current total waiting time (used for info, not reward)
+
+        Returns:
+            Reward value based on the configured algorithm
+        """
+        if self.algorithm in ("dqn", "colight"):
+            # DQN/CoLight reward: penalize average number of waiting vehicles
+            lane_waiting_counts = self._get_lane_waiting_counts()
+            if len(lane_waiting_counts) > 0:
+                reward = -np.mean(lane_waiting_counts) * 12.0
+            else:
+                reward = 0.0
+
+        elif self.algorithm == "ppo":
+            # PPO reward: penalize average waiting time (normalized and clipped)
+            lane_waiting_times = self._get_lane_waiting_times()
+            if len(lane_waiting_times) > 0:
+                reward = np.clip(-np.mean(lane_waiting_times) / 224.0, -4.0, 4.0)
+            else:
+                reward = 0.0
+
+        else:
+            # Fallback: use original wait time change method
+            wait_time_change = current_total_wait - self._prev_total_wait_time
+            reward = -wait_time_change / 10.0
+
+        return float(reward)
 
     def render(self) -> None:
         """Render the environment.
