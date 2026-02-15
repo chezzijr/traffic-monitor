@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { MapPin, X } from 'lucide-react';
 import { useMapStore } from '../../store/mapStore';
 import { TrainingPanel, ModelsPanel, DeploymentPanel } from '../ML';
+import { TaskListPanel } from '../Tasks';
 import type { SimulationStatus } from '../../types';
 
-type TabType = 'simulation' | 'training' | 'models' | 'deployment';
+type TabType = 'simulation' | 'training' | 'models' | 'deployment' | 'tasks';
 
 interface SidebarProps {
   children: React.ReactNode;  // Simulation controls passed from App
@@ -23,6 +24,7 @@ export function Sidebar({ children, simStatus = 'idle' }: SidebarProps) {
     { id: 'training', label: 'Training' },
     { id: 'models', label: 'Models' },
     { id: 'deployment', label: 'Deploy' },
+    { id: 'tasks', label: 'Tasks' },
   ];
 
   return (
@@ -86,6 +88,7 @@ export function Sidebar({ children, simStatus = 'idle' }: SidebarProps) {
         {activeTab === 'training' && <TrainingPanel />}
         {activeTab === 'models' && <ModelsPanel />}
         {activeTab === 'deployment' && <DeploymentPanel />}
+        {activeTab === 'tasks' && <TaskListPanel />}
       </div>
     </aside>
   );
