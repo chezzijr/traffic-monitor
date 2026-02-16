@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import toast, { Toaster } from 'react-hot-toast';
-import { MapContainer, IntersectionMarkers, RegionSelector, MapLegend } from './components/Map';
+import { MapContainer, IntersectionMarkers, SumoJunctionMarkers, RegionSelector, MapLegend } from './components/Map';
 import { Sidebar, Header } from './components/Layout';
 import { SimulationControl, CameraPanel } from './components/Control';
 import { MetricsPanel, SimulationStatusDisplay, MetricsChart } from './components/Dashboard';
@@ -238,6 +238,7 @@ export default function App() {
         <main className="flex-1 relative">
           <MapContainer>
             <IntersectionMarkers />
+            <SumoJunctionMarkers />
             <RegionSelector />
           </MapContainer>
           <MapLegend className="absolute bottom-4 left-4 z-[1000]" />

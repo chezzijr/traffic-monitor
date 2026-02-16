@@ -32,6 +32,13 @@ export function MapLegend({ className = '' }: MapLegendProps) {
           </div>
           <span className="text-xs text-gray-600">Traffic Light</span>
         </div>
+        {/* SUMO Junction (Trainable) */}
+        <div className="flex items-center gap-2">
+          <div className="w-5 h-5 bg-orange-500 rounded-full border-2 border-white shadow-sm flex items-center justify-center">
+            <span className="text-white text-xs font-bold" style={{ fontSize: '10px' }}>J</span>
+          </div>
+          <span className="text-xs text-gray-600">SUMO Junction (Trainable)</span>
+        </div>
       </div>
     </div>
   );
