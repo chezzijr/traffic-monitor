@@ -13,7 +13,7 @@ from typing import Any
 
 import numpy as np
 
-from app.services import ml_service, sumo_service
+from app.services import sumo_service
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +89,8 @@ def deploy_model(model_path: str, tl_id: str) -> dict[str, Any]:
         controlled_lanes = metadata.get("controlled_lanes", []) if metadata else []
         num_phases = metadata.get("num_phases", 4) if metadata else 4
 
-        # Load the model via ml_service
+        # Load the model via ml_service (lazy import to avoid circular dependency)
+        from app.services import ml_service
         ml_service.load_model(model_path)
 
         # Extract model_id from path
@@ -139,6 +140,7 @@ def undeploy_model(tl_id: str) -> dict[str, Any]:
         # Unload model if no other deployments use it
         # For now, just unload (single model support)
         if len(_state._deployments) == 0:
+            from app.services import ml_service
             ml_service.unload_model()
 
         return {
@@ -302,7 +304,8 @@ def apply_ai_action(tl_id: str) -> int:
     # Get observation
     observation = get_observation_for_tl(tl_id)
 
-    # Get prediction from loaded model
+    # Get prediction from loaded model (lazy import to avoid circular dependency)
+    from app.services import ml_service
     result = ml_service.predict(observation)
     action = result["action"]
 
@@ -316,5 +319,6 @@ def clear_deployments() -> None:
     """Clear all deployments. Used when simulation stops."""
     with _state._lock:
         _state._deployments.clear()
+        from app.services import ml_service
         ml_service.unload_model()
     logger.info("Cleared all deployments")

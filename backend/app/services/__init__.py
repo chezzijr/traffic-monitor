@@ -3,7 +3,6 @@
 from app.services import (
     deployment_service,
     metrics_service,
-    ml_service,
     osm_service,
     sumo_service,
 )
@@ -11,7 +10,6 @@ from app.services import (
 __all__ = [
     "deployment_service",
     "metrics_service",
-    "ml_service",
     "osm_service",
     "sumo_service",
 ]

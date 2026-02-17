@@ -16,6 +16,7 @@ from typing import Any, Generator
 import redis
 from celery.result import AsyncResult
 
+from app.celery_app import celery_app
 from app.tasks.training_task import train_traffic_light
 
 logger = logging.getLogger(__name__)
@@ -112,7 +113,7 @@ def get_task(task_id: str) -> dict[str, Any] | None:
     metadata_json = redis_client.get(meta_key)
 
     # Get Celery task state
-    result = AsyncResult(task_id)
+    result = AsyncResult(task_id, app=celery_app)
     state = result.state
     info = result.info
 
@@ -167,7 +168,7 @@ def list_tasks(status: str | None = None) -> list[dict[str, Any]]:
         metadata_json = redis_client.get(meta_key)
 
         # Get Celery state
-        result = AsyncResult(task_id)
+        result = AsyncResult(task_id, app=celery_app)
         state = result.state
         info = result.info
 
@@ -202,7 +203,7 @@ def cancel_task(task_id: str) -> dict[str, Any]:
     Raises:
         ValueError: If task is already completed or failed
     """
-    result = AsyncResult(task_id)
+    result = AsyncResult(task_id, app=celery_app)
     state = result.state
 
     if state == "SUCCESS":
@@ -274,7 +275,7 @@ def delete_task(task_id: str) -> dict[str, Any]:
     Raises:
         ValueError: If task is still running
     """
-    result = AsyncResult(task_id)
+    result = AsyncResult(task_id, app=celery_app)
     state = result.state
 
     if state in ("PENDING", "STARTED"):
@@ -317,7 +318,7 @@ def cleanup_stale_tasks() -> dict[str, Any]:
         metadata = redis_client.get(meta_key)
 
         # Get Celery state
-        result = AsyncResult(task_id)
+        result = AsyncResult(task_id, app=celery_app)
         state = result.state
 
         # If PENDING with no metadata, it's stale
