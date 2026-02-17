@@ -27,6 +27,20 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
+# Map Celery statuses to frontend-expected statuses
+CELERY_STATUS_MAP = {
+    "PENDING": "pending",
+    "STARTED": "running",
+    "SUCCESS": "completed",
+    "FAILURE": "failed",
+    "REVOKED": "cancelled",
+}
+
+
+def _map_status(celery_status: str) -> str:
+    """Map Celery task status to frontend-expected status."""
+    return CELERY_STATUS_MAP.get(celery_status, celery_status.lower())
+
 
 @router.post(
     "/training",
@@ -79,7 +93,7 @@ def list_tasks(
     return [
         TaskResponse(
             task_id=task["task_id"],
-            status=task["status"],
+            status=_map_status(task["status"]),
             metadata=TaskMetadata(**task.get("metadata", {})),
             info=TaskInfo(**task.get("info", {})) if isinstance(task.get("info"), dict) else TaskInfo(),
             error=task.get("error"),
@@ -110,7 +124,7 @@ def get_task(task_id: str) -> TaskResponse:
 
     return TaskResponse(
         task_id=task["task_id"],
-        status=task["status"],
+        status=_map_status(task["status"]),
         metadata=TaskMetadata(**task.get("metadata", {})),
         info=TaskInfo(**task.get("info", {})) if isinstance(task.get("info"), dict) else TaskInfo(),
         error=task.get("error"),
