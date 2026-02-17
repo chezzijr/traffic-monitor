@@ -205,6 +205,10 @@ class TrafficLightTrainer:
         self.algorithm = algorithm
         self._seed = seed
 
+        # Initialize the environment to set up observation/action spaces
+        # This must happen before creating the model so spaces are correctly sized
+        self.env.reset()
+
         # Merge custom params with defaults
         params = self._get_default_params(algorithm)
         if model_params:
