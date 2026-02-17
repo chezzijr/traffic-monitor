@@ -124,20 +124,28 @@ def get_task(task_id: str) -> dict[str, Any] | None:
     # Parse metadata
     metadata = json.loads(metadata_json) if metadata_json else {}
 
+    # Get progress from Redis (stored by training callback)
+    progress_json = redis_client.get(f"task:{task_id}:progress")
+    progress_data = json.loads(progress_json) if progress_json else {}
+
     # Build result dict
     task_data = {
         "task_id": task_id,
         "status": state,
         "metadata": metadata,
-        "info": {},
+        "info": {
+            "progress": progress_data.get("progress"),
+            "timestep": progress_data.get("timestep"),
+            "mean_reward": progress_data.get("mean_reward"),
+            "episode_count": progress_data.get("episode_count"),
+            "model_path": progress_data.get("model_path"),
+        },
     }
 
     # Handle different states
     if state == "FAILURE":
         # For failed tasks, info is the exception
         task_data["error"] = str(info) if info else "Unknown error"
-    elif info and isinstance(info, dict):
-        task_data["info"] = info
 
     return task_data
 
@@ -179,11 +187,21 @@ def list_tasks(status: str | None = None) -> list[dict[str, Any]]:
         # Parse metadata
         metadata = json.loads(metadata_json) if metadata_json else {}
 
+        # Get progress from Redis (stored by training callback)
+        progress_json = redis_client.get(f"task:{task_id}:progress")
+        progress_data = json.loads(progress_json) if progress_json else {}
+
         task_data = {
             "task_id": task_id,
             "status": state,
             "metadata": metadata,
-            "info": info if isinstance(info, dict) else {},
+            "info": {
+                "progress": progress_data.get("progress"),
+                "timestep": progress_data.get("timestep"),
+                "mean_reward": progress_data.get("mean_reward"),
+                "episode_count": progress_data.get("episode_count"),
+                "model_path": progress_data.get("model_path"),
+            },
         }
 
         tasks.append(task_data)

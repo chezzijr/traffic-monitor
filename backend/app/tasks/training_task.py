@@ -201,7 +201,11 @@ class ProgressPublishingCallback(BaseCallback):
         )
 
         try:
-            self.redis_client.publish(self.channel, json.dumps(progress.to_dict()))
+            progress_data = json.dumps(progress.to_dict())
+            # Publish for real-time SSE updates
+            self.redis_client.publish(self.channel, progress_data)
+            # Store in Redis for API polling (expires in 1 hour)
+            self.redis_client.setex(f"task:{self.task_id}:progress", 3600, progress_data)
         except Exception as e:
             logger.warning(f"Failed to publish progress: {e}")
 
