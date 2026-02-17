@@ -29,8 +29,7 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
     volumes:
       - ./backend/app:/app/app
-      - ./backend/simulation:/app/simulation
-      - ./simulation:/app/data/simulation:ro
+      - ./simulation:/simulation
     depends_on:
       - redis
     networks:
@@ -59,8 +58,7 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
     volumes:
       - ./backend/app:/app/app
-      - ./backend/simulation:/app/simulation
-      - ./simulation:/app/data/simulation:ro
+      - ./simulation:/simulation
     depends_on:
       - redis
     networks:
