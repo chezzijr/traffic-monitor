@@ -21,6 +21,12 @@ interface TaskApiResponse {
     mean_reward?: number | null;
     episode_count?: number | null;
     model_path?: string | null;
+    avg_waiting_time?: number | null;
+    avg_queue_length?: number | null;
+    throughput?: number | null;
+    baseline_avg_waiting_time?: number | null;
+    baseline_avg_queue_length?: number | null;
+    baseline_throughput?: number | null;
   };
   error?: string | null;
 }
@@ -44,6 +50,12 @@ function transformTask(apiTask: TaskApiResponse): Task {
     started_at: null,
     completed_at: null,
     error_message: apiTask.error ?? null,
+    avg_waiting_time: info.avg_waiting_time ?? null,
+    avg_queue_length: info.avg_queue_length ?? null,
+    throughput: info.throughput ?? null,
+    baseline_avg_waiting_time: info.baseline_avg_waiting_time ?? null,
+    baseline_avg_queue_length: info.baseline_avg_queue_length ?? null,
+    baseline_throughput: info.baseline_throughput ?? null,
   };
 }
 

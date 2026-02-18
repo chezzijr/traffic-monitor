@@ -127,7 +127,8 @@ class TestListTasks:
             data = response.json()
             assert len(data) == 2
             assert data[0]["task_id"] == "task-1"
-            assert data[1]["status"] == "STARTED"
+            # API route maps STARTED → running
+            assert data[1]["status"] == "running"
 
     def test_list_tasks_with_status_filter(self, client: TestClient):
         """List tasks should filter by status."""
@@ -174,7 +175,8 @@ class TestGetTask:
             assert response.status_code == 200
             data = response.json()
             assert data["task_id"] == "task-123"
-            assert data["status"] == "SUCCESS"
+            # API route maps SUCCESS → completed
+            assert data["status"] == "completed"
             assert data["metadata"]["network_id"] == "net-1"
 
     def test_get_task_not_found(self, client: TestClient):
@@ -242,11 +244,12 @@ class TestTaskStream:
                 "info": {},
             }
 
-            # Mock the stream generator to yield one event then stop
-            def mock_stream(task_id):
-                yield {"status": "completed", "task_id": task_id}
+            # Mock Redis to return completed progress (triggers immediate stop)
+            with patch("app.services.task_service.get_redis_client") as mock_redis:
+                redis_mock = MagicMock()
+                redis_mock.get.return_value = b'{"status": "completed", "task_id": "task-123", "progress": 1.0}'
+                mock_redis.return_value = redis_mock
 
-            with patch("app.services.task_service.get_task_stream", mock_stream):
                 response = client.get("/api/tasks/task-123/stream")
 
                 assert response.status_code == 200

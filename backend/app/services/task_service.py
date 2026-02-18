@@ -5,13 +5,13 @@ This module provides functions for managing training tasks including:
 - Querying task status and metadata
 - Listing all tasks
 - Cancelling running tasks
-- Streaming task updates via Redis pub/sub
+- Caching task progress in Redis for SSE polling
 """
 
 import json
 import logging
 from datetime import datetime
-from typing import Any, Generator
+from typing import Any
 
 import redis
 from celery.result import AsyncResult
@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 
 # Redis key patterns
 TASK_META_KEY = "task:{task_id}:meta"
-TASK_UPDATES_CHANNEL = "task:{task_id}:updates"
 TASKS_LIST_KEY = "tasks:list"
 
 
@@ -139,6 +138,12 @@ def get_task(task_id: str) -> dict[str, Any] | None:
             "mean_reward": progress_data.get("mean_reward"),
             "episode_count": progress_data.get("episode_count"),
             "model_path": progress_data.get("model_path"),
+            "avg_waiting_time": progress_data.get("avg_waiting_time"),
+            "avg_queue_length": progress_data.get("avg_queue_length"),
+            "throughput": progress_data.get("throughput"),
+            "baseline_avg_waiting_time": progress_data.get("baseline_avg_waiting_time"),
+            "baseline_avg_queue_length": progress_data.get("baseline_avg_queue_length"),
+            "baseline_throughput": progress_data.get("baseline_throughput"),
         },
     }
 
@@ -201,6 +206,12 @@ def list_tasks(status: str | None = None) -> list[dict[str, Any]]:
                 "mean_reward": progress_data.get("mean_reward"),
                 "episode_count": progress_data.get("episode_count"),
                 "model_path": progress_data.get("model_path"),
+                "avg_waiting_time": progress_data.get("avg_waiting_time"),
+                "avg_queue_length": progress_data.get("avg_queue_length"),
+                "throughput": progress_data.get("throughput"),
+                "baseline_avg_waiting_time": progress_data.get("baseline_avg_waiting_time"),
+                "baseline_avg_queue_length": progress_data.get("baseline_avg_queue_length"),
+                "baseline_throughput": progress_data.get("baseline_throughput"),
             },
         }
 
@@ -238,47 +249,6 @@ def cancel_task(task_id: str) -> dict[str, Any]:
         "status": "cancelled",
         "task_id": task_id,
     }
-
-
-def get_task_stream(task_id: str) -> Generator[dict[str, Any], None, None]:
-    """Get a generator for streaming task updates via Redis pub/sub.
-
-    Args:
-        task_id: Task ID to stream updates for
-
-    Yields:
-        dict with update data from Redis pub/sub
-
-    Note:
-        This generator should be consumed in a streaming context (e.g., SSE).
-        It will yield messages until the task completes or fails.
-    """
-    redis_client = get_redis_client()
-    pubsub = redis_client.pubsub()
-
-    channel = TASK_UPDATES_CHANNEL.format(task_id=task_id)
-    pubsub.subscribe(channel)
-
-    try:
-        for message in pubsub.listen():
-            if message["type"] != "message":
-                continue
-
-            # Parse the message data
-            data_bytes = message["data"]
-            if isinstance(data_bytes, bytes):
-                data = json.loads(data_bytes.decode())
-            else:
-                data = json.loads(data_bytes)
-
-            yield data
-
-            # Stop streaming when task completes or fails
-            status = data.get("status", "")
-            if status in ("completed", "failed", "cancelled"):
-                break
-    finally:
-        pubsub.close()
 
 
 def delete_task(task_id: str) -> dict[str, Any]:

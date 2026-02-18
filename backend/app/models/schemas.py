@@ -296,6 +296,12 @@ class TaskInfo(BaseModel):
     mean_reward: float | None = Field(None, description="Mean reward")
     episode_count: int | None = Field(None, description="Episode count")
     model_path: str | None = Field(None, description="Path to saved model")
+    avg_waiting_time: float | None = Field(None, description="Average waiting time per vehicle (seconds)")
+    avg_queue_length: float | None = Field(None, description="Average halting vehicles per lane")
+    throughput: float | None = Field(None, description="Average vehicles completing trips per episode")
+    baseline_avg_waiting_time: float | None = Field(None, description="Baseline avg waiting time")
+    baseline_avg_queue_length: float | None = Field(None, description="Baseline avg queue length")
+    baseline_throughput: float | None = Field(None, description="Baseline throughput")
 
 
 class TaskResponse(BaseModel):

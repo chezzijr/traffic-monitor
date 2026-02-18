@@ -7,12 +7,15 @@ Provides endpoints for managing background training tasks:
 - Cancel running tasks
 """
 
+import asyncio
 import json
 import logging
 
+from celery.result import AsyncResult
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
+from app.celery_app import celery_app
 from app.models.schemas import (
     CancelTaskResponse,
     CreateTrainingTaskRequest,
@@ -132,9 +135,10 @@ def get_task(task_id: str) -> TaskResponse:
 
 
 async def _task_stream_generator(task_id: str):
-    """SSE generator for task updates.
+    """SSE generator for task updates via async Redis polling.
 
-    Yields SSE events from Redis pub/sub until task completes.
+    Polls Redis cache key every 2 seconds instead of using blocking pub/sub.
+    Only yields when data changes (deduplication via raw JSON comparison).
 
     Args:
         task_id: ID of the task to stream updates for
@@ -142,25 +146,50 @@ async def _task_stream_generator(task_id: str):
     Yields:
         SSE-formatted event strings
     """
+    from app.services.task_service import get_redis_client
+
+    redis_client = get_redis_client()
+    progress_key = f"task:{task_id}:progress"
+    last_data = None
+
     try:
-        for update in task_service.get_task_stream(task_id):
-            event_type = update.get("status", "progress")
+        while True:
+            # Read cached progress from Redis
+            raw = redis_client.get(progress_key)
 
-            # Map status to event type
-            if event_type == "running":
-                event_type = "progress"
-            elif event_type == "completed":
-                event_type = "completed"
-            elif event_type == "failed":
-                event_type = "failed"
-            elif event_type == "cancelled":
-                event_type = "cancelled"
+            if raw is not None:
+                raw_str = raw.decode() if isinstance(raw, bytes) else raw
 
-            yield f"event: {event_type}\ndata: {json.dumps(update)}\n\n"
+                # Only yield when data changes
+                if raw_str != last_data:
+                    last_data = raw_str
+                    update = json.loads(raw_str)
+                    status_val = update.get("status", "progress")
 
-            # Stop streaming on terminal states
-            if update.get("status") in ("completed", "failed", "cancelled"):
-                break
+                    # Map status to SSE event type
+                    if status_val in ("running", "started"):
+                        event_type = "progress"
+                    else:
+                        event_type = status_val
+
+                    yield f"event: {event_type}\ndata: {raw_str}\n\n"
+
+                    # Stop streaming on terminal states
+                    if status_val in ("completed", "failed", "cancelled"):
+                        break
+            else:
+                # No progress cached yet — check if task crashed before writing
+                result = AsyncResult(task_id, app=celery_app)
+                if result.state == "FAILURE":
+                    error_data = {"task_id": task_id, "status": "failed", "error": str(result.info)}
+                    yield f"event: failed\ndata: {json.dumps(error_data)}\n\n"
+                    break
+                elif result.state == "REVOKED":
+                    cancel_data = {"task_id": task_id, "status": "cancelled", "message": "Task was cancelled"}
+                    yield f"event: cancelled\ndata: {json.dumps(cancel_data)}\n\n"
+                    break
+
+            await asyncio.sleep(2)
 
     except Exception as e:
         logger.error(f"Error streaming task {task_id}: {e}")

@@ -125,6 +125,12 @@ export interface Task {
   started_at: string | null;
   completed_at: string | null;
   error_message: string | null;
+  avg_waiting_time: number | null;
+  avg_queue_length: number | null;
+  throughput: number | null;
+  baseline_avg_waiting_time: number | null;
+  baseline_avg_queue_length: number | null;
+  baseline_throughput: number | null;
 }
 
 // ML types

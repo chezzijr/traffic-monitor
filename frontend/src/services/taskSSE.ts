@@ -10,6 +10,9 @@ const activeConnections = new Map<string, EventSource>();
 interface ProgressEventData {
   timestep: number;
   progress: number;
+  avg_waiting_time?: number | null;
+  avg_queue_length?: number | null;
+  throughput?: number | null;
 }
 
 interface MetricsEventData {
@@ -49,6 +52,9 @@ export function subscribeToTask(taskId: string): void {
         current_timestep: data.timestep,
         progress: data.progress,
         status: 'running' as TaskStatus,
+        avg_waiting_time: data.avg_waiting_time ?? null,
+        avg_queue_length: data.avg_queue_length ?? null,
+        throughput: data.throughput ?? null,
       });
     } catch (error) {
       console.error('Error parsing task progress event:', error);

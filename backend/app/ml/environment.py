@@ -261,15 +261,25 @@ class TrafficLightEnv(gym.Env):
 
         # Advance simulation by steps_per_action steps
         step_metrics = []
+        arrived_count = 0
         for _ in range(self.steps_per_action):
             metrics = sumo_service.step()
             step_metrics.append(metrics)
             self._current_step += 1
+            # Track vehicles that completed their trips in this sub-step
+            if sumo_service.traci is not None:
+                arrived_count += sumo_service.traci.simulation.getArrivedNumber()
 
         # Compute reward using algorithm-specific formula (LibSignal/DaRL)
         current_total_wait = self._compute_total_wait_time()
         reward = self._compute_reward(current_total_wait)
         self._prev_total_wait_time = current_total_wait
+
+        # Compute traffic metrics
+        num_vehicles = len(sumo_service.traci.vehicle.getIDList()) if sumo_service.traci is not None else 0
+        avg_waiting_time = current_total_wait / max(1, num_vehicles)
+        lane_waiting_counts = self._get_lane_waiting_counts()
+        avg_queue_length = float(np.mean(lane_waiting_counts)) if len(lane_waiting_counts) > 0 else 0.0
 
         # Get new observation
         observation = self._get_observation()
@@ -285,6 +295,9 @@ class TrafficLightEnv(gym.Env):
             "action": action,
             "total_vehicles": step_metrics[-1]["total_vehicles"] if step_metrics else 0,
             "average_speed": step_metrics[-1].get("average_speed", 0.0) if step_metrics else 0.0,
+            "avg_waiting_time": avg_waiting_time,
+            "avg_queue_length": avg_queue_length,
+            "throughput": arrived_count,
         }
 
         return observation, reward, terminated, truncated, info

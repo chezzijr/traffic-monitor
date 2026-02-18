@@ -66,6 +66,12 @@ class TrainingProgress:
     message: str | None = None
     model_path: str | None = None
     error: str | None = None
+    avg_waiting_time: float | None = None
+    avg_queue_length: float | None = None
+    throughput: float | None = None
+    baseline_avg_waiting_time: float | None = None
+    baseline_avg_queue_length: float | None = None
+    baseline_throughput: float | None = None
     created_at: str | None = field(default_factory=lambda: datetime.now().isoformat())
 
     def to_dict(self) -> dict[str, Any]:
@@ -81,6 +87,12 @@ class TrainingProgress:
             "message": self.message,
             "model_path": self.model_path,
             "error": self.error,
+            "avg_waiting_time": self.avg_waiting_time,
+            "avg_queue_length": self.avg_queue_length,
+            "throughput": self.throughput,
+            "baseline_avg_waiting_time": self.baseline_avg_waiting_time,
+            "baseline_avg_queue_length": self.baseline_avg_queue_length,
+            "baseline_throughput": self.baseline_throughput,
             "created_at": self.created_at,
         }
 
@@ -139,6 +151,7 @@ class ProgressPublishingCallback(BaseCallback):
         total_timesteps: int,
         redis_client: redis.Redis,
         publish_interval: int = 500,
+        traffic_metrics_callback: "TrafficMetricsCallback | None" = None,
         verbose: int = 0,
     ) -> None:
         """Initialize the progress publishing callback.
@@ -148,6 +161,7 @@ class ProgressPublishingCallback(BaseCallback):
             total_timesteps: Total training timesteps
             redis_client: Redis client for publishing
             publish_interval: Publish progress every N steps
+            traffic_metrics_callback: Optional reference to TrafficMetricsCallback for live metric updates
             verbose: Verbosity level
         """
         super().__init__(verbose)
@@ -155,6 +169,7 @@ class ProgressPublishingCallback(BaseCallback):
         self.total_timesteps = total_timesteps
         self.redis_client = redis_client
         self.publish_interval = publish_interval
+        self.traffic_metrics_callback = traffic_metrics_callback
         self.channel = f"task:{task_id}:updates"
         self._episode_rewards: list[float] = []
         self._current_episode_reward = 0.0
@@ -189,6 +204,16 @@ class ProgressPublishingCallback(BaseCallback):
         recent_rewards = self._episode_rewards[-10:] if self._episode_rewards else []
         mean_reward = float(np.mean(recent_rewards)) if recent_rewards else None
 
+        # Get live traffic metrics if callback is available
+        live_avg_waiting_time: float | None = None
+        live_avg_queue_length: float | None = None
+        live_throughput: float | None = None
+        if self.traffic_metrics_callback is not None:
+            live_metrics = self.traffic_metrics_callback.get_final_metrics()
+            live_avg_waiting_time = live_metrics.get("avg_waiting_time")
+            live_avg_queue_length = live_metrics.get("avg_queue_length")
+            live_throughput = live_metrics.get("throughput")
+
         progress = TrainingProgress(
             task_id=self.task_id,
             status="running",
@@ -198,6 +223,9 @@ class ProgressPublishingCallback(BaseCallback):
             episode_count=len(self._episode_rewards),
             mean_reward=mean_reward,
             message=f"Training: {self.num_timesteps}/{self.total_timesteps} steps",
+            avg_waiting_time=live_avg_waiting_time,
+            avg_queue_length=live_avg_queue_length,
+            throughput=live_throughput,
         )
 
         try:
@@ -213,6 +241,94 @@ class ProgressPublishingCallback(BaseCallback):
     def episode_rewards(self) -> list[float]:
         """Get recorded episode rewards."""
         return self._episode_rewards.copy()
+
+
+class TrafficMetricsCallback(BaseCallback):
+    """Callback to collect traffic metrics from the environment during training.
+
+    Reads avg_waiting_time, avg_queue_length, and throughput from the info dict
+    returned by the environment's step() method. Accumulates per-step values and
+    computes episode averages when episodes end.
+    """
+
+    def __init__(self, verbose: int = 0) -> None:
+        """Initialize the traffic metrics callback.
+
+        Args:
+            verbose: Verbosity level
+        """
+        super().__init__(verbose)
+        # Per-step accumulators (reset each episode)
+        self._step_avg_waiting_times: list[float] = []
+        self._step_avg_queue_lengths: list[float] = []
+        self._step_throughputs: list[float] = []
+        # Per-episode averages
+        self._episode_avg_waiting_times: list[float] = []
+        self._episode_avg_queue_lengths: list[float] = []
+        self._episode_throughputs: list[float] = []
+
+    def _on_step(self) -> bool:
+        """Collect traffic metrics from the current step's info dict.
+
+        Returns:
+            Always True (continue training)
+        """
+        infos = self.locals.get("infos", [{}])
+        info = infos[0] if infos else {}
+
+        # Accumulate step-level metrics
+        if "avg_waiting_time" in info:
+            self._step_avg_waiting_times.append(info["avg_waiting_time"])
+        if "avg_queue_length" in info:
+            self._step_avg_queue_lengths.append(info["avg_queue_length"])
+        if "throughput" in info:
+            self._step_throughputs.append(info["throughput"])
+
+        # Check for episode end
+        dones = self.locals.get("dones", [False])
+        if dones[0]:
+            self._finalize_episode()
+
+        return True
+
+    def _finalize_episode(self) -> None:
+        """Compute and store episode averages, then reset accumulators."""
+        import numpy as np
+
+        if self._step_avg_waiting_times:
+            self._episode_avg_waiting_times.append(float(np.mean(self._step_avg_waiting_times)))
+        if self._step_avg_queue_lengths:
+            self._episode_avg_queue_lengths.append(float(np.mean(self._step_avg_queue_lengths)))
+        if self._step_throughputs:
+            # Throughput is summed per episode (total vehicles arrived)
+            self._episode_throughputs.append(float(np.sum(self._step_throughputs)))
+
+        # Reset accumulators
+        self._step_avg_waiting_times.clear()
+        self._step_avg_queue_lengths.clear()
+        self._step_throughputs.clear()
+
+    def get_final_metrics(self, last_n: int = 10) -> dict[str, float | None]:
+        """Get averaged traffic metrics from the last N episodes.
+
+        Args:
+            last_n: Number of recent episodes to average over (default: 10)
+
+        Returns:
+            Dict with avg_waiting_time, avg_queue_length, throughput (or None if no data)
+        """
+        import numpy as np
+
+        def _avg_last(values: list[float], n: int) -> float | None:
+            if not values:
+                return None
+            return float(np.mean(values[-n:]))
+
+        return {
+            "avg_waiting_time": _avg_last(self._episode_avg_waiting_times, last_n),
+            "avg_queue_length": _avg_last(self._episode_avg_queue_lengths, last_n),
+            "throughput": _avg_last(self._episode_throughputs, last_n),
+        }
 
 
 def _get_network_path(network_id: str) -> Path:
@@ -286,6 +402,67 @@ def _save_model_metadata(
     logger.info(f"Saved model metadata to {metadata_path}")
 
 
+def _run_baseline_episodes(
+    env: TrafficLightEnv,
+    num_episodes: int = 3,
+) -> dict[str, float]:
+    """Run baseline episodes using SUMO's default fixed-time traffic light program.
+
+    Runs the simulation without any RL agent intervention to establish baseline
+    traffic metrics for comparison with the trained model.
+
+    Args:
+        env: The TrafficLightEnv instance (used for reset and metric helpers)
+        num_episodes: Number of baseline episodes to run (default: 3)
+
+    Returns:
+        Dict with averaged baseline metrics: avg_waiting_time, avg_queue_length, throughput
+    """
+    import numpy as np
+
+    from app.services import sumo_service
+
+    episode_metrics: list[dict[str, float]] = []
+
+    for ep in range(num_episodes):
+        env.reset()
+        num_action_intervals = env.max_steps // env.steps_per_action
+
+        step_waiting_times: list[float] = []
+        step_queue_lengths: list[float] = []
+        total_throughput = 0
+
+        for _ in range(num_action_intervals):
+            # Run sub-steps without setting any phase (use SUMO default program)
+            for _ in range(env.steps_per_action):
+                sumo_service.step()
+                if sumo_service.traci is not None:
+                    total_throughput += sumo_service.traci.simulation.getArrivedNumber()
+
+            # Collect metrics after each action interval
+            total_wait = env._compute_total_wait_time()
+            num_vehicles = len(sumo_service.traci.vehicle.getIDList()) if sumo_service.traci is not None else 0
+            step_waiting_times.append(total_wait / max(1, num_vehicles))
+
+            lane_counts = env._get_lane_waiting_counts()
+            step_queue_lengths.append(float(np.mean(lane_counts)) if len(lane_counts) > 0 else 0.0)
+
+        episode_metrics.append({
+            "avg_waiting_time": float(np.mean(step_waiting_times)) if step_waiting_times else 0.0,
+            "avg_queue_length": float(np.mean(step_queue_lengths)) if step_queue_lengths else 0.0,
+            "throughput": float(total_throughput),
+        })
+
+        logger.info(f"Baseline episode {ep + 1}/{num_episodes} complete: {episode_metrics[-1]}")
+
+    # Average across all episodes
+    return {
+        "avg_waiting_time": float(np.mean([m["avg_waiting_time"] for m in episode_metrics])),
+        "avg_queue_length": float(np.mean([m["avg_queue_length"] for m in episode_metrics])),
+        "throughput": float(np.mean([m["throughput"] for m in episode_metrics])),
+    }
+
+
 def run_training(
     task_id: str,
     network_id: str,
@@ -325,7 +502,9 @@ def run_training(
         total_timesteps=total_timesteps,
         message=f"Starting training for {traffic_light_id} on {network_id}",
     )
-    redis_client.publish(channel, json.dumps(started_progress.to_dict()))
+    started_data = json.dumps(started_progress.to_dict())
+    redis_client.publish(channel, started_data)
+    redis_client.setex(f"task:{task_id}:progress", 3600, started_data)
 
     try:
         # Validate algorithm
@@ -348,15 +527,32 @@ def run_training(
             algorithm=algo_enum,  # Pass algorithm for reward function selection
         )
 
+        # Run baseline simulation before training
+        baseline_progress = TrainingProgress(
+            task_id=task_id,
+            status="started",
+            total_timesteps=total_timesteps,
+            message="Running baseline simulation...",
+        )
+        baseline_progress_data = json.dumps(baseline_progress.to_dict())
+        redis_client.publish(channel, baseline_progress_data)
+        redis_client.setex(f"task:{task_id}:progress", 3600, baseline_progress_data)
+
+        logger.info("Running baseline episodes for comparison metrics")
+        baseline = _run_baseline_episodes(env, num_episodes=3)
+        logger.info(f"Baseline metrics: {baseline}")
+
         # Create trainer
         trainer = TrafficLightTrainer(env=env, algorithm=algo_enum)
 
         # Create callbacks
         cancellation_callback = CancellationCallback(task_id=task_id)
+        traffic_metrics_callback = TrafficMetricsCallback()
         progress_callback = ProgressPublishingCallback(
             task_id=task_id,
             total_timesteps=total_timesteps,
             redis_client=redis_client,
+            traffic_metrics_callback=traffic_metrics_callback,
         )
         metrics_callback = MetricsLoggingCallback(log_interval=1000)
 
@@ -364,7 +560,7 @@ def run_training(
         logger.info(f"Starting training: {total_timesteps} timesteps with {algorithm}")
         trainer.train(
             total_timesteps=total_timesteps,
-            callbacks=[cancellation_callback, progress_callback, metrics_callback],
+            callbacks=[cancellation_callback, progress_callback, traffic_metrics_callback, metrics_callback],
             log_interval=1000,
         )
 
@@ -379,7 +575,9 @@ def run_training(
                 progress=trainer.model.num_timesteps / total_timesteps,
                 message="Training cancelled by user",
             )
-            redis_client.publish(channel, json.dumps(cancelled_progress.to_dict()))
+            cancelled_data = json.dumps(cancelled_progress.to_dict())
+            redis_client.publish(channel, cancelled_data)
+            redis_client.setex(f"task:{task_id}:progress", 3600, cancelled_data)
             return {"status": "cancelled", "task_id": task_id}
 
         # Save the model
@@ -405,6 +603,9 @@ def run_training(
         episode_rewards = progress_callback.episode_rewards
         mean_reward = float(np.mean(episode_rewards[-10:])) if episode_rewards else None
 
+        # Get final RL traffic metrics
+        rl_metrics = traffic_metrics_callback.get_final_metrics()
+
         completed_progress = TrainingProgress(
             task_id=task_id,
             status="completed",
@@ -415,8 +616,16 @@ def run_training(
             mean_reward=mean_reward,
             message="Training completed successfully",
             model_path=full_model_path,
+            avg_waiting_time=rl_metrics.get("avg_waiting_time"),
+            avg_queue_length=rl_metrics.get("avg_queue_length"),
+            throughput=rl_metrics.get("throughput"),
+            baseline_avg_waiting_time=baseline.get("avg_waiting_time"),
+            baseline_avg_queue_length=baseline.get("avg_queue_length"),
+            baseline_throughput=baseline.get("throughput"),
         )
-        redis_client.publish(channel, json.dumps(completed_progress.to_dict()))
+        completed_data = json.dumps(completed_progress.to_dict())
+        redis_client.publish(channel, completed_data)
+        redis_client.setex(f"task:{task_id}:progress", 3600, completed_data)
 
         logger.info(f"Training completed. Model saved to {full_model_path}")
 
@@ -438,7 +647,9 @@ def run_training(
             message=f"Training failed: {str(e)}",
             error=str(e),
         )
-        redis_client.publish(channel, json.dumps(failed_progress.to_dict()))
+        failed_data = json.dumps(failed_progress.to_dict())
+        redis_client.publish(channel, failed_data)
+        redis_client.setex(f"task:{task_id}:progress", 3600, failed_data)
 
         # Re-raise the exception so Celery marks task as failed
         raise

@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState } from 'react';
+import { useEffect, useCallback, useState, useRef } from 'react';
 import { ListTodo, RefreshCw, Inbox } from 'lucide-react';
 import { useTaskStore } from '../../store/taskStore';
 import { taskService } from '../../services/taskService';
@@ -77,6 +77,32 @@ export function TaskListPanel() {
       }
     }
   }, [tasks]);
+
+  // Poll for task updates while there are active (pending/running) tasks
+  const hasActiveTasks = tasks.some(
+    (task) => task.status === 'running' || task.status === 'pending'
+  );
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (hasActiveTasks) {
+      pollIntervalRef.current = setInterval(async () => {
+        try {
+          const data = await taskService.listTasks();
+          setTasks(data);
+        } catch {
+          // Silently ignore polling errors — manual refresh still available
+        }
+      }, 5000);
+    }
+
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+    };
+  }, [hasActiveTasks, setTasks]);
 
   // Handle task cancellation
   const handleCancelTask = async (taskId: string) => {

@@ -7,6 +7,8 @@ import {
   AlertCircle,
   X,
   Loader2,
+  TrendingDown,
+  TrendingUp,
 } from 'lucide-react';
 import type { Task, TaskStatus } from '../../types';
 
@@ -60,6 +62,76 @@ function formatDate(isoString: string | null): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+/**
+ * Compute the percentage change between an RL value and a baseline value,
+ * and determine whether the change is an improvement.
+ *
+ * @param rlValue - The value achieved by the RL model
+ * @param baseline - The baseline (fixed-time) value
+ * @param lowerIsBetter - If true, a decrease is an improvement (e.g., wait time, queue length)
+ */
+function computeChange(
+  rlValue: number,
+  baseline: number,
+  lowerIsBetter: boolean,
+): { percent: number; isImprovement: boolean } {
+  if (baseline === 0) {
+    return { percent: 0, isImprovement: false };
+  }
+  const percent = Math.round(Math.abs((rlValue - baseline) / baseline) * 100);
+  const decreased = rlValue < baseline;
+  const isImprovement = lowerIsBetter ? decreased : !decreased;
+  return { percent, isImprovement };
+}
+
+interface MetricRowProps {
+  label: string;
+  rlValue: number | null;
+  baseline: number | null;
+  unit?: string;
+  lowerIsBetter: boolean;
+}
+
+function MetricRow({ label, rlValue, baseline, unit = '', lowerIsBetter }: MetricRowProps) {
+  if (rlValue === null) return null;
+
+  const formattedRl = Number.isInteger(rlValue) ? rlValue : rlValue.toFixed(1);
+
+  if (baseline === null || baseline === 0) {
+    return (
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-gray-600 w-24 shrink-0">{label}</span>
+        <span className="font-medium tabular-nums">
+          {formattedRl}{unit}
+        </span>
+      </div>
+    );
+  }
+
+  const { percent, isImprovement } = computeChange(rlValue, baseline, lowerIsBetter);
+  const formattedBaseline = Number.isInteger(baseline) ? baseline : baseline.toFixed(1);
+  const decreased = rlValue < baseline;
+  const TrendIcon = decreased ? TrendingDown : TrendingUp;
+  const changeColor = isImprovement ? 'text-green-600' : 'text-red-600';
+  const arrow = decreased ? '\u2193' : '\u2191';
+
+  return (
+    <div className="flex items-center justify-between text-xs gap-2">
+      <span className="text-gray-600 w-24 shrink-0">{label}</span>
+      <span className="font-medium tabular-nums">
+        {formattedRl}{unit}
+      </span>
+      <span className="text-gray-400 tabular-nums text-[11px]">
+        Fixed: {formattedBaseline}{unit}
+      </span>
+      <span className={`flex items-center gap-0.5 font-semibold tabular-nums ${changeColor}`}>
+        <TrendIcon size={12} />
+        {arrow}{percent}%
+      </span>
+    </div>
+  );
 }
 
 function TaskCardComponent({ task, onCancel, isCancelling }: TaskCardProps) {
@@ -128,18 +200,62 @@ function TaskCardComponent({ task, onCancel, isCancelling }: TaskCardProps) {
         </div>
       )}
 
-      {/* Metrics for running/completed tasks */}
-      {(task.status === 'running' || task.status === 'completed') &&
-        task.episode_count > 0 && (
-          <div className="mt-3 pt-2 border-t border-gray-200 space-y-1 text-sm">
-            <div className="flex justify-between">
-              <span className="text-gray-600">Episodes:</span>
-              <span className="font-medium">{task.episode_count}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-600">Mean Reward:</span>
-              <span className="font-medium">{task.mean_reward.toFixed(2)}</span>
-            </div>
+      {/* Traffic metrics for completed tasks (with baseline comparison) */}
+      {task.status === 'completed' &&
+        (task.avg_waiting_time !== null ||
+          task.avg_queue_length !== null ||
+          task.throughput !== null) && (
+          <div className="mt-3 pt-2 border-t border-gray-200 space-y-1.5">
+            <MetricRow
+              label="Avg Wait Time"
+              rlValue={task.avg_waiting_time}
+              baseline={task.baseline_avg_waiting_time}
+              unit="s"
+              lowerIsBetter={true}
+            />
+            <MetricRow
+              label="Queue Length"
+              rlValue={task.avg_queue_length}
+              baseline={task.baseline_avg_queue_length}
+              lowerIsBetter={true}
+            />
+            <MetricRow
+              label="Throughput"
+              rlValue={task.throughput}
+              baseline={task.baseline_throughput}
+              lowerIsBetter={false}
+            />
+            {task.episode_count > 0 && (
+              <div className="pt-1 text-[11px] text-gray-400 flex justify-between">
+                <span>Episodes: {task.episode_count}</span>
+                <span>Mean Reward: {task.mean_reward.toFixed(2)}</span>
+              </div>
+            )}
+          </div>
+        )}
+
+      {/* Live metrics for running tasks (no baseline comparison) */}
+      {task.status === 'running' &&
+        (task.avg_waiting_time !== null || task.avg_queue_length !== null) && (
+          <div className="mt-3 pt-2 border-t border-gray-200 space-y-1.5">
+            <MetricRow
+              label="Avg Wait Time"
+              rlValue={task.avg_waiting_time}
+              baseline={null}
+              unit="s"
+              lowerIsBetter={true}
+            />
+            <MetricRow
+              label="Queue Length"
+              rlValue={task.avg_queue_length}
+              baseline={null}
+              lowerIsBetter={true}
+            />
+            {task.episode_count > 0 && (
+              <div className="pt-1 text-[11px] text-gray-400">
+                Episodes: {task.episode_count}
+              </div>
+            )}
           </div>
         )}
 

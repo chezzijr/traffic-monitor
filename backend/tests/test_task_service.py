@@ -52,7 +52,7 @@ class TestCreateTrainingTask:
                 redis_mock = MagicMock()
                 mock_redis.return_value = redis_mock
 
-                result = create_training_task(
+                create_training_task(
                     network_id="test_network",
                     tl_id="tl_2",
                     algorithm="ppo",
@@ -112,21 +112,33 @@ class TestGetTask:
 
             with patch("app.services.task_service.get_redis_client") as mock_redis:
                 redis_mock = MagicMock()
-                redis_mock.get.return_value = json.dumps({
-                    "network_id": "test_network",
-                    "tl_id": "tl_1",
-                    "algorithm": "dqn",
-                    "total_timesteps": 10000,
-                    "created_at": "2024-01-01T00:00:00",
-                })
+                # get() called twice: metadata key, then progress key
+                redis_mock.get.side_effect = [
+                    json.dumps({
+                        "network_id": "test_network",
+                        "tl_id": "tl_1",
+                        "algorithm": "dqn",
+                        "total_timesteps": 10000,
+                        "created_at": "2024-01-01T00:00:00",
+                    }),
+                    json.dumps({
+                        "progress": 0.5,
+                        "timestep": 5000,
+                        "avg_waiting_time": 15.2,
+                        "avg_queue_length": 3.4,
+                    }),
+                ]
                 mock_redis.return_value = redis_mock
 
                 result = get_task("celery-task-123")
 
+        assert result is not None
         assert result["task_id"] == "celery-task-123"
         assert result["status"] == "STARTED"
         assert result["metadata"]["network_id"] == "test_network"
         assert result["info"]["progress"] == 0.5
+        assert result["info"]["avg_waiting_time"] == 15.2
+        assert result["info"]["avg_queue_length"] == 3.4
 
     def test_returns_none_for_missing_task(self):
         """get_task should return None if task doesn't exist."""
@@ -148,8 +160,8 @@ class TestGetTask:
         # Task with PENDING state and no metadata = doesn't exist
         assert result is None
 
-    def test_handles_completed_task(self):
-        """get_task should handle completed task with result."""
+    def test_handles_completed_task_with_traffic_metrics(self):
+        """get_task should return traffic metrics and baseline for completed task."""
         from app.services.task_service import get_task
 
         with patch("app.services.task_service.AsyncResult") as mock_async:
@@ -160,19 +172,38 @@ class TestGetTask:
 
             with patch("app.services.task_service.get_redis_client") as mock_redis:
                 redis_mock = MagicMock()
-                redis_mock.get.return_value = json.dumps({
-                    "network_id": "test_network",
-                    "tl_id": "tl_1",
-                    "algorithm": "dqn",
-                    "total_timesteps": 10000,
-                    "created_at": "2024-01-01T00:00:00",
-                })
+                redis_mock.get.side_effect = [
+                    json.dumps({
+                        "network_id": "test_network",
+                        "tl_id": "tl_1",
+                        "algorithm": "dqn",
+                        "total_timesteps": 10000,
+                        "created_at": "2024-01-01T00:00:00",
+                    }),
+                    json.dumps({
+                        "progress": 1.0,
+                        "model_path": "/models/test.zip",
+                        "avg_waiting_time": 12.3,
+                        "avg_queue_length": 2.1,
+                        "throughput": 847.0,
+                        "baseline_avg_waiting_time": 28.1,
+                        "baseline_avg_queue_length": 5.8,
+                        "baseline_throughput": 612.0,
+                    }),
+                ]
                 mock_redis.return_value = redis_mock
 
                 result = get_task("completed-task")
 
+        assert result is not None
         assert result["status"] == "SUCCESS"
         assert result["info"]["model_path"] == "/models/test.zip"
+        assert result["info"]["avg_waiting_time"] == 12.3
+        assert result["info"]["avg_queue_length"] == 2.1
+        assert result["info"]["throughput"] == 847.0
+        assert result["info"]["baseline_avg_waiting_time"] == 28.1
+        assert result["info"]["baseline_avg_queue_length"] == 5.8
+        assert result["info"]["baseline_throughput"] == 612.0
 
     def test_handles_failed_task(self):
         """get_task should handle failed task with error."""
@@ -186,17 +217,22 @@ class TestGetTask:
 
             with patch("app.services.task_service.get_redis_client") as mock_redis:
                 redis_mock = MagicMock()
-                redis_mock.get.return_value = json.dumps({
-                    "network_id": "test_network",
-                    "tl_id": "tl_1",
-                    "algorithm": "dqn",
-                    "total_timesteps": 10000,
-                    "created_at": "2024-01-01T00:00:00",
-                })
+                # get() called twice: metadata key, then progress key
+                redis_mock.get.side_effect = [
+                    json.dumps({
+                        "network_id": "test_network",
+                        "tl_id": "tl_1",
+                        "algorithm": "dqn",
+                        "total_timesteps": 10000,
+                        "created_at": "2024-01-01T00:00:00",
+                    }),
+                    None,  # No progress data for failed task
+                ]
                 mock_redis.return_value = redis_mock
 
                 result = get_task("failed-task")
 
+        assert result is not None
         assert result["status"] == "FAILURE"
         assert "error" in result
 
@@ -209,7 +245,7 @@ class TestListTasks:
         from app.services.task_service import list_tasks
 
         with patch("app.services.task_service.AsyncResult") as mock_async:
-            def async_side_effect(task_id):
+            def async_side_effect(task_id, app=None):
                 mock = MagicMock()
                 if task_id == "task-1":
                     mock.state = "STARTED"
@@ -227,9 +263,12 @@ class TestListTasks:
             with patch("app.services.task_service.get_redis_client") as mock_redis:
                 redis_mock = MagicMock()
                 redis_mock.lrange.return_value = [b"task-1", b"task-2"]
+                # get() called 4 times: meta1, progress1, meta2, progress2
                 redis_mock.get.side_effect = [
                     json.dumps({"network_id": "net1", "tl_id": "tl1", "algorithm": "dqn", "total_timesteps": 10000, "created_at": "2024-01-01"}),
+                    json.dumps({"progress": 0.5, "timestep": 5000}),
                     json.dumps({"network_id": "net2", "tl_id": "tl2", "algorithm": "ppo", "total_timesteps": 5000, "created_at": "2024-01-02"}),
+                    json.dumps({"progress": 1.0, "model_path": "/models/test.zip", "avg_waiting_time": 12.3, "baseline_avg_waiting_time": 28.1}),
                 ]
                 mock_redis.return_value = redis_mock
 
@@ -240,6 +279,8 @@ class TestListTasks:
         assert result[0]["status"] == "STARTED"
         assert result[1]["task_id"] == "task-2"
         assert result[1]["status"] == "SUCCESS"
+        assert result[1]["info"]["avg_waiting_time"] == 12.3
+        assert result[1]["info"]["baseline_avg_waiting_time"] == 28.1
 
     def test_returns_empty_list_when_no_tasks(self):
         """list_tasks should return empty list when no tasks exist."""
@@ -259,7 +300,7 @@ class TestListTasks:
         from app.services.task_service import list_tasks
 
         with patch("app.services.task_service.AsyncResult") as mock_async:
-            def async_side_effect(task_id):
+            def async_side_effect(task_id, app=None):
                 mock = MagicMock()
                 if task_id == "task-1":
                     mock.state = "STARTED"
@@ -277,9 +318,14 @@ class TestListTasks:
             with patch("app.services.task_service.get_redis_client") as mock_redis:
                 redis_mock = MagicMock()
                 redis_mock.lrange.return_value = [b"task-1", b"task-2"]
+                # get() called per task: meta + progress
+                # task-1 (STARTED) matches filter, so gets both calls
+                # task-2 (SUCCESS) doesn't match STARTED filter, but get() is still called for metadata and progress
                 redis_mock.get.side_effect = [
                     json.dumps({"network_id": "net1", "tl_id": "tl1", "algorithm": "dqn", "total_timesteps": 10000, "created_at": "2024-01-01"}),
+                    json.dumps({"progress": 0.5}),
                     json.dumps({"network_id": "net2", "tl_id": "tl2", "algorithm": "ppo", "total_timesteps": 5000, "created_at": "2024-01-02"}),
+                    json.dumps({"progress": 1.0}),
                 ]
                 mock_redis.return_value = redis_mock
 
@@ -330,73 +376,6 @@ class TestCancelTask:
 
             with pytest.raises(ValueError, match="Cannot cancel failed task"):
                 cancel_task("failed-task")
-
-
-class TestGetTaskStream:
-    """Tests for get_task_stream function."""
-
-    def test_subscribes_to_redis_channel(self):
-        """get_task_stream should subscribe to Redis pub/sub channel."""
-        from app.services.task_service import get_task_stream
-
-        with patch("app.services.task_service.get_redis_client") as mock_redis:
-            redis_mock = MagicMock()
-            pubsub_mock = MagicMock()
-            redis_mock.pubsub.return_value = pubsub_mock
-            pubsub_mock.listen.return_value = iter([
-                {"type": "subscribe", "channel": b"task:test-123:updates"},
-                {"type": "message", "data": b'{"status": "running", "progress": 0.5}'},
-            ])
-            mock_redis.return_value = redis_mock
-
-            gen = get_task_stream("test-123")
-            result = next(gen)
-
-        pubsub_mock.subscribe.assert_called_once_with("task:test-123:updates")
-        assert result == {"status": "running", "progress": 0.5}
-
-    def test_yields_messages_until_completed(self):
-        """get_task_stream should yield messages until task completes."""
-        from app.services.task_service import get_task_stream
-
-        with patch("app.services.task_service.get_redis_client") as mock_redis:
-            redis_mock = MagicMock()
-            pubsub_mock = MagicMock()
-            redis_mock.pubsub.return_value = pubsub_mock
-            pubsub_mock.listen.return_value = iter([
-                {"type": "subscribe", "channel": b"task:test-456:updates"},
-                {"type": "message", "data": b'{"status": "running", "progress": 0.25}'},
-                {"type": "message", "data": b'{"status": "running", "progress": 0.5}'},
-                {"type": "message", "data": b'{"status": "completed", "progress": 1.0}'},
-            ])
-            mock_redis.return_value = redis_mock
-
-            gen = get_task_stream("test-456")
-            results = list(gen)
-
-        assert len(results) == 3
-        assert results[0]["progress"] == 0.25
-        assert results[1]["progress"] == 0.5
-        assert results[2]["status"] == "completed"
-
-    def test_closes_pubsub_on_completion(self):
-        """get_task_stream should close pubsub connection on completion."""
-        from app.services.task_service import get_task_stream
-
-        with patch("app.services.task_service.get_redis_client") as mock_redis:
-            redis_mock = MagicMock()
-            pubsub_mock = MagicMock()
-            redis_mock.pubsub.return_value = pubsub_mock
-            pubsub_mock.listen.return_value = iter([
-                {"type": "subscribe", "channel": b"task:test-789:updates"},
-                {"type": "message", "data": b'{"status": "completed", "progress": 1.0}'},
-            ])
-            mock_redis.return_value = redis_mock
-
-            gen = get_task_stream("test-789")
-            list(gen)  # Consume generator
-
-        pubsub_mock.close.assert_called_once()
 
 
 class TestDeleteTask:
@@ -458,7 +437,7 @@ class TestCleanupStaleTasks:
         from app.services.task_service import cleanup_stale_tasks
 
         with patch("app.services.task_service.AsyncResult") as mock_async:
-            def async_side_effect(task_id):
+            def async_side_effect(task_id, app=None):
                 mock = MagicMock()
                 if task_id == "valid-task":
                     mock.state = "SUCCESS"
