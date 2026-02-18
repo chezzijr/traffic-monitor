@@ -3,8 +3,6 @@
 import { useTaskStore } from '../store/taskStore';
 import type { TaskStatus } from '../types';
 
-const API_URL = import.meta.env.VITE_API_URL || '';
-
 // Map of task ID to EventSource connection
 const activeConnections = new Map<string, EventSource>();
 
@@ -36,7 +34,7 @@ export function subscribeToTask(taskId: string): void {
     unsubscribeFromTask(taskId);
   }
 
-  const url = `${API_URL}/api/tasks/${taskId}/stream`;
+  const url = `/api/tasks/${taskId}/stream`;
   const eventSource = new EventSource(url);
 
   // Store the connection

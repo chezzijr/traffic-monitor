@@ -152,7 +152,7 @@ async def _task_stream_generator(task_id: str):
             elif event_type == "completed":
                 event_type = "completed"
             elif event_type == "failed":
-                event_type = "error"
+                event_type = "failed"
             elif event_type == "cancelled":
                 event_type = "cancelled"
 
