@@ -23,11 +23,12 @@ VTYPES_FILE = Path(__file__).parent.parent.parent.parent / "simulation" / "vtype
 
 
 # Vehicle generation periods (seconds between vehicles) for each scenario
+# Rates tuned for Vietnamese traffic density (motorbike-heavy, congested intersections)
 SCENARIO_PERIODS = {
-    TrafficScenario.LIGHT: 1.0 / 0.3,      # ~3.33 seconds
-    TrafficScenario.MODERATE: 1.0 / 0.8,   # ~1.25 seconds
-    TrafficScenario.HEAVY: 1.0 / 1.5,      # ~0.67 seconds
-    TrafficScenario.RUSH_HOUR: 1.0 / 2.0,  # 0.5 seconds
+    TrafficScenario.LIGHT: 1.0 / 1.0,      # 1.0 veh/s → 3,600 veh/hour
+    TrafficScenario.MODERATE: 1.0 / 2.5,   # 2.5 veh/s → 9,000 veh/hour
+    TrafficScenario.HEAVY: 1.0 / 5.0,      # 5.0 veh/s → 18,000 veh/hour
+    TrafficScenario.RUSH_HOUR: 1.0 / 8.0,  # 8.0 veh/s → 28,800 veh/hour
 }
 
 # Vietnamese vehicle type distribution: 80% motorbikes, 15% cars, 5% buses
