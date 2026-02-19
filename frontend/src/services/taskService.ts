@@ -50,6 +50,7 @@ function transformTask(apiTask: TaskApiResponse): Task {
     started_at: null,
     completed_at: null,
     error_message: apiTask.error ?? null,
+    model_path: info.model_path ?? null,
     avg_waiting_time: info.avg_waiting_time ?? null,
     avg_queue_length: info.avg_queue_length ?? null,
     throughput: info.throughput ?? null,

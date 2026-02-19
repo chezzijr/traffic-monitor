@@ -111,12 +111,12 @@ export function ModelsPanel() {
             >
               <div className="flex items-start justify-between">
                 <div className="flex-1 min-w-0">
-                  <p className="font-medium text-sm truncate">{model.id}</p>
+                  <p className="font-medium text-sm">{model.algorithm.toUpperCase()} Model</p>
                   <p className="text-xs text-gray-500">
-                    {model.algorithm.toUpperCase()} | {formatBytes(model.size_bytes)}
+                    TL: {model.tl_id} · {formatDate(model.created_at)} · {formatBytes(model.size_bytes)}
                   </p>
-                  <p className="text-xs text-gray-500">
-                    TL: {model.tl_id} | {formatDate(model.created_at)}
+                  <p className="text-xs text-gray-400 truncate" title={model.id}>
+                    {model.id}
                   </p>
                 </div>
                 <div className="flex gap-1">

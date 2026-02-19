@@ -9,6 +9,7 @@ import {
   Loader2,
   TrendingDown,
   TrendingUp,
+  Database,
 } from 'lucide-react';
 import type { Task, TaskStatus } from '../../types';
 
@@ -132,6 +133,27 @@ function MetricRow({ label, rlValue, baseline, unit = '', lowerIsBetter }: Metri
       </span>
     </div>
   );
+}
+
+function formatModelLabel(modelPath: string): string {
+  // Extract filename without extension from path like "models/xxx_dqn_20260218_153833.zip"
+  const filename = modelPath.split('/').pop()?.replace(/\.zip$/, '') ?? modelPath;
+  // Parse: {network_id}_{tl_id}_{algorithm}_{date}_{time}
+  const parts = filename.split('_');
+  if (parts.length >= 5) {
+    const algorithm = parts[parts.length - 3].toUpperCase();
+    const dateStr = parts[parts.length - 2]; // YYYYMMDD
+    const timeStr = parts[parts.length - 1]; // HHMMSS
+    const year = dateStr.slice(0, 4);
+    const month = parseInt(dateStr.slice(4, 6), 10);
+    const day = parseInt(dateStr.slice(6, 8), 10);
+    const hour = timeStr.slice(0, 2);
+    const minute = timeStr.slice(2, 4);
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const monthName = monthNames[month - 1] ?? month;
+    return `${algorithm} model \u00b7 ${monthName} ${day} ${year}, ${hour}:${minute}`;
+  }
+  return filename;
 }
 
 function TaskCardComponent({ task, onCancel, isCancelling }: TaskCardProps) {
@@ -270,6 +292,14 @@ function TaskCardComponent({ task, onCancel, isCancelling }: TaskCardProps) {
       {task.status === 'completed' && task.completed_at && (
         <div className="mt-2 text-xs text-gray-500">
           Completed: {formatDate(task.completed_at)}
+        </div>
+      )}
+
+      {/* Saved model info */}
+      {task.status === 'completed' && task.model_path && (
+        <div className="mt-2 flex items-center gap-1.5 text-xs text-indigo-600">
+          <Database size={12} />
+          <span>{formatModelLabel(task.model_path)}</span>
         </div>
       )}
     </div>
