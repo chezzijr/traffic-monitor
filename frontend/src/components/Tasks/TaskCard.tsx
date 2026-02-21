@@ -190,9 +190,30 @@ function TaskCardComponent({ task, onCancel, isCancelling }: TaskCardProps) {
 
       {/* Task details */}
       <div className="space-y-1 text-sm">
+        {task.network_id && (
+          <div className="flex justify-between">
+            <span className="text-gray-600">Network:</span>
+            <span
+              className="font-mono text-xs bg-gray-100 px-1.5 py-0.5 rounded"
+              title={task.network_id}
+            >
+              {task.network_id.length > 8 ? task.network_id.slice(0, 8) : task.network_id}
+            </span>
+          </div>
+        )}
+        <div className="flex justify-between">
+          <span className="text-gray-600">Mode:</span>
+          <span className="font-medium">
+            {task.mode === 'all' ? 'All Junctions' : 'Single Junction'}
+          </span>
+        </div>
         <div className="flex justify-between">
           <span className="text-gray-600">Traffic Light:</span>
-          <span className="font-medium">{task.traffic_light_id}</span>
+          <span className="font-medium">
+            {task.mode === 'all' && task.tl_ids && task.tl_ids.length > 0
+              ? `${task.tl_ids.length} junctions`
+              : task.traffic_light_id}
+          </span>
         </div>
         <div className="flex justify-between">
           <span className="text-gray-600">Algorithm:</span>

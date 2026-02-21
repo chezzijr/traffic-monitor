@@ -38,6 +38,8 @@ export interface ModelInfo {
   filename: string;
   network_id: string;
   tl_id: string;
+  tl_ids?: string[];
+  mode?: string;
   algorithm: string;
   timestamp: string;
   size_bytes: number;

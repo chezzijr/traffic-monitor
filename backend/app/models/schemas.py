@@ -3,7 +3,7 @@
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class BoundingBox(BaseModel):
@@ -238,11 +238,15 @@ class TrainingStatusResponse(BaseModel):
 class ModelInfo(BaseModel):
     """Information about a trained model."""
 
+    model_config = ConfigDict(extra="ignore")
+
     id: str = Field(..., description="Model ID (filename without .zip)")
     path: str = Field(..., description="Full path to model file")
     filename: str = Field(..., description="Model filename")
     network_id: str = Field(..., description="Network this model was trained on")
     tl_id: str = Field(..., description="Traffic light this model controls")
+    tl_ids: list[str] | None = Field(default=None, description="Traffic light IDs (multi-junction)")
+    mode: str | None = Field(default=None, description="Training mode (multi_junction for grouped models)")
     algorithm: str = Field(..., description="Algorithm used for training")
     timestamp: str = Field(..., description="Training timestamp")
     size_bytes: int = Field(..., ge=0, description="Model file size in bytes")

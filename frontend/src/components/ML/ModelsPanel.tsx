@@ -1,20 +1,46 @@
-import { useState, useEffect } from 'react';
-import { Database, Trash2, Upload, RefreshCw } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import { Database, Trash2, Upload, RefreshCw, Filter } from 'lucide-react';
 import { useMLStore } from '../../store/mlStore';
 import { useMapStore } from '../../store/mapStore';
 import { mlService } from '../../services/mlService';
 import type { ModelInfo } from '../../types/ml';
 
+/** Format a network_id to its first 8 characters for display. */
+function abbreviateNetworkId(networkId: string): string {
+  return networkId.length > 8 ? networkId.slice(0, 8) : networkId;
+}
+
+/** Render the TL identifier text for a model, handling multi-junction. */
+function formatTlLabel(model: ModelInfo): string {
+  if (model.mode === 'multi_junction' && model.tl_ids && model.tl_ids.length > 0) {
+    return `Multi-junction (${model.tl_ids.length} TLs)`;
+  }
+  return model.tl_id;
+}
+
 export function ModelsPanel() {
   const [isLoading, setIsLoading] = useState(false);
   const [deployingModelId, setDeployingModelId] = useState<string | null>(null);
   const [selectedTlId, setSelectedTlId] = useState('');
+  const [networkFilter, setNetworkFilter] = useState<string>('all');
 
   const { models, setModels, removeModel, setError, isLoadingModels, setLoadingModels } = useMLStore();
   const intersections = useMapStore((state) => state.intersections);
 
   // Get traffic lights from intersections
   const trafficLights = intersections.filter((i) => i.has_traffic_light && i.sumo_tl_id);
+
+  // Derive unique network IDs from models
+  const networkIds = useMemo(() => {
+    const ids = new Set(models.map((m) => m.network_id));
+    return Array.from(ids).sort();
+  }, [models]);
+
+  // Filter models by selected network
+  const filteredModels = useMemo(() => {
+    if (networkFilter === 'all') return models;
+    return models.filter((m) => m.network_id === networkFilter);
+  }, [models, networkFilter]);
 
   // Load models on mount
   useEffect(() => {
@@ -98,22 +124,51 @@ export function ModelsPanel() {
         </button>
       </div>
 
+      {/* Network filter - only shown when multiple networks have models */}
+      {networkIds.length > 1 && (
+        <div className="flex items-center gap-2 mb-3">
+          <Filter size={14} className="text-gray-400 shrink-0" />
+          <select
+            value={networkFilter}
+            onChange={(e) => setNetworkFilter(e.target.value)}
+            className="flex-1 px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+          >
+            <option value="all">All Networks ({models.length})</option>
+            {networkIds.map((nid) => (
+              <option key={nid} value={nid}>
+                {abbreviateNetworkId(nid)} ({models.filter((m) => m.network_id === nid).length})
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {isLoadingModels && models.length === 0 ? (
         <p className="text-sm text-gray-500">Loading models...</p>
       ) : models.length === 0 ? (
         <p className="text-sm text-gray-500">No trained models yet</p>
+      ) : filteredModels.length === 0 ? (
+        <p className="text-sm text-gray-500">No models for selected network</p>
       ) : (
         <div className="space-y-3">
-          {models.map((model) => (
+          {filteredModels.map((model) => (
             <div
               key={model.id}
               className="border rounded-lg p-3"
             >
               <div className="flex items-start justify-between">
                 <div className="flex-1 min-w-0">
-                  <p className="font-medium text-sm">{model.algorithm.toUpperCase()} Model</p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-medium text-sm">{model.algorithm.toUpperCase()} Model</p>
+                    <span
+                      className="inline-block px-1.5 py-0.5 text-[10px] font-mono bg-gray-100 text-gray-600 rounded"
+                      title={model.network_id}
+                    >
+                      {abbreviateNetworkId(model.network_id)}
+                    </span>
+                  </div>
                   <p className="text-xs text-gray-500">
-                    TL: {model.tl_id} · {formatDate(model.created_at)} · {formatBytes(model.size_bytes)}
+                    TL: {formatTlLabel(model)} · {formatDate(model.created_at)} · {formatBytes(model.size_bytes)}
                   </p>
                   <p className="text-xs text-gray-400 truncate" title={model.id}>
                     {model.id}

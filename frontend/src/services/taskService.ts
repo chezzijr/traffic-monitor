@@ -10,6 +10,8 @@ interface TaskApiResponse {
   metadata: {
     network_id?: string;
     tl_id?: string;
+    tl_ids?: string[] | null;
+    mode?: string;
     algorithm?: string;
     total_timesteps?: number;
     scenario?: string;
@@ -41,6 +43,8 @@ function transformTask(apiTask: TaskApiResponse): Task {
     progress: info.progress ?? 0,
     network_id: metadata.network_id ?? '',
     traffic_light_id: metadata.tl_id ?? '',
+    mode: (metadata.mode as 'single' | 'all') ?? undefined,
+    tl_ids: metadata.tl_ids ?? undefined,
     algorithm: (metadata.algorithm?.toUpperCase() as 'DQN' | 'PPO') ?? 'DQN',
     total_timesteps: metadata.total_timesteps ?? 0,
     current_timestep: info.timestep ?? 0,

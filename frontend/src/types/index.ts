@@ -127,6 +127,8 @@ export interface Task {
   progress: number;
   network_id: string;
   traffic_light_id: string;
+  mode?: 'single' | 'all';
+  tl_ids?: string[];
   algorithm: 'DQN' | 'PPO';
   total_timesteps: number;
   current_timestep: number;
