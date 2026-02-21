@@ -570,6 +570,17 @@ def convert_to_sumo(network_id: str) -> dict:
         _populate_sumo_tl_ids(cached["intersections"], osm_to_sumo_map)
         # Parse junctions from SUMO network
         sumo_junctions = _parse_sumo_junctions(output_path)
+        # Persist network metadata if not already saved
+        meta_path = SIMULATION_NETWORKS_DIR / f"{network_id}.meta.json"
+        if not meta_path.exists():
+            from app.services import network_service
+            bbox = cached["bbox"]
+            network_service.save_network_metadata(
+                network_id=network_id,
+                bbox={"south": bbox[0], "west": bbox[1], "north": bbox[2], "east": bbox[3]},
+                junctions=[{"id": j["id"], "lat": j["lat"], "lon": j["lon"], "tl_id": j["tl_id"]} for j in sumo_junctions],
+                road_count=cached.get("road_count", 0),
+            )
         return {
             "network_path": str(output_path),
             "traffic_lights": tl_data["traffic_lights"],
@@ -647,6 +658,18 @@ def convert_to_sumo(network_id: str) -> dict:
 
         # Parse junctions from SUMO network
         sumo_junctions = _parse_sumo_junctions(output_path)
+
+        # Persist network metadata if not already saved
+        meta_path = SIMULATION_NETWORKS_DIR / f"{network_id}.meta.json"
+        if not meta_path.exists():
+            from app.services import network_service
+            bbox = cached["bbox"]
+            network_service.save_network_metadata(
+                network_id=network_id,
+                bbox={"south": bbox[0], "west": bbox[1], "north": bbox[2], "east": bbox[3]},
+                junctions=[{"id": j["id"], "lat": j["lat"], "lon": j["lon"], "tl_id": j["tl_id"]} for j in sumo_junctions],
+                road_count=cached.get("road_count", 0),
+            )
 
         return {
             "network_path": str(output_path),
