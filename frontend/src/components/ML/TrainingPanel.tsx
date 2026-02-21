@@ -44,18 +44,34 @@ export function TrainingPanel() {
     }
   };
 
+  const isAllJunctionsSelected = tlId === '__all__';
+
+  const canStartTraining =
+    !!networkId && (isAllJunctionsSelected ? signalizedJunctions.length > 0 : !!tlId);
+
   const handleStartTraining = async () => {
-    if (!networkId || !tlId) return;
+    if (!networkId || !canStartTraining) return;
 
     setIsLoading(true);
 
     try {
-      const result = await taskService.createTrainingTask({
-        network_id: networkId,
-        traffic_light_id: tlId,
-        algorithm: algorithm.toUpperCase() as 'DQN' | 'PPO',
-        total_timesteps: totalTimesteps,
-      });
+      const params = isAllJunctionsSelected
+        ? {
+            network_id: networkId,
+            mode: 'all' as const,
+            traffic_light_ids: signalizedJunctions.map((j) => j.tl_id!),
+            algorithm: algorithm.toUpperCase() as 'DQN' | 'PPO',
+            total_timesteps: totalTimesteps,
+          }
+        : {
+            network_id: networkId,
+            mode: 'single' as const,
+            traffic_light_id: tlId!,
+            algorithm: algorithm.toUpperCase() as 'DQN' | 'PPO',
+            total_timesteps: totalTimesteps,
+          };
+
+      const result = await taskService.createTrainingTask(params);
       toast.success(`Training task created! View progress in Tasks tab (ID: ${result.task_id.slice(0, 8)}...)`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to create training task');
@@ -92,12 +108,25 @@ export function TrainingPanel() {
           disabled={!networkId || signalizedJunctions.length === 0}
         >
           <option value="">Select a junction</option>
+          {signalizedJunctions.length > 0 && (
+            <option value="__all__">All Junctions ({signalizedJunctions.length})</option>
+          )}
           {signalizedJunctions.map((junction) => (
             <option key={junction.tl_id} value={junction.tl_id!}>
               {junction.tl_id} ({junction.name || `Junction ${junction.id}`})
             </option>
           ))}
         </select>
+        {isAllJunctionsSelected && (
+          <div className="mt-2 p-2 bg-indigo-50 rounded-md">
+            <p className="text-xs text-indigo-700 font-medium">
+              Training on {signalizedJunctions.length} signalized junction{signalizedJunctions.length !== 1 ? 's' : ''} (single task)
+            </p>
+            <p className="text-xs text-indigo-600 mt-1 break-all">
+              {signalizedJunctions.map((j) => j.tl_id).join(', ')}
+            </p>
+          </div>
+        )}
         {signalizedJunctions.length === 0 && networkId && (
           <div className="mt-2">
             <p className="text-xs text-amber-600 mb-2">
@@ -150,7 +179,7 @@ export function TrainingPanel() {
       {/* Start button */}
       <button
         onClick={handleStartTraining}
-        disabled={isLoading || !networkId || !tlId}
+        disabled={isLoading || !canStartTraining}
         className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
       >
         <Play size={16} />
