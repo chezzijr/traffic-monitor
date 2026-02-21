@@ -27,6 +27,17 @@ export interface NetworkInfo {
   bbox: BoundingBox;
 }
 
+// Matches backend NetworkDetail
+export interface NetworkDetail {
+  network_id: string;
+  bbox: BoundingBox;
+  created_at: string;
+  junctions: { id: string; lat: number; lon: number; tl_id: string | null }[];
+  road_count: number;
+  name: string | null;
+  signalized_junction_count: number;
+}
+
 // Matches backend SumoJunction
 export interface SumoJunction {
   id: string;

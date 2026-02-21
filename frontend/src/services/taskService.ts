@@ -63,9 +63,12 @@ function transformTask(apiTask: TaskApiResponse): Task {
 // Request types
 export interface CreateTrainingTaskRequest {
   network_id: string;
-  traffic_light_id: string;
+  traffic_light_id?: string;      // For single-junction (backward compat)
+  traffic_light_ids?: string[];   // For multi-junction
+  mode?: 'single' | 'all';
   algorithm: 'DQN' | 'PPO';
   total_timesteps: number;
+  scenario?: string;
 }
 
 // Response types

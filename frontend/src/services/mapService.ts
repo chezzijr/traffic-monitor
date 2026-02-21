@@ -1,5 +1,5 @@
 import { api } from './api';
-import type { BoundingBox, NetworkInfo, Intersection, SumoJunction } from '../types';
+import type { BoundingBox, NetworkInfo, NetworkDetail, Intersection, SumoJunction } from '../types';
 
 export const mapService = {
   // Extract network from OSM for a given bounding box
@@ -33,6 +33,23 @@ export const mapService = {
   // Get list of cached network IDs
   async getNetworks(): Promise<string[]> {
     const response = await api.get<string[]>('/map/networks');
+    return response.data;
+  },
+
+  // Get detailed info for all saved networks
+  async getNetworkDetails(): Promise<NetworkDetail[]> {
+    const response = await api.get<NetworkDetail[]>('/networks');
+    return response.data;
+  },
+
+  // Delete a saved network
+  async deleteNetwork(id: string): Promise<void> {
+    await api.delete(`/networks/${id}`);
+  },
+
+  // Load a saved network into the active session
+  async loadNetwork(id: string): Promise<NetworkDetail> {
+    const response = await api.post<NetworkDetail>(`/networks/${id}/load`);
     return response.data;
   },
 };
