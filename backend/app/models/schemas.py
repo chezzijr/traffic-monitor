@@ -288,7 +288,9 @@ class CreateTrainingTaskRequest(BaseModel):
     """Request body for creating a training task."""
 
     network_id: str = Field(..., description="ID of the network to train on")
-    traffic_light_id: str = Field(..., description="Traffic light ID to optimize")
+    traffic_light_id: str | None = Field(None, description="Traffic light ID (for single-junction mode)")
+    traffic_light_ids: list[str] | None = Field(None, description="Traffic light IDs (for multi-junction mode)")
+    mode: str = Field(default="single", description="Training mode: 'single' or 'all'")
     algorithm: TaskAlgorithm = Field(default=TaskAlgorithm.DQN, description="RL algorithm to use")
     total_timesteps: int = Field(default=10000, ge=100, le=100000, description="Total training timesteps")
     scenario: TrafficScenario = Field(default=TrafficScenario.MODERATE, description="Traffic scenario for training")
@@ -307,6 +309,8 @@ class TaskMetadata(BaseModel):
 
     network_id: str | None = Field(None, description="Network ID")
     tl_id: str | None = Field(None, description="Traffic light ID")
+    tl_ids: list[str] | None = Field(None, description="Traffic light IDs (for multi-junction)")
+    mode: str | None = Field(None, description="Training mode: single or all")
     algorithm: str | None = Field(None, description="Algorithm used")
     total_timesteps: int | None = Field(None, description="Total timesteps")
     scenario: str | None = Field(None, description="Traffic scenario")

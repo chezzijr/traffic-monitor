@@ -57,10 +57,29 @@ def create_training_task(request: CreateTrainingTaskRequest) -> CreateTrainingTa
 
     The task will be dispatched to a Celery worker and run in the background.
     Progress can be monitored via the /tasks/{id}/stream SSE endpoint.
+
+    When mode is "all", resolves all signalized junction IDs from the network
+    metadata and dispatches a multi-junction training task.
     """
+    tl_ids = request.traffic_light_ids
+
+    if request.mode == "all":
+        from app.services.network_service import load_network_metadata
+
+        metadata = load_network_metadata(request.network_id)
+        if metadata:
+            tl_ids = [j["tl_id"] for j in metadata.get("junctions", []) if j.get("tl_id")]
+        if not tl_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No signalized junctions found in network",
+            )
+
     result = task_service.create_training_task(
         network_id=request.network_id,
         tl_id=request.traffic_light_id,
+        tl_ids=tl_ids,
+        mode=request.mode,
         algorithm=request.algorithm.value.lower(),
         total_timesteps=request.total_timesteps,
         scenario=request.scenario.value,

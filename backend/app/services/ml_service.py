@@ -434,14 +434,20 @@ def get_training_status() -> dict[str, Any]:
 def list_models() -> list[dict[str, Any]]:
     """List all available trained models.
 
+    Scans for both single-junction .zip files and multi-junction grouped
+    directories (containing metadata.json + per-agent .zip files).
+
     Returns:
         List of dicts with model information
     """
+    import json as _json
+
     models = []
 
     if not MODELS_DIR.exists():
         return models
 
+    # Scan for single-junction .zip models (top-level files only)
     for model_file in MODELS_DIR.glob("*.zip"):
         # Parse filename: network_id_tl_id_algorithm_timestamp.zip
         stem = model_file.stem  # Remove .zip
@@ -471,6 +477,47 @@ def list_models() -> list[dict[str, Any]]:
             "created_at": datetime.fromtimestamp(stat.st_ctime).isoformat(),
             "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
         })
+
+    # Scan for multi-junction grouped directories
+    for model_dir in MODELS_DIR.iterdir():
+        if not model_dir.is_dir():
+            continue
+
+        metadata_file = model_dir / "metadata.json"
+        if not metadata_file.exists():
+            continue
+
+        try:
+            with open(metadata_file) as f:
+                metadata = _json.load(f)
+
+            # Calculate total size of all files in the directory
+            total_size = sum(
+                fp.stat().st_size for fp in model_dir.iterdir() if fp.is_file()
+            )
+            dir_stat = model_dir.stat()
+
+            # Extract timestamp from directory name if possible
+            # Format: {network_id}_multi_{algo}_{timestamp}
+            dir_parts = model_dir.name.rsplit("_", 1)
+            timestamp = dir_parts[-1] if len(dir_parts) >= 2 else "unknown"
+
+            models.append({
+                "path": str(model_dir),
+                "filename": model_dir.name,
+                "network_id": metadata.get("network_id", "unknown"),
+                "tl_id": ",".join(metadata.get("tl_ids", [])),
+                "tl_ids": metadata.get("tl_ids", []),
+                "algorithm": metadata.get("algorithm", "unknown"),
+                "timestamp": timestamp,
+                "size_bytes": total_size,
+                "created_at": datetime.fromtimestamp(dir_stat.st_ctime).isoformat(),
+                "modified_at": datetime.fromtimestamp(dir_stat.st_mtime).isoformat(),
+                "mode": "multi_junction",
+                "scenario": metadata.get("scenario"),
+            })
+        except (OSError, _json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"Skipping invalid model directory {model_dir}: {e}")
 
     # Sort by modification time, newest first
     models.sort(key=lambda m: m["modified_at"], reverse=True)

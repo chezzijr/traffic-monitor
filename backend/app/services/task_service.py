@@ -17,7 +17,7 @@ import redis
 from celery.result import AsyncResult
 
 from app.celery_app import celery_app
-from app.tasks.training_task import train_traffic_light
+from app.tasks.training_task import train_multi_junction, train_traffic_light
 
 logger = logging.getLogger(__name__)
 
@@ -39,16 +39,23 @@ def get_redis_client() -> redis.Redis:
 
 def create_training_task(
     network_id: str,
-    tl_id: str,
+    tl_id: str | None = None,
+    tl_ids: list[str] | None = None,
+    mode: str = "single",
     algorithm: str = "dqn",
     total_timesteps: int = 10000,
     scenario: str = "moderate",
 ) -> dict[str, Any]:
     """Create and dispatch a training task.
 
+    Dispatches either a single-junction or multi-junction Celery task based
+    on the mode and provided traffic light IDs.
+
     Args:
         network_id: ID of the SUMO network to train on
-        tl_id: ID of the traffic light to optimize
+        tl_id: ID of the traffic light to optimize (single-junction mode)
+        tl_ids: List of traffic light IDs (multi-junction mode)
+        mode: Training mode ('single' or 'all')
         algorithm: RL algorithm to use ('dqn' or 'ppo')
         total_timesteps: Total timesteps to train for
         scenario: Traffic scenario for training
@@ -56,22 +63,39 @@ def create_training_task(
     Returns:
         dict with task_id, status, and created_at
     """
-    # Dispatch Celery task
-    async_result = train_traffic_light.delay(
-        network_id=network_id,
-        traffic_light_id=tl_id,
-        algorithm=algorithm,
-        total_timesteps=total_timesteps,
-        scenario=scenario,
-    )
+    # Determine whether to dispatch single or multi-junction task
+    use_multi = mode == "all" or (tl_ids is not None and len(tl_ids) > 1)
+
+    if use_multi:
+        if not tl_ids:
+            raise ValueError("tl_ids must be provided for multi-junction training")
+        async_result = train_multi_junction.delay(
+            network_id=network_id,
+            traffic_light_ids=tl_ids,
+            algorithm=algorithm,
+            total_timesteps=total_timesteps,
+            scenario=scenario,
+        )
+    else:
+        if not tl_id:
+            raise ValueError("tl_id must be provided for single-junction training")
+        async_result = train_traffic_light.delay(
+            network_id=network_id,
+            traffic_light_id=tl_id,
+            algorithm=algorithm,
+            total_timesteps=total_timesteps,
+            scenario=scenario,
+        )
 
     task_id = async_result.id
     created_at = datetime.now().isoformat()
 
     # Store task metadata in Redis
-    metadata = {
+    metadata: dict[str, Any] = {
         "network_id": network_id,
         "tl_id": tl_id,
+        "tl_ids": tl_ids,
+        "mode": mode,
         "algorithm": algorithm,
         "total_timesteps": total_timesteps,
         "scenario": scenario,
@@ -87,7 +111,7 @@ def create_training_task(
     # Add task ID to list (prepend for newest first)
     redis_client.lpush(TASKS_LIST_KEY, task_id)
 
-    logger.info(f"Created training task: {task_id}")
+    logger.info(f"Created training task: {task_id} (mode={mode})")
 
     return {
         "task_id": task_id,

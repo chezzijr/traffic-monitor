@@ -17,6 +17,8 @@ from stable_baselines3.common.callbacks import BaseCallback
 
 from app.celery_app import celery_app
 from app.ml.environment import TrafficLightEnv
+from app.ml.multi_agent_env import MultiAgentTrafficLightEnv
+from app.ml.multi_agent_trainer import MultiAgentCallback, MultiAgentTrainer
 from app.ml.trainer import Algorithm, MetricsLoggingCallback, TrafficLightTrainer
 from app.services.osm_service import SIMULATION_NETWORKS_DIR
 
@@ -697,6 +699,515 @@ def train_traffic_light(
         task_id=task_id,
         network_id=network_id,
         traffic_light_id=traffic_light_id,
+        algorithm=algorithm,
+        total_timesteps=total_timesteps,
+        scenario=scenario,
+    )
+
+
+# =============================================================================
+# Multi-junction training
+# =============================================================================
+
+
+class MultiCancellationCallback(MultiAgentCallback):
+    """Multi-agent callback that checks for Celery task cancellation.
+
+    Periodically queries the Celery task state and returns False from on_step
+    to stop training if the task has been revoked.
+    """
+
+    def __init__(self, task_id: str, check_interval: int = 100) -> None:
+        """Initialize the cancellation callback.
+
+        Args:
+            task_id: Celery task ID to monitor
+            check_interval: Check for cancellation every N steps
+        """
+        self.task_id = task_id
+        self.check_interval = check_interval
+
+    def on_step(
+        self,
+        step: int,
+        total_timesteps: int,
+        obs_dict: dict[str, Any],
+        rewards_dict: dict[str, float],
+        infos_dict: dict[str, dict],
+    ) -> bool:
+        """Check if the Celery task has been revoked.
+
+        Returns:
+            False if task is revoked (stop training), True otherwise
+        """
+        if step % self.check_interval != 0:
+            return True
+
+        result = AsyncResult(self.task_id)
+        if result.state == "REVOKED":
+            logger.info(f"Task {self.task_id} was revoked, stopping multi-agent training")
+            return False
+
+        return True
+
+
+class MultiProgressCallback(MultiAgentCallback):
+    """Multi-agent callback that publishes training progress to Redis.
+
+    Aggregates metrics across all agents (mean of per-agent values) and
+    publishes progress updates at configurable intervals for real-time
+    monitoring via SSE.
+    """
+
+    def __init__(
+        self,
+        task_id: str,
+        total_timesteps: int,
+        redis_client: redis.Redis,
+        publish_interval: int = 500,
+    ) -> None:
+        """Initialize the progress publishing callback.
+
+        Args:
+            task_id: Celery task ID
+            total_timesteps: Total training timesteps
+            redis_client: Redis client for publishing
+            publish_interval: Publish progress every N steps
+        """
+        self.task_id = task_id
+        self.total_timesteps = total_timesteps
+        self.redis_client = redis_client
+        self.publish_interval = publish_interval
+        self.channel = f"task:{task_id}:updates"
+
+        # Per-episode aggregated rewards (mean across agents)
+        self._episode_mean_rewards: list[float] = []
+        # Per-agent cumulative rewards for current episode
+        self._current_episode_rewards: dict[str, float] = {}
+
+        # Traffic metrics accumulators (per step, across all agents)
+        self._step_avg_waiting_times: list[float] = []
+        self._step_avg_queue_lengths: list[float] = []
+        self._step_throughputs: list[float] = []
+        # Per-episode averages
+        self._episode_avg_waiting_times: list[float] = []
+        self._episode_avg_queue_lengths: list[float] = []
+        self._episode_throughputs: list[float] = []
+
+    def on_step(
+        self,
+        step: int,
+        total_timesteps: int,
+        obs_dict: dict[str, Any],
+        rewards_dict: dict[str, float],
+        infos_dict: dict[str, dict],
+    ) -> bool:
+        """Accumulate rewards and publish progress at intervals.
+
+        Returns:
+            Always True (continue training)
+        """
+        import numpy as np
+
+        # Accumulate per-agent rewards
+        for tl_id, reward in rewards_dict.items():
+            self._current_episode_rewards[tl_id] = (
+                self._current_episode_rewards.get(tl_id, 0.0) + reward
+            )
+
+        # Collect traffic metrics from info dicts (aggregate across agents)
+        throughput_values = []
+        for tl_id, info in infos_dict.items():
+            if "throughput" in info:
+                throughput_values.append(info["throughput"])
+
+        if throughput_values:
+            self._step_throughputs.append(float(np.sum(throughput_values)))
+
+        # Publish at intervals
+        if step % self.publish_interval == 0:
+            self._publish_progress(step)
+
+        return True
+
+    def on_episode_end(
+        self,
+        episode_count: int,
+        episode_rewards: dict[str, float],
+    ) -> None:
+        """Record aggregated episode metrics and reset accumulators."""
+        import numpy as np
+
+        # Mean reward across all agents for this episode
+        agent_rewards = list(episode_rewards.values())
+        if agent_rewards:
+            self._episode_mean_rewards.append(float(np.mean(agent_rewards)))
+
+        # Finalize traffic metrics for this episode
+        if self._step_throughputs:
+            self._episode_throughputs.append(float(np.sum(self._step_throughputs)))
+
+        # Reset step accumulators
+        self._step_avg_waiting_times.clear()
+        self._step_avg_queue_lengths.clear()
+        self._step_throughputs.clear()
+
+        # Reset current episode rewards
+        self._current_episode_rewards.clear()
+
+    def _publish_progress(self, step: int) -> None:
+        """Publish current progress to Redis."""
+        import numpy as np
+
+        recent_rewards = self._episode_mean_rewards[-10:] if self._episode_mean_rewards else []
+        mean_reward = float(np.mean(recent_rewards)) if recent_rewards else None
+
+        # Get live traffic metrics
+        live_throughput: float | None = None
+        if self._episode_throughputs:
+            live_throughput = float(np.mean(self._episode_throughputs[-10:]))
+
+        progress = TrainingProgress(
+            task_id=self.task_id,
+            status="running",
+            timestep=step,
+            total_timesteps=self.total_timesteps,
+            progress=step / self.total_timesteps,
+            episode_count=len(self._episode_mean_rewards),
+            mean_reward=mean_reward,
+            message=f"Training: {step}/{self.total_timesteps} steps",
+            throughput=live_throughput,
+        )
+
+        try:
+            progress_data = json.dumps(progress.to_dict())
+            self.redis_client.publish(self.channel, progress_data)
+            self.redis_client.setex(f"task:{self.task_id}:progress", 3600, progress_data)
+        except Exception as e:
+            logger.warning(f"Failed to publish multi-agent progress: {e}")
+
+    @property
+    def episode_mean_rewards(self) -> list[float]:
+        """Get recorded mean episode rewards."""
+        return self._episode_mean_rewards.copy()
+
+    def get_final_metrics(self, last_n: int = 10) -> dict[str, float | None]:
+        """Get averaged traffic metrics from the last N episodes.
+
+        Args:
+            last_n: Number of recent episodes to average over
+
+        Returns:
+            Dict with throughput (or None if no data)
+        """
+        import numpy as np
+
+        def _avg_last(values: list[float], n: int) -> float | None:
+            if not values:
+                return None
+            return float(np.mean(values[-n:]))
+
+        return {
+            "avg_waiting_time": _avg_last(self._episode_avg_waiting_times, last_n),
+            "avg_queue_length": _avg_last(self._episode_avg_queue_lengths, last_n),
+            "throughput": _avg_last(self._episode_throughputs, last_n),
+        }
+
+
+def _run_multi_baseline_episodes(
+    env: MultiAgentTrafficLightEnv,
+    num_episodes: int = 3,
+) -> dict[str, float]:
+    """Run baseline episodes using SUMO's default fixed-time traffic light programs.
+
+    Runs the multi-agent simulation without any RL agent intervention to
+    establish baseline traffic metrics for comparison with trained models.
+
+    Args:
+        env: The MultiAgentTrafficLightEnv instance
+        num_episodes: Number of baseline episodes to run (default: 3)
+
+    Returns:
+        Dict with averaged baseline metrics: avg_waiting_time, avg_queue_length, throughput
+    """
+    import numpy as np
+
+    from app.services import sumo_service
+
+    episode_metrics: list[dict[str, float]] = []
+
+    for ep in range(num_episodes):
+        env.reset()
+        num_action_intervals = env.max_steps // env.steps_per_action
+
+        step_waiting_times: list[float] = []
+        step_queue_lengths: list[float] = []
+        total_throughput = 0
+
+        for _ in range(num_action_intervals):
+            # Run sub-steps without setting any phase (use SUMO default programs)
+            for _ in range(env.steps_per_action):
+                sumo_service.step()
+                if sumo_service.traci is not None:
+                    total_throughput += sumo_service.traci.simulation.getArrivedNumber()
+
+            # Collect metrics across all junctions' controlled lanes
+            all_waiting_counts: list[float] = []
+            all_waiting_times: list[float] = []
+            for tl_id in env.tl_ids:
+                lane_waiting_counts = env._get_lane_waiting_counts(tl_id)
+                lane_waiting_times = env._get_lane_waiting_times(tl_id)
+                all_waiting_counts.extend(lane_waiting_counts.tolist())
+                all_waiting_times.extend(lane_waiting_times.tolist())
+
+            # Average waiting time across all controlled lanes
+            total_wait = float(np.sum(all_waiting_times))
+            num_vehicles = len(sumo_service.traci.vehicle.getIDList()) if sumo_service.traci is not None else 0
+            step_waiting_times.append(total_wait / max(1, num_vehicles))
+
+            # Average queue length across all controlled lanes
+            step_queue_lengths.append(
+                float(np.mean(all_waiting_counts)) if all_waiting_counts else 0.0
+            )
+
+        episode_metrics.append({
+            "avg_waiting_time": float(np.mean(step_waiting_times)) if step_waiting_times else 0.0,
+            "avg_queue_length": float(np.mean(step_queue_lengths)) if step_queue_lengths else 0.0,
+            "throughput": float(total_throughput),
+        })
+
+        logger.info(f"Multi-agent baseline episode {ep + 1}/{num_episodes} complete: {episode_metrics[-1]}")
+
+    # Average across all episodes
+    return {
+        "avg_waiting_time": float(np.mean([m["avg_waiting_time"] for m in episode_metrics])),
+        "avg_queue_length": float(np.mean([m["avg_queue_length"] for m in episode_metrics])),
+        "throughput": float(np.mean([m["throughput"] for m in episode_metrics])),
+    }
+
+
+def run_multi_junction_training(
+    task_id: str,
+    network_id: str,
+    traffic_light_ids: list[str],
+    algorithm: str = "dqn",
+    total_timesteps: int = 10000,
+    scenario: str = "moderate",
+) -> dict[str, Any]:
+    """Run multi-junction ML training for traffic lights.
+
+    Core training logic for multi-agent training. Creates an isolated SUMO
+    instance with a MultiAgentTrafficLightEnv, runs baseline episodes, trains
+    with MultiAgentTrainer, and publishes progress via Redis.
+
+    Args:
+        task_id: Celery task ID (for progress publishing)
+        network_id: ID of the SUMO network to train on
+        traffic_light_ids: List of traffic light IDs to optimize
+        algorithm: RL algorithm to use ('dqn' or 'ppo')
+        total_timesteps: Total timesteps to train for
+        scenario: Traffic scenario for training
+
+    Returns:
+        dict with training results including model path
+
+    Raises:
+        FileNotFoundError: If network file doesn't exist
+        ValueError: If algorithm is invalid
+    """
+    redis_client = get_redis_client()
+    channel = f"task:{task_id}:updates"
+    env = None
+
+    tl_label = f"{len(traffic_light_ids)} junctions"
+
+    # Publish started event
+    started_progress = TrainingProgress(
+        task_id=task_id,
+        status="started",
+        total_timesteps=total_timesteps,
+        message=f"Starting multi-junction training for {tl_label} on {network_id}",
+    )
+    started_data = json.dumps(started_progress.to_dict())
+    redis_client.publish(channel, started_data)
+    redis_client.setex(f"task:{task_id}:progress", 3600, started_data)
+
+    try:
+        # Validate algorithm
+        try:
+            algo_enum = Algorithm(algorithm.lower())
+        except ValueError:
+            raise ValueError(f"Invalid algorithm: {algorithm}. Must be 'dqn' or 'ppo'")
+
+        # Get network path
+        network_path = _get_network_path(network_id)
+
+        # Create isolated multi-agent SUMO environment
+        logger.info(f"Creating MultiAgentTrafficLightEnv for {tl_label} on {network_id}")
+        env = MultiAgentTrafficLightEnv(
+            network_path=str(network_path),
+            network_id=network_id,
+            tl_ids=traffic_light_ids,
+            gui=False,
+            scenario=scenario,
+            algorithm=algorithm.lower(),
+        )
+
+        # Run baseline simulation before training
+        baseline_progress = TrainingProgress(
+            task_id=task_id,
+            status="started",
+            total_timesteps=total_timesteps,
+            message="Running multi-junction baseline simulation...",
+        )
+        baseline_progress_data = json.dumps(baseline_progress.to_dict())
+        redis_client.publish(channel, baseline_progress_data)
+        redis_client.setex(f"task:{task_id}:progress", 3600, baseline_progress_data)
+
+        logger.info("Running multi-agent baseline episodes for comparison metrics")
+        baseline = _run_multi_baseline_episodes(env, num_episodes=3)
+        logger.info(f"Multi-agent baseline metrics: {baseline}")
+
+        # Create multi-agent trainer
+        trainer = MultiAgentTrainer(env=env, algorithm=algo_enum)
+
+        # Create multi-agent callbacks
+        cancellation_cb = MultiCancellationCallback(task_id=task_id)
+        progress_cb = MultiProgressCallback(
+            task_id=task_id,
+            total_timesteps=total_timesteps,
+            redis_client=redis_client,
+        )
+
+        # Train the models
+        logger.info(f"Starting multi-agent training: {total_timesteps} timesteps with {algorithm}")
+        train_result = trainer.train(
+            total_timesteps=total_timesteps,
+            callbacks=[cancellation_cb, progress_cb],
+        )
+
+        # Check if training was cancelled
+        result = AsyncResult(task_id)
+        if result.state == "REVOKED":
+            cancelled_progress = TrainingProgress(
+                task_id=task_id,
+                status="cancelled",
+                timestep=train_result["total_steps"],
+                total_timesteps=total_timesteps,
+                progress=train_result["total_steps"] / total_timesteps,
+                message="Training cancelled by user",
+            )
+            cancelled_data = json.dumps(cancelled_progress.to_dict())
+            redis_client.publish(channel, cancelled_data)
+            redis_client.setex(f"task:{task_id}:progress", 3600, cancelled_data)
+            return {"status": "cancelled", "task_id": task_id}
+
+        # Save models to grouped directory
+        MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        model_dir_name = f"{network_id}_multi_{algo_enum.value}_{timestamp}"
+        model_dir = MODELS_DIR / model_dir_name
+        trainer.save(model_dir)
+        full_model_path = str(model_dir)
+
+        # Publish completed event
+        import numpy as np
+
+        episode_rewards = progress_cb.episode_mean_rewards
+        mean_reward = float(np.mean(episode_rewards[-10:])) if episode_rewards else None
+
+        # Get final RL traffic metrics
+        rl_metrics = progress_cb.get_final_metrics()
+
+        completed_progress = TrainingProgress(
+            task_id=task_id,
+            status="completed",
+            timestep=total_timesteps,
+            total_timesteps=total_timesteps,
+            progress=1.0,
+            episode_count=len(episode_rewards),
+            mean_reward=mean_reward,
+            message="Multi-junction training completed successfully",
+            model_path=full_model_path,
+            avg_waiting_time=rl_metrics.get("avg_waiting_time"),
+            avg_queue_length=rl_metrics.get("avg_queue_length"),
+            throughput=rl_metrics.get("throughput"),
+            baseline_avg_waiting_time=baseline.get("avg_waiting_time"),
+            baseline_avg_queue_length=baseline.get("avg_queue_length"),
+            baseline_throughput=baseline.get("throughput"),
+        )
+        completed_data = json.dumps(completed_progress.to_dict())
+        redis_client.publish(channel, completed_data)
+        redis_client.setex(f"task:{task_id}:progress", 3600, completed_data)
+
+        logger.info(f"Multi-junction training completed. Models saved to {full_model_path}")
+
+        return {
+            "status": "completed",
+            "task_id": task_id,
+            "model_path": full_model_path,
+            "total_episodes": train_result["episodes"],
+            "mean_reward": mean_reward,
+        }
+
+    except Exception as e:
+        logger.error(f"Multi-junction training failed: {e}")
+
+        # Publish failed event
+        failed_progress = TrainingProgress(
+            task_id=task_id,
+            status="failed",
+            message=f"Multi-junction training failed: {str(e)}",
+            error=str(e),
+        )
+        failed_data = json.dumps(failed_progress.to_dict())
+        redis_client.publish(channel, failed_data)
+        redis_client.setex(f"task:{task_id}:progress", 3600, failed_data)
+
+        raise
+
+    finally:
+        if env is not None:
+            try:
+                env.close()
+                logger.info("Multi-agent environment closed")
+            except Exception as e:
+                logger.warning(f"Error closing multi-agent environment: {e}")
+
+
+@celery_app.task(bind=True, name="tasks.train_multi_junction")
+def train_multi_junction(
+    self,
+    network_id: str,
+    traffic_light_ids: list[str],
+    algorithm: str = "dqn",
+    total_timesteps: int = 10000,
+    scenario: str = "moderate",
+) -> dict[str, Any]:
+    """Celery task for multi-junction ML training.
+
+    Creates isolated SUMO instances for multi-agent training, publishes
+    progress updates via Redis Pub/Sub, and supports cancellation.
+
+    Args:
+        network_id: ID of the SUMO network to train on
+        traffic_light_ids: List of traffic light IDs to optimize
+        algorithm: RL algorithm to use ('dqn' or 'ppo')
+        total_timesteps: Total timesteps to train for
+        scenario: Traffic scenario for training
+
+    Returns:
+        dict with training results including model path
+
+    Raises:
+        FileNotFoundError: If network file doesn't exist
+        ValueError: If algorithm is invalid
+    """
+    task_id = self.request.id
+    return run_multi_junction_training(
+        task_id=task_id,
+        network_id=network_id,
+        traffic_light_ids=traffic_light_ids,
         algorithm=algorithm,
         total_timesteps=total_timesteps,
         scenario=scenario,
