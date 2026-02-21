@@ -1,6 +1,7 @@
 import { MapContainer as LeafletMapContainer, TileLayer } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import { MapController } from './MapController';
+import { NetworkBoundary } from './NetworkBoundary';
 
 // HCMC center coordinates
 const HCMC_CENTER: [number, number] = [10.8231, 106.6297];
@@ -22,6 +23,7 @@ export function MapContainer({ children }: MapContainerProps) {
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
       <MapController />
+      <NetworkBoundary />
       {children}
     </LeafletMapContainer>
   );

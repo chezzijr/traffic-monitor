@@ -6,3 +6,4 @@ export { RegionSelector } from './RegionSelector';
 export { MapLegend } from './MapLegend';
 export { SumoJunctionMarker } from './SumoJunctionMarker';
 export { SumoJunctionMarkers } from './SumoJunctionMarkers';
+export { NetworkBoundary } from './NetworkBoundary';
