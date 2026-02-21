@@ -74,6 +74,11 @@ def create_training_task(request: CreateTrainingTaskRequest) -> CreateTrainingTa
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No signalized junctions found in network",
             )
+        if len(tl_ids) > 10:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Maximum 10 junctions for multi-junction training, got {len(tl_ids)}",
+            )
 
     result = task_service.create_training_task(
         network_id=request.network_id,

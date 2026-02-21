@@ -200,6 +200,14 @@ class MultiAgentTrainer:
         # Since we drive the loop manually, configure it here so model.train()
         # can log without AttributeError.
         model._logger = sb3_utils.configure_logger(verbose=0)
+
+        # PPO.train() accesses num_timesteps and _current_progress_remaining
+        # which are normally set by _setup_learn(). Initialize them so the
+        # manual training loop works without calling .learn().
+        if algorithm == Algorithm.PPO:
+            model.num_timesteps = 0
+            model._current_progress_remaining = 1.0
+
         return model
 
     # ------------------------------------------------------------------

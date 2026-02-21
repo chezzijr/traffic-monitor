@@ -267,12 +267,20 @@ class MultiAgentTrafficLightEnv:
             agent_rewards[tl_id] = self._compute_reward(tl_id)
             terminateds[tl_id] = False  # Episode doesn't naturally terminate
             truncateds[tl_id] = truncated
+            # Compute per-agent traffic metrics
+            lane_waiting_counts = self._get_lane_waiting_counts(tl_id)
+            lane_waiting_times = self._get_lane_waiting_times(tl_id)
+            avg_waiting_time = float(np.mean(lane_waiting_times)) if len(lane_waiting_times) > 0 else 0.0
+            avg_queue_length = float(np.mean(lane_waiting_counts)) if len(lane_waiting_counts) > 0 else 0.0
+
             infos[tl_id] = {
                 "step": self._current_step,
                 "action": actions.get(tl_id),
                 "total_vehicles": step_metrics[-1]["total_vehicles"] if step_metrics else 0,
                 "average_speed": step_metrics[-1].get("average_speed", 0.0) if step_metrics else 0.0,
                 "throughput": arrived_count,
+                "avg_waiting_time": avg_waiting_time,
+                "avg_queue_length": avg_queue_length,
             }
 
         return observations, agent_rewards, terminateds, truncateds, infos

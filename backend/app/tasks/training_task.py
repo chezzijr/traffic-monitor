@@ -366,42 +366,8 @@ def _generate_model_filename(network_id: str, tl_id: str, algorithm: Algorithm) 
     return f"{network_id}_{tl_id}_{algorithm.value}_{timestamp}"
 
 
-def _save_model_metadata(
-    model_path: Path,
-    network_id: str,
-    tl_id: str,
-    algorithm: Algorithm,
-    total_timesteps: int,
-    env: TrafficLightEnv,
-) -> None:
-    """Save model metadata to a JSON file.
-
-    Args:
-        model_path: Path to the model file (without .zip extension)
-        network_id: ID of the network
-        tl_id: Traffic light ID
-        algorithm: Algorithm used
-        total_timesteps: Total training timesteps
-        env: The training environment (for observation/action space info)
-    """
-    metadata = {
-        "network_id": network_id,
-        "tl_id": tl_id,
-        "algorithm": algorithm.value,
-        "total_timesteps": total_timesteps,
-        "observation_dim": int(env.observation_space.shape[0]) if hasattr(env.observation_space, "shape") else 0,
-        "action_dim": int(env.action_space.n) if hasattr(env.action_space, "n") else 0,
-        "num_phases": int(getattr(env, "_num_phases", 4)),
-        "controlled_lanes": getattr(env, "_controlled_lanes", []),
-        "trained_on_scenarios": [getattr(env, "scenario", "moderate")],
-        "created_at": datetime.now().isoformat(),
-    }
-
-    metadata_path = Path(str(model_path) + ".metadata.json")
-    with open(metadata_path, "w") as f:
-        json.dump(metadata, f, indent=2)
-
-    logger.info(f"Saved model metadata to {metadata_path}")
+# Reuse _save_model_metadata from ml_service to avoid duplication.
+from app.services.ml_service import _save_model_metadata  # noqa: E402
 
 
 def _run_baseline_episodes(
@@ -817,12 +783,22 @@ class MultiProgressCallback(MultiAgentCallback):
 
         # Collect traffic metrics from info dicts (aggregate across agents)
         throughput_values = []
+        waiting_time_values = []
+        queue_length_values = []
         for tl_id, info in infos_dict.items():
             if "throughput" in info:
                 throughput_values.append(info["throughput"])
+            if "avg_waiting_time" in info:
+                waiting_time_values.append(info["avg_waiting_time"])
+            if "avg_queue_length" in info:
+                queue_length_values.append(info["avg_queue_length"])
 
         if throughput_values:
             self._step_throughputs.append(float(np.sum(throughput_values)))
+        if waiting_time_values:
+            self._step_avg_waiting_times.append(float(np.mean(waiting_time_values)))
+        if queue_length_values:
+            self._step_avg_queue_lengths.append(float(np.mean(queue_length_values)))
 
         # Publish at intervals
         if step % self.publish_interval == 0:
@@ -844,6 +820,10 @@ class MultiProgressCallback(MultiAgentCallback):
             self._episode_mean_rewards.append(float(np.mean(agent_rewards)))
 
         # Finalize traffic metrics for this episode
+        if self._step_avg_waiting_times:
+            self._episode_avg_waiting_times.append(float(np.mean(self._step_avg_waiting_times)))
+        if self._step_avg_queue_lengths:
+            self._episode_avg_queue_lengths.append(float(np.mean(self._step_avg_queue_lengths)))
         if self._step_throughputs:
             self._episode_throughputs.append(float(np.sum(self._step_throughputs)))
 

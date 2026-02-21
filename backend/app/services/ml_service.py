@@ -679,7 +679,15 @@ def delete_model(model_path: str) -> dict[str, Any]:
         if _state._loaded_model_path == str(path):
             raise RuntimeError("Cannot delete currently loaded model. Unload it first.")
 
-    path.unlink()
+    if path.is_dir():
+        import shutil
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+        # Also remove associated metadata file for single-junction models
+        metadata_file = Path(str(path) + ".metadata.json")
+        if metadata_file.exists():
+            metadata_file.unlink()
     logger.info(f"Deleted model: {path}")
 
     return {"status": "deleted", "path": str(path)}
