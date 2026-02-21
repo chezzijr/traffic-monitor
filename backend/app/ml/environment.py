@@ -11,6 +11,7 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
+from app.ml import rewards
 from app.services import sumo_service
 
 logger = logging.getLogger(__name__)
@@ -427,40 +428,26 @@ class TrafficLightEnv(gym.Env):
     def _compute_reward(self, current_total_wait: float) -> float:
         """Compute reward based on algorithm type using LibSignal/DaRL formulas.
 
-        Reward functions:
-        - DQN/CoLight: reward = -mean(lane_waiting_counts) * 12
-            Penalizes average NUMBER of waiting vehicles on incoming lanes
-        - PPO: reward = clip(-mean(lane_waiting_times) / 224, -4, 4)
-            Penalizes average waiting TIME (normalized and clipped)
+        Delegates to ``rewards.compute_reward`` for known algorithms
+        (dqn, colight, ppo) and falls back to a wait-time-change heuristic
+        for unrecognised algorithm names.
 
         Args:
-            current_total_wait: Current total waiting time (used for info, not reward)
+            current_total_wait: Current total waiting time (used by fallback)
 
         Returns:
             Reward value based on the configured algorithm
         """
-        if self.algorithm in ("dqn", "colight"):
-            # DQN/CoLight reward: penalize average number of waiting vehicles
+        if self.algorithm in ("dqn", "colight", "ppo"):
             lane_waiting_counts = self._get_lane_waiting_counts()
-            if len(lane_waiting_counts) > 0:
-                reward = -np.mean(lane_waiting_counts) * 12.0
-            else:
-                reward = 0.0
-
-        elif self.algorithm == "ppo":
-            # PPO reward: penalize average waiting time (normalized and clipped)
             lane_waiting_times = self._get_lane_waiting_times()
-            if len(lane_waiting_times) > 0:
-                reward = np.clip(-np.mean(lane_waiting_times) / 224.0, -4.0, 4.0)
-            else:
-                reward = 0.0
+            return rewards.compute_reward(
+                self.algorithm, lane_waiting_counts, lane_waiting_times
+            )
 
-        else:
-            # Fallback: use original wait time change method
-            wait_time_change = current_total_wait - self._prev_total_wait_time
-            reward = -wait_time_change / 10.0
-
-        return float(reward)
+        # Fallback: use original wait time change method
+        wait_time_change = current_total_wait - self._prev_total_wait_time
+        return float(-wait_time_change / 10.0)
 
     def render(self) -> None:
         """Render the environment.
