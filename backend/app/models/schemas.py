@@ -145,6 +145,31 @@ class ConvertToSumoResponse(BaseModel):
     )
 
 
+class NetworkMetadataJunction(BaseModel):
+    """Junction entry within persisted network metadata."""
+
+    id: str = Field(..., description="SUMO junction ID")
+    lat: float = Field(..., ge=-90, le=90, description="Latitude coordinate")
+    lon: float = Field(..., ge=-180, le=180, description="Longitude coordinate")
+    tl_id: str | None = Field(None, description="Traffic light ID (if signalized)")
+
+
+class NetworkMetadata(BaseModel):
+    """Persisted network metadata loaded from .meta.json files."""
+
+    network_id: str = Field(..., description="Unique network identifier")
+    bbox: BoundingBox = Field(..., description="Bounding box of the network")
+    created_at: str = Field(..., description="Creation timestamp (ISO 8601)")
+    junctions: list[NetworkMetadataJunction] = Field(
+        default_factory=list, description="Junctions in the network"
+    )
+    road_count: int = Field(default=0, ge=0, description="Total number of road segments")
+    name: str | None = Field(None, description="Optional human-readable name")
+    signalized_junction_count: int = Field(
+        default=0, ge=0, description="Number of junctions with traffic lights (computed, not stored)"
+    )
+
+
 class RouteGenerationRequest(BaseModel):
     """Request body for generating routes."""
 
