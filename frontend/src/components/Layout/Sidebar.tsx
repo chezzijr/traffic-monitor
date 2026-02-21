@@ -2,10 +2,11 @@ import { useState } from 'react';
 import { MapPin, X } from 'lucide-react';
 import { useMapStore } from '../../store/mapStore';
 import { TrainingPanel, ModelsPanel, DeploymentPanel } from '../ML';
+import { NetworksPanel } from '../Networks';
 import { TaskListPanel } from '../Tasks';
 import type { SimulationStatus } from '../../types';
 
-type TabType = 'simulation' | 'training' | 'models' | 'deployment' | 'tasks';
+type TabType = 'simulation' | 'networks' | 'training' | 'models' | 'deployment' | 'tasks';
 
 interface SidebarProps {
   children: React.ReactNode;  // Simulation controls passed from App
@@ -20,7 +21,8 @@ export function Sidebar({ children, simStatus = 'idle' }: SidebarProps) {
   const canClearNetwork = currentNetworkId && (simStatus === 'idle' || simStatus === 'stopped');
 
   const tabs: { id: TabType; label: string }[] = [
-    { id: 'simulation', label: 'Simulation' },
+    { id: 'simulation', label: 'Sim' },
+    { id: 'networks', label: 'Networks' },
     { id: 'training', label: 'Training' },
     { id: 'models', label: 'Models' },
     { id: 'deployment', label: 'Deploy' },
@@ -85,6 +87,7 @@ export function Sidebar({ children, simStatus = 'idle' }: SidebarProps) {
       {/* Tab content */}
       <div className="flex-1 p-4 space-y-4 overflow-y-auto">
         {activeTab === 'simulation' && children}
+        {activeTab === 'networks' && <NetworksPanel />}
         {activeTab === 'training' && <TrainingPanel />}
         {activeTab === 'models' && <ModelsPanel />}
         {activeTab === 'deployment' && <DeploymentPanel />}
