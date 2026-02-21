@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, HTTPException, status
 
 from app.models.schemas import NetworkMetadata
-from app.services import network_service
+import app.services.network_service as network_service
 
 logger = logging.getLogger("uvicorn.error")
 

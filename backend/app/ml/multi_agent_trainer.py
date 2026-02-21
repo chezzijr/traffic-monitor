@@ -394,6 +394,8 @@ class MultiAgentTrainer:
 
             # ---- collect n_steps transitions ----
             steps_collected = 0
+            terminateds: dict[str, bool] = {tl: False for tl in self.agents}
+            truncateds: dict[str, bool] = {tl: False for tl in self.agents}
             for rollout_step in range(n_steps):
                 if total_steps >= total_timesteps:
                     break

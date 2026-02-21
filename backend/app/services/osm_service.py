@@ -573,9 +573,9 @@ def convert_to_sumo(network_id: str) -> dict:
         # Persist network metadata if not already saved
         meta_path = SIMULATION_NETWORKS_DIR / f"{network_id}.meta.json"
         if not meta_path.exists():
-            from app.services import network_service
+            from app.services.network_service import save_network_metadata
             bbox = cached["bbox"]
-            network_service.save_network_metadata(
+            save_network_metadata(
                 network_id=network_id,
                 bbox={"south": bbox[0], "west": bbox[1], "north": bbox[2], "east": bbox[3]},
                 junctions=[{"id": j["id"], "lat": j["lat"], "lon": j["lon"], "tl_id": j["tl_id"]} for j in sumo_junctions],
@@ -662,9 +662,9 @@ def convert_to_sumo(network_id: str) -> dict:
         # Persist network metadata if not already saved
         meta_path = SIMULATION_NETWORKS_DIR / f"{network_id}.meta.json"
         if not meta_path.exists():
-            from app.services import network_service
+            from app.services.network_service import save_network_metadata
             bbox = cached["bbox"]
-            network_service.save_network_metadata(
+            save_network_metadata(
                 network_id=network_id,
                 bbox={"south": bbox[0], "west": bbox[1], "north": bbox[2], "east": bbox[3]},
                 junctions=[{"id": j["id"], "lat": j["lat"], "lon": j["lon"], "tl_id": j["tl_id"]} for j in sumo_junctions],

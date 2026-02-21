@@ -3,7 +3,6 @@
 import json
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 
 from app.services.osm_service import SIMULATION_NETWORKS_DIR, _network_cache
 
