@@ -86,8 +86,8 @@ async def fetch_camera(session, cam_id):
                 ts = f'{inter}_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}'
 
                 # 1) lưu lịch sử
-                history_path = os.path.join(inter_dir, f"{ts}.jpg")
-                await asyncio.to_thread(write_file, history_path, img)
+                # history_path = os.path.join(inter_dir, f"{ts}.jpg")
+                # await asyncio.to_thread(write_file, history_path, img)
 
                 # 2) update latest (atomic)
                 tmp_path = os.path.join(inter_dir, "latest.tmp")
