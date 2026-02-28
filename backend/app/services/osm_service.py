@@ -24,7 +24,7 @@ SIMULATION_NETWORKS_DIR = Path(__file__).parent.parent.parent.parent / "simulati
 
 
 #cache
-CACHE_DIR = Path(__file__).parent.parent.parent/ "cache"
+CACHE_DIR = Path(__file__).parent.parent.parent.parent / "cache"
 TRAFFIC_LIGHT_PATH = CACHE_DIR / "all_traffic_light.json"
 
 # Distance threshold for OSM-to-SUMO coordinate matching (~100m at equator)
@@ -543,8 +543,10 @@ def get_cached_network_ids() -> list[str]:
 
 def get_all_traffic_lights() -> list[dict]:
     if not os.path.exists(TRAFFIC_LIGHT_PATH):
-        get_all_traffic_lights(lat=10.770487,lon=106.658213, radius=15000)
+        data = get_traffic_lights_by_point(lat=10.770487,lon=106.658213, radius=15000)
         
-    with open(TRAFFIC_LIGHT_PATH, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    else:
+        with open(TRAFFIC_LIGHT_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            
     return data
