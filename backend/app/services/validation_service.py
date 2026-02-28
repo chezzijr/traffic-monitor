@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from app.config import settings
+
 
 def validate_training_request(
     network_id: str,
@@ -11,7 +13,7 @@ def validate_training_request(
     """Validate a single-junction training request. Returns list of errors."""
     errors = []
 
-    network_path = Path(f"simulation/networks/{network_id}.net.xml")
+    network_path = settings.simulation_networks_dir / f"{network_id}.net.xml"
     if not network_path.exists():
         errors.append(f"Network file not found: {network_id}")
 

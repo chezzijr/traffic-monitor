@@ -18,9 +18,10 @@ logger = logging.getLogger(__name__)
 # Keys: network_id, Values: dict with graph, intersections, metadata
 _network_cache: dict[str, dict] = {}
 
+from app.config import settings
+
 # Base directory for SUMO network files
-# Path: osm_service.py -> services -> app -> backend -> traffic-monitor
-SIMULATION_NETWORKS_DIR = Path(__file__).parent.parent.parent.parent / "simulation" / "networks"
+SIMULATION_NETWORKS_DIR = settings.simulation_networks_dir
 
 
 #cache

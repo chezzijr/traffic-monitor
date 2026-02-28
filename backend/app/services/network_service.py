@@ -8,7 +8,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-NETWORKS_DIR = Path("simulation/networks")
+from app.config import settings
+
+NETWORKS_DIR = settings.simulation_networks_dir
 
 
 def save_metadata(

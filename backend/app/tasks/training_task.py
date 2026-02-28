@@ -15,7 +15,10 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-MODELS_DIR = Path("simulation/models")
+from app.config import settings
+
+SIMULATION_NETWORKS_DIR = settings.simulation_networks_dir
+MODELS_DIR = settings.simulation_models_dir
 
 
 def _get_redis():
@@ -287,7 +290,7 @@ def train_traffic_light(
         from app.ml.trainer import Algorithm, TrafficLightTrainer
 
         # Find network file
-        network_path = f"simulation/networks/{network_id}.net.xml"
+        network_path = str(SIMULATION_NETWORKS_DIR / f"{network_id}.net.xml")
         if not Path(network_path).exists():
             raise FileNotFoundError(f"Network file not found: {network_path}")
 
@@ -413,7 +416,7 @@ def train_multi_junction(
         from app.ml.multi_agent_trainer import MultiAgentTrainer
         from app.ml.trainer import Algorithm as AlgoEnum
 
-        network_path = f"simulation/networks/{network_id}.net.xml"
+        network_path = str(SIMULATION_NETWORKS_DIR / f"{network_id}.net.xml")
         if not Path(network_path).exists():
             raise FileNotFoundError(f"Network file not found: {network_path}")
 

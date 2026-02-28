@@ -34,10 +34,18 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/0"
     
-    #Dataset settings
-    project_root: ClassVar[Path] = Path(__file__).resolve().parents[2]
+    # Project root: in Docker /app/app/config.py -> parents[1] = /app
+    # Locally: backend/app/config.py -> parents[2] = project root
+    # Detect by checking if simulation/ exists at each level
+    project_root: ClassVar[Path] = next(
+        (p for p in Path(__file__).resolve().parents
+         if (p / "simulation").is_dir()),
+        Path(__file__).resolve().parents[2],
+    )
 
     dataset_dir: Path = project_root / "dataset"
+    simulation_networks_dir: ClassVar[Path] = project_root / "simulation" / "networks"
+    simulation_models_dir: ClassVar[Path] = project_root / "simulation" / "models"
 
 
 settings = Settings()
