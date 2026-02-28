@@ -52,6 +52,8 @@ class ProgressPublishingCallback(BaseCallback):
         task_id: str,
         total_timesteps: int,
         baseline: dict | None = None,
+        traffic_metrics_callback: "TrafficMetricsCallback | None" = None,
+        metrics_logging_callback: "MetricsLoggingCallback | None" = None,
         verbose: int = 0,
     ):
         super().__init__(verbose)
@@ -60,6 +62,8 @@ class ProgressPublishingCallback(BaseCallback):
         self.baseline = baseline or {}
         self._publish_interval = 500
         self._redis = None
+        self._traffic_metrics = traffic_metrics_callback
+        self._metrics_logging = metrics_logging_callback
 
     def _get_redis(self):
         if self._redis is None:
@@ -82,10 +86,10 @@ class ProgressPublishingCallback(BaseCallback):
             "total_timesteps": self.total_timesteps,
             "progress": round(progress, 4),
             "episode_count": len(self.model._episode_num_timesteps) if hasattr(self.model, "_episode_num_timesteps") else 0,
-            "mean_reward": 0.0,
-            "avg_waiting_time": 0.0,
-            "avg_queue_length": 0.0,
-            "throughput": 0,
+            "mean_reward": self._metrics_logging.mean_reward if self._metrics_logging else 0.0,
+            "avg_waiting_time": self._traffic_metrics.avg_waiting_time if self._traffic_metrics else 0.0,
+            "avg_queue_length": self._traffic_metrics.avg_queue_length if self._traffic_metrics else 0.0,
+            "throughput": self._traffic_metrics.throughput if self._traffic_metrics else 0,
         }
 
         # Add baseline if available
@@ -219,7 +223,8 @@ class MultiProgressCallback:
         progress = min(step / max(self.total_timesteps, 1), 1.0)
 
         # Aggregate metrics across agents
-        waiting_times = [infos.get(tl, {}).get("avg_queue_length", 0.0) for tl in self.tl_ids]
+        waiting_times = [infos.get(tl, {}).get("avg_waiting_time", 0.0) for tl in self.tl_ids]
+        queue_lengths = [infos.get(tl, {}).get("avg_queue_length", 0.0) for tl in self.tl_ids]
         throughputs = [infos.get(tl, {}).get("throughput", 0) for tl in self.tl_ids]
 
         payload = {
@@ -230,7 +235,7 @@ class MultiProgressCallback:
             "progress": round(progress, 4),
             "mean_reward": 0.0,
             "avg_waiting_time": float(np.mean(waiting_times)) if waiting_times else 0.0,
-            "avg_queue_length": float(np.mean(waiting_times)) if waiting_times else 0.0,
+            "avg_queue_length": float(np.mean(queue_lengths)) if queue_lengths else 0.0,
             "throughput": int(sum(throughputs)),
         }
 
@@ -302,12 +307,18 @@ def train_traffic_light(
         # Run baseline
         baseline = trainer.run_baseline(num_episodes=3)
 
-        # Create callbacks
+        # Create callbacks - metrics callbacks first so they have data when progress publishes
+        traffic_metrics_cb = TrafficMetricsCallback()
+        metrics_logging_cb = MetricsLoggingCallback()
         callbacks = [
             CancellationCallback(task_id),
-            ProgressPublishingCallback(task_id, total_timesteps, baseline),
-            TrafficMetricsCallback(),
-            MetricsLoggingCallback(),
+            traffic_metrics_cb,
+            metrics_logging_cb,
+            ProgressPublishingCallback(
+                task_id, total_timesteps, baseline,
+                traffic_metrics_callback=traffic_metrics_cb,
+                metrics_logging_callback=metrics_logging_cb,
+            ),
         ]
 
         # Train
