@@ -9,9 +9,9 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-logger = logging.getLogger(__name__)
-
 from app.ml._sumo_compat import get_traci as _get_traci
+
+logger = logging.getLogger(__name__)
 
 
 class MultiAgentTrafficLightEnv:
