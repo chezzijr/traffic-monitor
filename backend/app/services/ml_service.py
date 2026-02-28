@@ -73,6 +73,8 @@ def list_models() -> list[dict[str, Any]]:
 
         stat = model_file.stat()
         models.append({
+            "model_id": model_file.stem,
+            "model_path": str(model_file),
             "path": str(model_file),
             "filename": model_file.name,
             "network_id": metadata.get("network_id", network_id),
@@ -97,6 +99,8 @@ def list_models() -> list[dict[str, Any]]:
         agent_zips = list(model_dir.glob("*.zip"))
 
         models.append({
+            "model_id": model_dir.name,
+            "model_path": str(model_dir),
             "path": str(model_dir),
             "filename": model_dir.name,
             "network_id": metadata.get("network_id", "unknown"),
