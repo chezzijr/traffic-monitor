@@ -170,11 +170,13 @@ def extract_network(bbox: tuple[float, float, float, float]) -> dict:
         if degree > 2:
             intersection = {
                 "id": str(node_id),
+                "osm_id": int(node_id),
                 "lat": data.get("y", 0.0),
                 "lon": data.get("x", 0.0),
                 "name": _extract_intersection_name(graph, node_id),
                 "num_roads": degree,
-                "has_traffic_light": node_id in traffic_signal_nodes,
+                "has_traffic_light": node_id in traffic_signal_nodes
+                    or any(n in traffic_signal_nodes for n in graph.neighbors(node_id)),
             }
             intersections.append(intersection)
 
@@ -272,7 +274,9 @@ def parse_sumo_traffic_lights(net_xml_path: Path) -> dict:
         tl_type = tl_logic.get("type", "static")
 
         # Get coordinates from junction with same ID
-        x, y = junction_coords.get(tl_id, (0.0, 0.0))
+        # GS_* TL IDs (from --tls.guess-signals) map to junctions without the prefix
+        canonical_id = tl_id[3:] if tl_id.startswith("GS_") else tl_id
+        x, y = junction_coords.get(tl_id) or junction_coords.get(canonical_id, (0.0, 0.0))
 
         # Parse phases
         phases = []
@@ -358,8 +362,9 @@ def _match_osm_to_sumo_traffic_lights(
         logger.error(f"Failed to parse SUMO network location: {e}")
         return {}
 
-    # Filter intersections with traffic lights
-    tl_intersections = [i for i in intersections if i.get("has_traffic_light", False)]
+    # Search all intersections, not just has_traffic_light — OSM signal nodes are often
+    # stop-line nodes (degree ≤ 2) that don't appear in the intersection list
+    tl_intersections = intersections
 
     # Calculate scale factors for coordinate conversion
     lon_scale = (orig_east - orig_west) / (conv_east - conv_west) if conv_east != conv_west else 1.0
@@ -400,6 +405,12 @@ def _match_osm_to_sumo_traffic_lights(
         if best_match and best_distance < COORD_MATCH_THRESHOLD_DEG:
             osm_to_sumo_map[best_match["id"]] = sumo_tl["id"]
             logger.debug(f"Matched OSM {best_match['id']} to SUMO {sumo_tl['id']} (dist: {best_distance:.6f})")
+
+    # Mark matched intersections as having traffic lights for consistency
+    matched_ids = set(osm_to_sumo_map.keys())
+    for intersection in intersections:
+        if intersection["id"] in matched_ids:
+            intersection["has_traffic_light"] = True
 
     logger.info(f"Matched {len(osm_to_sumo_map)} OSM intersections to SUMO traffic lights")
     return osm_to_sumo_map
@@ -480,7 +491,7 @@ def convert_to_sumo(network_id: str) -> dict:
             "--ramps.guess",
             "--junctions.join",
             "--tls.guess-signals",
-            "--tls.discard-simple",
+            "--tls.guess",
             "--tls.join",
             "--tls.default-type",
             "actuated",

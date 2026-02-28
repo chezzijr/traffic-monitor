@@ -206,13 +206,16 @@ export default function App() {
       <Header />
       <div className="flex-1 flex overflow-hidden">
         <Sidebar>
-          <TrafficLightSearch />
-          <CameraPanel />
-          {hasSumoData && (
+          {hasSumoData ? (
             <>
               <JunctionSelector />
               <TrainingConfigPanel onTrainingStarted={handleTrainingStarted} />
               <ActiveTasksPanel onTaskSelect={handleTaskSelect} />
+            </>
+          ) : (
+            <>
+              <TrafficLightSearch />
+              <CameraPanel />
             </>
           )}
         </Sidebar>
