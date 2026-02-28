@@ -58,6 +58,9 @@ export default function App() {
   // SSE connection ref
   const sseRef = useRef<SimulationSSE | null>(null);
 
+  // All traffic lights in HCM City
+  const setTrafficLights = useMapStore((state) => state.setTrafficLights);
+
   // Handle marker click
   const handleMarkerClick = useCallback((intersection: Intersection) => {
     setSelectedIntersection(intersection);
@@ -79,6 +82,19 @@ export default function App() {
     };
     setSelectedIntersection(intersection);
     setCameraModalOpen(true);
+  }, []);
+
+  // Load all traffic lights in HCM City
+  useEffect(() => {
+    async function loadAllTrafficLights() {
+      try {
+        const lights = await mapService.getAllTrafficLights();
+        setTrafficLights(lights);
+      } catch (err) {
+        console.error('failed to load all traffic lights', err);
+      }
+    }
+    loadAllTrafficLights();
   }, []);
 
   // Extract region when selected

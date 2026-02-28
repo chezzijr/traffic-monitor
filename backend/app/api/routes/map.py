@@ -195,4 +195,14 @@ def get_traffic_lights(
     lights = osm_service.get_traffic_lights_by_point(lat=lat, lon=lng, radius=radius)
     return [TrafficLight(**l) for l in lights]
 
-
+@router.get(
+    "/all-traffic-lights",
+    response_model=list[TrafficLight],
+    status_code=status.HTTP_200_OK,
+    summary="Get all traffic lights in cache",
+    description="Access cache and get all traffic lights if its exits"
+)
+def get_all_traffic_lights()-> list[TrafficLight]:
+    """Get all traffic lights in cache"""
+    lights = osm_service.get_all_traffic_lights()
+    return [TrafficLight(**l) for l in lights]

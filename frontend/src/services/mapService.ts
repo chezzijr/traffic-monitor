@@ -34,4 +34,10 @@ export const mapService = {
     const response = await api.get<TrafficLight[]>('/map/traffic-lights', { params });
     return response.data;
   },
+
+  // Get all traffic lights in Ho Chi Minh City
+  async getAllTrafficLights(): Promise<TrafficLight[]> {
+    const response = await api.get<TrafficLight[]>('/map/all-traffic-lights');
+    return response.data;
+  },
 };
