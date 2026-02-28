@@ -1,5 +1,5 @@
 import { api } from './api';
-import type { BoundingBox, NetworkInfo, Intersection, TrafficLight } from '../types';
+import type { BoundingBox, NetworkInfo, Intersection, TrafficLight, SUMOTrafficLight } from '../types';
 
 export const mapService = {
   // Extract network from OSM for a given bounding box
@@ -16,10 +16,18 @@ export const mapService = {
   },
 
   // Convert network to SUMO format
-  async convertToSumo(networkId: string): Promise<{ sumo_network_path: string; network_id: string }> {
-    const response = await api.post<{ sumo_network_path: string; network_id: string }>(
-      `/map/convert-to-sumo/${networkId}`
-    );
+  async convertToSumo(networkId: string): Promise<{
+    sumo_network_path: string;
+    network_id: string;
+    traffic_lights: SUMOTrafficLight[];
+    osm_sumo_mapping: Record<string, string>;
+  }> {
+    const response = await api.post<{
+      sumo_network_path: string;
+      network_id: string;
+      traffic_lights: SUMOTrafficLight[];
+      osm_sumo_mapping: Record<string, string>;
+    }>(`/map/convert-to-sumo/${networkId}`);
     return response.data;
   },
 
