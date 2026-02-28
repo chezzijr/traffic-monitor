@@ -30,7 +30,9 @@ class Settings(BaseSettings):
     
     # Redis settings
     redis_host: str = "localhost"
-    redis_port: int = 6379 
+    redis_port: int = 6379
+    celery_broker_url: str = "redis://localhost:6379/0"
+    celery_result_backend: str = "redis://localhost:6379/0"
     
     #Dataset settings
     project_root: ClassVar[Path] = Path(__file__).resolve().parents[2]
