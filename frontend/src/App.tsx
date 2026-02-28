@@ -27,6 +27,7 @@ export default function App() {
   const handleTrafficLightClick = useCallback((light: TrafficLight) => {
     const intersection: Intersection = {
       id: `osm_${light.osm_id}`,
+      osm_id: light.osm_id,
       lat: light.lat,
       lon: light.lon,
       name: `OSM Traffic Light ${light.osm_id}`,
