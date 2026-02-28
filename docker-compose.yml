@@ -25,9 +25,11 @@ services:
     environment:
       - SUMO_HOME=/usr/share/sumo
       - CORS_ORIGINS=["http://localhost:5173","http://frontend:5173"]
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - REDIS_HOST=redis
     volumes:
-      - ./backend/simulation:/app/simulation
-      - ./simulation:/app/data/simulation:ro
+      - ./simulation:/app/simulation
     depends_on:
       - redis
     networks:
@@ -46,6 +48,30 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  celery-worker:
+    build:
+      context: ./backend
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=1
+    environment:
+      - SUMO_HOME=/usr/share/sumo
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - REDIS_HOST=redis
+    volumes:
+      - ./simulation:/app/simulation
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - traffic-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
 networks:
   traffic-network:
