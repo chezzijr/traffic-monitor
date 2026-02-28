@@ -136,15 +136,28 @@ async def stream_task_updates(task_id: str):
             message = pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
             if message and message["type"] == "message":
                 data = message["data"]
-                yield f"data: {data}\n\n"
 
-                # Check if task is done
+                # Determine SSE event name from payload status
+                event_name = "progress"
+                terminal = False
                 try:
                     payload = json.loads(data)
-                    if payload.get("status") in ("completed", "failed", "cancelled"):
-                        return
+                    status = payload.get("status")
+                    if status == "completed":
+                        event_name = "complete"
+                        terminal = True
+                    elif status in ("failed", "cancelled"):
+                        event_name = "error"
+                        terminal = True
+                    elif status == "running":
+                        event_name = "progress"
                 except (json.JSONDecodeError, KeyError):
                     pass
+
+                yield f"event: {event_name}\ndata: {data}\n\n"
+
+                if terminal:
+                    return
 
             # Heartbeat
             yield f"event: heartbeat\ndata: {{}}\n\n"
