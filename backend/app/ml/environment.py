@@ -12,18 +12,7 @@ from gymnasium import spaces
 
 logger = logging.getLogger(__name__)
 
-# Lazy import traci
-_traci = None
-
-def _get_traci():
-    global _traci
-    if _traci is None:
-        try:
-            import traci
-            _traci = traci
-        except ImportError:
-            raise RuntimeError("SUMO TraCI not available. Set SUMO_HOME.")
-    return _traci
+from app.ml._sumo_compat import get_traci as _get_traci
 
 
 class TrafficLightEnv(gym.Env):
