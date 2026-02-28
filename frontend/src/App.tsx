@@ -1,19 +1,19 @@
 import { useState, useEffect, useCallback, useRef, useReducer } from 'react';
 import toast, { Toaster } from 'react-hot-toast';
-import { MapContainer, IntersectionMarkers, RegionSelector, MapLegend } from './components/Map';
+import { MapContainer, IntersectionMarkers, TrafficLightMarkers, LocationSelector, RegionSelector, MapLegend } from './components/Map';
 import { Sidebar, Header } from './components/Layout';
-import { SimulationControl, CameraPanel } from './components/Control';
+import { SimulationControl, CameraPanel, CameraModal, TrafficLightSearch } from './components/Control';
 import { MetricsPanel, SimulationStatusDisplay, MetricsChart } from './components/Dashboard';
 import { useMapStore } from './store/mapStore';
 import { mapService, simulationService, SimulationSSE } from './services';
-import type { SimulationStatus, SimulationMetrics, SSEStepEvent } from './types';
+import type { SimulationStatus, SimulationMetrics, SSEStepEvent, SSEErrorEvent, Intersection, TrafficLight } from './types';
 
 const MAX_HISTORY_POINTS = 500;
 
 interface SimState {
   step: number;
   metrics: SimulationMetrics | null;
-  history: Array<{step: number; vehicles: number; waitTime: number}>;
+  history: Array<{ step: number; vehicles: number; waitTime: number }>;
 }
 
 type SimAction =
@@ -51,8 +51,51 @@ export default function App() {
   const [simStatus, setSimStatus] = useState<SimulationStatus>('idle');
   const [sim, dispatchSim] = useReducer(simReducer, { step: 0, metrics: null, history: [] });
 
+  // Camera modal state
+  const [selectedIntersection, setSelectedIntersection] = useState<Intersection | null>(null);
+  const [cameraModalOpen, setCameraModalOpen] = useState(false);
+
   // SSE connection ref
   const sseRef = useRef<SimulationSSE | null>(null);
+
+  // All traffic lights in HCM City
+  const setTrafficLights = useMapStore((state) => state.setTrafficLights);
+
+  // Handle marker click
+  const handleMarkerClick = useCallback((intersection: Intersection) => {
+    setSelectedIntersection(intersection);
+    setCameraModalOpen(true);
+  }, []);
+
+  // Handle traffic light marker click - convert to Intersection format
+  const handleTrafficLightClick = useCallback((light: TrafficLight) => {
+    // Convert TrafficLight to Intersection format for the modal
+    const intersection: Intersection = {
+      id: `osm_${light.osm_id}`,
+      lat: light.lat,
+      lon: light.lon,
+      name: `OSM Traffic Light ${light.osm_id}`,
+      num_roads: 0,
+      has_traffic_light: true,
+      sumo_tl_id: undefined,
+      trafficLight: light,
+    };
+    setSelectedIntersection(intersection);
+    setCameraModalOpen(true);
+  }, []);
+
+  // Load all traffic lights in HCM City
+  useEffect(() => {
+    async function loadAllTrafficLights() {
+      try {
+        const lights = await mapService.getAllTrafficLights();
+        setTrafficLights(lights);
+      } catch (err) {
+        console.error('failed to load all traffic lights', err);
+      }
+    }
+    loadAllTrafficLights();
+  }, []);
 
   // Extract region when selected
   useEffect(() => {
@@ -87,7 +130,7 @@ export default function App() {
       onStopped: () => {
         setSimStatus('stopped');
       },
-      onError: (data) => {
+      onError: (data: SSEErrorEvent) => {
         toast.error(data.message);
         setSimStatus('paused');
       },
@@ -180,6 +223,7 @@ export default function App() {
       <Header />
       <div className="flex-1 flex overflow-hidden">
         <Sidebar>
+          <TrafficLightSearch />
           <SimulationControl
             status={simStatus}
             currentStep={sim.step}
@@ -200,7 +244,9 @@ export default function App() {
         </Sidebar>
         <main className="flex-1 relative">
           <MapContainer>
-            <IntersectionMarkers />
+            <IntersectionMarkers onMarkerClick={handleMarkerClick} />
+            <TrafficLightMarkers onMarkerClick={handleTrafficLightClick} />
+            <LocationSelector />
             <RegionSelector />
           </MapContainer>
           <MapLegend className="absolute bottom-4 left-4 z-[1000]" />
@@ -216,6 +262,11 @@ export default function App() {
           )}
         </main>
       </div>
+      <CameraModal
+        intersection={selectedIntersection}
+        isOpen={cameraModalOpen}
+        onClose={() => setCameraModalOpen(false)}
+      />
     </div>
   );
 }

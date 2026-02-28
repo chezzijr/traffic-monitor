@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
+import json
 
 import osmnx as ox
 
@@ -20,6 +21,11 @@ _network_cache: dict[str, dict] = {}
 # Base directory for SUMO network files
 # Path: osm_service.py -> services -> app -> backend -> traffic-monitor
 SIMULATION_NETWORKS_DIR = Path(__file__).parent.parent.parent.parent / "simulation" / "networks"
+
+
+#cache
+CACHE_DIR = Path(__file__).parent.parent.parent.parent / "cache"
+TRAFFIC_LIGHT_PATH = CACHE_DIR / "all_traffic_light.json"
 
 # Distance threshold for OSM-to-SUMO coordinate matching (~100m at equator)
 COORD_MATCH_THRESHOLD_DEG = 0.001
@@ -72,6 +78,37 @@ def _extract_traffic_signals(bbox: tuple[float, float, float, float]) -> set[int
         logger.warning(f"Could not extract traffic signals for bbox {bbox}: {e}")
         return set()
 
+
+def get_traffic_lights_by_point(lat: float, lon: float, radius: int = 700) -> list[dict]:
+
+    try:
+        gdf = ox.features_from_point(
+            (lat, lon),
+            tags={"highway": "traffic_signals"},
+            dist=radius
+        )
+    except Exception:
+        return []
+
+    results = []
+    node_ids = []
+
+    for (elem_type, osm_id), row in gdf.iterrows():
+        if elem_type != "node":
+            continue
+
+        node_ids.append(osm_id)
+
+        results.append({
+            "osm_id": osm_id,
+            "lat": row.geometry.y,
+            "lon": row.geometry.x,
+        })
+        os.makedirs(os.path.dirname(TRAFFIC_LIGHT_PATH),exist_ok=True)
+        with open(TRAFFIC_LIGHT_PATH, "w", encoding="utf-8") as f:
+            json.dump(results, f, indent=4)
+
+    return results
 
 def extract_network(bbox: tuple[float, float, float, float]) -> dict:
     """
@@ -503,3 +540,13 @@ def clear_cache() -> None:
 def get_cached_network_ids() -> list[str]:
     """Get list of all cached network IDs."""
     return list(_network_cache.keys())
+
+def get_all_traffic_lights() -> list[dict]:
+    if not os.path.exists(TRAFFIC_LIGHT_PATH):
+        data = get_traffic_lights_by_point(lat=10.770487,lon=106.658213, radius=15000)
+        
+    else:
+        with open(TRAFFIC_LIGHT_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            
+    return data

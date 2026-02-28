@@ -3,7 +3,7 @@
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.models.schemas import (
     BoundingBox,
@@ -13,6 +13,8 @@ from app.models.schemas import (
     RouteGenerationRequest,
     RouteGenerationResponse,
     SUMOTrafficLight,
+    TrafficLight,
+    TrafficSignal,
 )
 from app.services import osm_service
 
@@ -175,3 +177,32 @@ def generate_routes(network_id: str, request: RouteGenerationRequest) -> RouteGe
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except (RuntimeError, FileNotFoundError) as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.get(
+    "/traffic-lights",
+    response_model=list[TrafficLight],
+    status_code=status.HTTP_200_OK,
+    summary="Get traffic lights around a point",
+    description="Retrieve OSM traffic lights within a radius of a lat/lng point.",
+)
+def get_traffic_lights(
+    lat: float = Query(..., ge=-90, le=90, description="Latitude"),
+    lng: float = Query(..., ge=-180, le=180, description="Longitude"),
+    radius: int = Query(500, ge=1, le=50000, description="Search radius in meters"),
+) -> list[TrafficLight]:
+    """Get traffic lights from OSM around a given point."""
+    lights = osm_service.get_traffic_lights_by_point(lat=lat, lon=lng, radius=radius)
+    return [TrafficLight(**l) for l in lights]
+
+@router.get(
+    "/all-traffic-lights",
+    response_model=list[TrafficLight],
+    status_code=status.HTTP_200_OK,
+    summary="Get all traffic lights in cache",
+    description="Access cache and get all traffic lights if its exits"
+)
+def get_all_traffic_lights()-> list[TrafficLight]:
+    """Get all traffic lights in cache"""
+    lights = osm_service.get_all_traffic_lights()
+    return [TrafficLight(**l) for l in lights]

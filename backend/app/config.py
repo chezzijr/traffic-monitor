@@ -1,6 +1,7 @@
 """Application configuration using Pydantic Settings."""
 
 from pathlib import Path
+from typing import ClassVar
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -26,6 +27,15 @@ class Settings(BaseSettings):
 
     # API settings
     api_prefix: str = "/api"
+    
+    # Redis settings
+    redis_host: str = "localhost"
+    redis_port: int = 6379 
+    
+    #Dataset settings
+    project_root: ClassVar[Path] = Path(__file__).resolve().parents[2]
+
+    dataset_dir: Path = project_root / "dataset"
 
 
 settings = Settings()

@@ -1,0 +1,9 @@
+# Python-generated files
+camera_collector/service/__pycache__/
+
+
+# Virtual environments
+camera_collector/.venv
+
+#datasets from camera
+camera_collector/dataset/

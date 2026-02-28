@@ -86,6 +86,30 @@ export SUMO_HOME=/usr/share/sumo  # or your SUMO installation path
 
    The API will be available at `http://localhost:8000`
 
+### Services
+
+1. Navigate to the services directory:
+   ```bash
+   cd services/camera_collector
+   ```
+
+2. Install dependencies using uv:
+   ```bash
+   uv sync
+   ```
+
+3. Start Redis (required for task queue):
+   ```bash
+   docker run -d -p 6379:6379 redis:alpine
+   # or if Redis is installed locally:
+   redis-server
+   ```
+
+4. Run the backend server:
+   ```bash
+   uv run python -m service.main
+   ```
+
 ### Frontend
 
 1. Navigate to the frontend directory:

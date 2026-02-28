@@ -24,11 +24,29 @@ class Intersection(BaseModel):
 
     id: str = Field(..., description="Unique intersection identifier")
     lat: float = Field(..., ge=-90, le=90, description="Latitude coordinate")
+    osm_id: int = Field(..., description="OSM node ID")
     lon: float = Field(..., ge=-180, le=180, description="Longitude coordinate")
     name: str | None = Field(None, description="Street name at intersection (if available)")
     num_roads: int = Field(..., ge=1, description="Number of roads meeting at this intersection")
     has_traffic_light: bool = Field(default=False, description="Whether this intersection has a traffic light")
     sumo_tl_id: str | None = Field(None, description="SUMO traffic light ID (if converted and mapped)")
+    roads: list[str] | None = Field(None, description="Names of roads meeting at this intersection (up to 2)")
+
+
+class TrafficSignal(BaseModel):
+    """Traffic signal node from OSM (legacy name)."""
+
+    osm_id: int = Field(..., description="OSM node ID")
+    lat: float = Field(..., ge=-90, le=90, description="Latitude coordinate")
+    lon: float = Field(..., ge=-180, le=180, description="Longitude coordinate")
+
+
+class TrafficLight(BaseModel):
+    """Traffic light node from OSM."""
+
+    osm_id: int = Field(..., description="OSM node ID")
+    lat: float = Field(..., ge=-90, le=90, description="Latitude coordinate")
+    lon: float = Field(..., ge=-180, le=180, description="Longitude coordinate")
 
 
 class NetworkInfo(BaseModel):
@@ -144,3 +162,12 @@ class RouteGenerationResponse(BaseModel):
     routes_path: str = Field(..., description="Path to the generated .rou.xml file")
     trip_count: int = Field(..., ge=0, description="Estimated number of generated trips")
     vehicle_distribution: dict[str, float] = Field(..., description="Vehicle type percentages")
+
+class DirectionFrame(BaseModel):
+    direction: str
+    image: str | None  # base64
+
+
+class IntersectionFrames(BaseModel):
+    intersection_id: str
+    frames: list[DirectionFrame]

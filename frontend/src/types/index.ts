@@ -1,5 +1,11 @@
 // TypeScript interfaces matching backend schemas
 
+// Coordinates
+export interface LatLng {
+  lat: number;
+  lng: number;
+}
+
 // Matches backend BoundingBox
 export interface BoundingBox {
   south: number;
@@ -17,6 +23,20 @@ export interface Intersection {
   num_roads: number;
   has_traffic_light: boolean;
   sumo_tl_id?: string;
+}
+
+// OSM traffic signal
+export interface TrafficSignal {
+  osm_id: number;
+  lat: number;
+  lon: number;
+}
+
+// OSM traffic light (preferred name)
+export interface TrafficLight {
+  osm_id: number;
+  lat: number;
+  lon: number;
 }
 
 // Matches backend NetworkInfo
@@ -83,4 +103,26 @@ export interface SSEStatusEvent {
 
 export interface SSEErrorEvent {
   message: string;
+}
+
+export interface DirectionFrame {
+  direction: string;
+  image: string | null;
+}
+
+export interface IntersectionFrames {
+  intersection_id?: string | number;
+  roads?: string[];
+  frames: DirectionFrame[];
+}
+
+export interface Intersection {
+  id: string;
+  lat: number;
+  lon: number;
+  name?: string;
+  num_roads: number;
+  has_traffic_light: boolean;
+  sumo_tl_id?: string;
+  trafficLight?: TrafficLight;
 }
