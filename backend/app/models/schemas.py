@@ -67,31 +67,6 @@ class TrafficScenario(str, Enum):
     RUSH_HOUR = "rush_hour"
 
 
-class SimulationStartRequest(BaseModel):
-    """Request body for starting a simulation."""
-
-    network_id: str = Field(..., description="ID of the network to simulate")
-    scenario: TrafficScenario = Field(default=TrafficScenario.MODERATE, description="Traffic scenario for route generation")
-    gui: bool = Field(default=False, description="Whether to use SUMO-GUI (False for headless)")
-
-
-class SimulationStatus(BaseModel):
-    """Current simulation status."""
-
-    status: str = Field(..., description="Simulation status: idle, running, paused, started, stopped")
-    step: int = Field(..., ge=0, description="Current simulation step")
-    network_id: str | None = Field(None, description="ID of the current network (if any)")
-
-
-class SimulationStepMetrics(BaseModel):
-    """Metrics from a single simulation step."""
-
-    step: int = Field(..., ge=0, description="Current simulation step")
-    total_vehicles: int = Field(..., ge=0, description="Total number of vehicles in simulation")
-    total_wait_time: float = Field(..., ge=0, description="Sum of all vehicle waiting times (seconds)")
-    average_wait_time: float = Field(..., ge=0, description="Average waiting time per vehicle (seconds)")
-
-
 class MetricsSnapshotResponse(BaseModel):
     """Response model for a metrics snapshot."""
 

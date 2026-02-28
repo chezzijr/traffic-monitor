@@ -48,6 +48,7 @@ def mock_network_data() -> dict:
         "intersections": [
             {
                 "id": "12345",
+                "osm_id": 12345,
                 "lat": 21.025,
                 "lon": 105.822,
                 "name": "Test Street",
@@ -55,6 +56,7 @@ def mock_network_data() -> dict:
             },
             {
                 "id": "67890",
+                "osm_id": 67890,
                 "lat": 21.027,
                 "lon": 105.824,
                 "name": None,

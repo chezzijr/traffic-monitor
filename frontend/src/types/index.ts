@@ -23,6 +23,7 @@ export interface Intersection {
   num_roads: number;
   has_traffic_light: boolean;
   sumo_tl_id?: string;
+  trafficLight?: TrafficLight;
 }
 
 // OSM traffic signal
@@ -56,53 +57,11 @@ export interface TrafficLightState {
   remaining_time: number;
 }
 
-// Simulation status response from backend
-export interface SimulationStatusResponse {
-  status: 'idle' | 'running' | 'paused' | 'started' | 'stopped';
-  step: number;
-  network_id: string | null;
-}
-
-// Simulation step metrics from backend
-export interface SimulationStepMetrics {
-  step: number;
-  total_vehicles: number;
-  total_wait_time: number;
-  average_wait_time: number;
-}
-
 // Traffic light information from backend
 export interface TrafficLightInfo {
   id: string;
   phase: number;
   program: string;
-}
-
-// Legacy types for backwards compatibility
-export type SimulationStatus = 'idle' | 'running' | 'paused' | 'stopped';
-
-export interface SimulationMetrics {
-  current_step: number;
-  total_vehicles: number;
-  average_wait_time: number;
-  throughput: number;
-}
-
-// SSE event types for simulation streaming
-export interface SSEStepEvent {
-  step: number;
-  total_vehicles: number;
-  total_wait_time: number;
-  average_wait_time: number;
-}
-
-export interface SSEStatusEvent {
-  step: number;
-  final_step?: number;
-}
-
-export interface SSEErrorEvent {
-  message: string;
 }
 
 export interface DirectionFrame {
@@ -114,15 +73,4 @@ export interface IntersectionFrames {
   intersection_id?: string | number;
   roads?: string[];
   frames: DirectionFrame[];
-}
-
-export interface Intersection {
-  id: string;
-  lat: number;
-  lon: number;
-  name?: string;
-  num_roads: number;
-  has_traffic_light: boolean;
-  sumo_tl_id?: string;
-  trafficLight?: TrafficLight;
 }
