@@ -30,6 +30,7 @@ services:
       - REDIS_HOST=redis
     volumes:
       - ./simulation:/app/simulation
+      - ./backend/app:/app/app:ro
     depends_on:
       - redis
     networks:
@@ -52,7 +53,7 @@ services:
   celery-worker:
     build:
       context: ./backend
-    command: celery -A app.celery_app worker --loglevel=info --concurrency=1
+    command: uv run celery -A app.celery_app worker --loglevel=info --concurrency=1
     environment:
       - SUMO_HOME=/usr/share/sumo
       - CELERY_BROKER_URL=redis://redis:6379/0
@@ -60,6 +61,7 @@ services:
       - REDIS_HOST=redis
     volumes:
       - ./simulation:/app/simulation
+      - ./backend/app:/app/app:ro
     depends_on:
       redis:
         condition: service_healthy
