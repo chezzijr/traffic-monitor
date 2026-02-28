@@ -8,7 +8,7 @@ import { mapService } from './services';
 import type { Intersection, TrafficLight } from './types';
 
 export default function App() {
-  const { selectedRegion, setIntersections, setCurrentNetworkId, setError, setLoading, isLoading, currentNetworkId } = useMapStore();
+  const { selectedRegion, setIntersections, setCurrentNetworkId, setError, setLoading, isLoading } = useMapStore();
 
   // Camera modal state
   const [selectedIntersection, setSelectedIntersection] = useState<Intersection | null>(null);

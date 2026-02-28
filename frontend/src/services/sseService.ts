@@ -1,57 +1,12 @@
-import type { SSEStepEvent, SSEStatusEvent, SSEErrorEvent } from '../types';
+// TODO: Rewrite for training SSE in Phase 9
+// This file is a placeholder — the old SimulationSSE was removed with the simulation flow.
 
-interface SimulationSSECallbacks {
-  onStep: (data: SSEStepEvent) => void;
-  onHeartbeat?: () => void;
-  onStopped?: (data: SSEStatusEvent) => void;
-  onError?: (data: SSEErrorEvent) => void;
-}
-
-export class SimulationSSE {
+export class TrainingSSE {
   private eventSource: EventSource | null = null;
-  private callbacks: SimulationSSECallbacks;
 
-  constructor(callbacks: SimulationSSECallbacks) {
-    this.callbacks = callbacks;
-  }
-
-  connect(stepInterval: number = 100): void {
-    // Close existing connection
+  connect(_taskId: string): void {
     this.disconnect();
-
-    // Create new EventSource
-    this.eventSource = new EventSource(
-      `/api/simulation/stream?step_interval=${stepInterval}`
-    );
-
-    // Register event listeners
-    this.eventSource.addEventListener('step', (event) => {
-      const data = JSON.parse(event.data) as SSEStepEvent;
-      this.callbacks.onStep(data);
-    });
-
-    this.eventSource.addEventListener('heartbeat', () => {
-      this.callbacks.onHeartbeat?.();
-    });
-
-    this.eventSource.addEventListener('stopped', (event) => {
-      const data = JSON.parse(event.data) as SSEStatusEvent;
-      this.callbacks.onStopped?.(data);
-    });
-
-    this.eventSource.addEventListener('error', (event) => {
-      // Check if this is a custom error event from the server
-      if (event instanceof MessageEvent && event.data) {
-        const data = JSON.parse(event.data) as SSEErrorEvent;
-        this.callbacks.onError?.(data);
-      }
-    });
-
-    // Handle connection error
-    this.eventSource.onerror = () => {
-      this.callbacks.onError?.({ message: 'SSE connection error' });
-      this.disconnect();
-    };
+    // Will be implemented in Phase 9
   }
 
   disconnect(): void {

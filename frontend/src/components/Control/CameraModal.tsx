@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X, Play, Loader } from 'lucide-react';
+import { X, Loader } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { cameraService } from '../../services';
 import type { Intersection, IntersectionFrames } from '../../types';
