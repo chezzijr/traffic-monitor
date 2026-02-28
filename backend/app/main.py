@@ -7,7 +7,10 @@ from app.api.routes import (
     control_router,
     map_router,
     metrics_router,
+    networks_router,
+    tasks_router,
     traffic_light_router,
+    training_router,
 )
 from app.config import settings
 
@@ -31,6 +34,9 @@ app.include_router(map_router, prefix=settings.api_prefix)
 app.include_router(metrics_router, prefix=settings.api_prefix)
 app.include_router(control_router, prefix=settings.api_prefix)
 app.include_router(traffic_light_router, prefix=settings.api_prefix)
+app.include_router(training_router, prefix=settings.api_prefix)
+app.include_router(tasks_router, prefix=settings.api_prefix)
+app.include_router(networks_router, prefix=settings.api_prefix)
 
 
 @app.get("/health")
