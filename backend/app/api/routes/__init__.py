@@ -7,6 +7,8 @@ from app.api.routes.metrics import router as metrics_router
 from app.api.routes.training import router as training_router
 from app.api.routes.tasks import router as tasks_router
 from app.api.routes.networks import router as networks_router
+from app.api.routes.models import router as models_router
+from app.api.routes.deployment import router as deployment_router
 
 __all__ = [
     "traffic_light_router",
@@ -16,4 +18,6 @@ __all__ = [
     "training_router",
     "tasks_router",
     "networks_router",
+    "models_router",
+    "deployment_router",
 ]
