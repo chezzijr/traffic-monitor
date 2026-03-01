@@ -15,11 +15,12 @@ import numpy as np
 from stable_baselines3 import DQN, PPO
 from stable_baselines3.common.base_class import BaseAlgorithm
 
+from app.config import settings
 from app.ml.trainer import Algorithm
 
 logger = logging.getLogger(__name__)
 
-MODELS_DIR = Path(__file__).parent.parent.parent.parent / "simulation" / "models"
+MODELS_DIR = settings.simulation_models_dir
 
 
 class _ModelState:

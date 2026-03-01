@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     dataset_dir: Path = project_root / "dataset"
     simulation_networks_dir: ClassVar[Path] = project_root / "simulation" / "networks"
     simulation_models_dir: ClassVar[Path] = project_root / "simulation" / "models"
+    simulation_vtypes_dir: ClassVar[Path] = project_root / "simulation" / "vtypes"
 
 
 settings = Settings()
