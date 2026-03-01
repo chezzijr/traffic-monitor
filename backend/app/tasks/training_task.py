@@ -7,15 +7,13 @@ from pathlib import Path
 
 import numpy as np
 import redis
-from celery import current_task
+
 from stable_baselines3.common.callbacks import BaseCallback
 
 from app.celery_app import celery_app
 from app.config import settings
 
 logger = logging.getLogger(__name__)
-
-from app.config import settings
 
 SIMULATION_NETWORKS_DIR = settings.simulation_networks_dir
 MODELS_DIR = settings.simulation_models_dir
@@ -32,18 +30,28 @@ def _get_redis():
 
 
 class CancellationCallback(BaseCallback):
-    """Check every 100 steps if task has been revoked."""
+    """Check every 100 steps if task has been cancelled via Redis."""
 
     def __init__(self, task_id: str, verbose: int = 0):
         super().__init__(verbose)
         self.task_id = task_id
         self._check_interval = 100
+        self._redis = None
+
+    def _get_redis(self):
+        if self._redis is None:
+            self._redis = _get_redis()
+        return self._redis
 
     def _on_step(self) -> bool:
         if self.n_calls % self._check_interval == 0:
-            if current_task and current_task.is_aborted():
-                logger.info(f"Task {self.task_id} cancelled at step {self.num_timesteps}")
-                return False
+            r = self._get_redis()
+            progress_json = r.get(f"task:{self.task_id}:progress")
+            if progress_json:
+                progress = json.loads(progress_json)
+                if progress.get("status") == "cancelled":
+                    logger.info(f"Task {self.task_id} cancelled at step {self.num_timesteps}")
+                    return False
         return True
 
 
@@ -107,34 +115,72 @@ class ProgressPublishingCallback(BaseCallback):
 
 
 class TrafficMetricsCallback(BaseCallback):
-    """Accumulate traffic metrics from environment info dicts."""
+    """Accumulate traffic metrics from environment info dicts with episode-level aggregation."""
 
     def __init__(self, verbose: int = 0):
         super().__init__(verbose)
-        self._waiting_times: list[float] = []
-        self._queue_lengths: list[float] = []
-        self._throughputs: list[int] = []
+        # Per-step accumulators (reset at episode boundary)
+        self._step_waiting_times: list[float] = []
+        self._step_queue_lengths: list[float] = []
+        self._step_throughputs: list[int] = []
+        # Per-episode averages (stored permanently)
+        self._episode_waiting_times: list[float] = []
+        self._episode_queue_lengths: list[float] = []
+        self._episode_throughputs: list[float] = []
 
     def _on_step(self) -> bool:
         infos = self.locals.get("infos", [{}])
         if infos:
             info = infos[0] if isinstance(infos, list) else infos
-            self._waiting_times.append(info.get("avg_waiting_time", 0.0))
-            self._queue_lengths.append(info.get("avg_queue_length", 0.0))
-            self._throughputs.append(info.get("throughput", 0))
+            self._step_waiting_times.append(info.get("avg_waiting_time", 0.0))
+            self._step_queue_lengths.append(info.get("avg_queue_length", 0.0))
+            self._step_throughputs.append(info.get("throughput", 0))
+
+        dones = self.locals.get("dones", [False])
+        if dones[0]:
+            self._finalize_episode()
+
         return True
+
+    def _finalize_episode(self):
+        if self._step_waiting_times:
+            self._episode_waiting_times.append(float(np.mean(self._step_waiting_times)))
+            self._episode_queue_lengths.append(float(np.mean(self._step_queue_lengths)))
+            self._episode_throughputs.append(float(np.sum(self._step_throughputs)))
+        self._step_waiting_times.clear()
+        self._step_queue_lengths.clear()
+        self._step_throughputs.clear()
+
+    def get_final_metrics(self, last_n: int = 10) -> dict:
+        if self._episode_waiting_times:
+            return {
+                "avg_waiting_time": float(np.mean(self._episode_waiting_times[-last_n:])),
+                "avg_queue_length": float(np.mean(self._episode_queue_lengths[-last_n:])),
+                "throughput": int(np.mean(self._episode_throughputs[-last_n:])),
+            }
+        return {
+            "avg_waiting_time": float(np.mean(self._step_waiting_times)) if self._step_waiting_times else 0.0,
+            "avg_queue_length": float(np.mean(self._step_queue_lengths)) if self._step_queue_lengths else 0.0,
+            "throughput": int(np.sum(self._step_throughputs)) if self._step_throughputs else 0,
+        }
 
     @property
     def avg_waiting_time(self) -> float:
-        return float(np.mean(self._waiting_times[-100:])) if self._waiting_times else 0.0
+        if self._episode_waiting_times:
+            return float(np.mean(self._episode_waiting_times))
+        return float(np.mean(self._step_waiting_times)) if self._step_waiting_times else 0.0
 
     @property
     def avg_queue_length(self) -> float:
-        return float(np.mean(self._queue_lengths[-100:])) if self._queue_lengths else 0.0
+        if self._episode_queue_lengths:
+            return float(np.mean(self._episode_queue_lengths))
+        return float(np.mean(self._step_queue_lengths)) if self._step_queue_lengths else 0.0
 
     @property
     def throughput(self) -> int:
-        return int(np.sum(self._throughputs[-100:])) if self._throughputs else 0
+        if self._episode_throughputs:
+            return int(np.mean(self._episode_throughputs))
+        return int(np.sum(self._step_throughputs)) if self._step_throughputs else 0
 
 
 class MetricsLoggingCallback(BaseCallback):
@@ -174,17 +220,27 @@ class MetricsLoggingCallback(BaseCallback):
 
 
 class MultiCancellationCallback:
-    """Check every 100 steps if multi-agent task has been revoked."""
+    """Check every 100 steps if multi-agent task has been cancelled via Redis."""
 
     def __init__(self, task_id: str):
         self.task_id = task_id
         self._check_interval = 100
+        self._redis = None
+
+    def _get_redis(self):
+        if self._redis is None:
+            self._redis = _get_redis()
+        return self._redis
 
     def on_step(self, step: int, total_steps: int, infos: dict) -> bool:
         if step % self._check_interval == 0:
-            if current_task and current_task.is_aborted():
-                logger.info(f"Multi-agent task {self.task_id} cancelled at step {step}")
-                return False
+            r = self._get_redis()
+            progress_json = r.get(f"task:{self.task_id}:progress")
+            if progress_json:
+                progress = json.loads(progress_json)
+                if progress.get("status") == "cancelled":
+                    logger.info(f"Multi-agent task {self.task_id} cancelled at step {step}")
+                    return False
         return True
 
     def on_episode_end(self, episode: int, infos: dict) -> None:
@@ -207,6 +263,9 @@ class MultiProgressCallback:
         self.baseline = baseline or {}
         self._publish_interval = 500
         self._redis = None
+        self.last_waiting_time = 0.0
+        self.last_queue_length = 0.0
+        self.last_throughput = 0
 
     def _get_redis(self):
         if self._redis is None:
@@ -214,21 +273,31 @@ class MultiProgressCallback:
         return self._redis
 
     def on_step(self, step: int, total_steps: int, infos: dict) -> bool:
+        # Always update latest metrics so get_final_metrics() is never stale
+        waiting_times = [infos.get(tl, {}).get("avg_waiting_time", 0.0) for tl in self.tl_ids]
+        queue_lengths = [infos.get(tl, {}).get("avg_queue_length", 0.0) for tl in self.tl_ids]
+        throughputs = [infos.get(tl, {}).get("throughput", 0) for tl in self.tl_ids]
+        self.last_waiting_time = float(np.mean(waiting_times)) if waiting_times else 0.0
+        self.last_queue_length = float(np.mean(queue_lengths)) if queue_lengths else 0.0
+        self.last_throughput = int(sum(throughputs))
+
         if step % self._publish_interval == 0:
-            self._publish(step, infos)
+            self._publish(step)
         return True
 
     def on_episode_end(self, episode: int, infos: dict) -> None:
         pass
 
-    def _publish(self, step: int, infos: dict):
+    def get_final_metrics(self) -> dict:
+        return {
+            "avg_waiting_time": self.last_waiting_time,
+            "avg_queue_length": self.last_queue_length,
+            "throughput": self.last_throughput,
+        }
+
+    def _publish(self, step: int):
         r = self._get_redis()
         progress = min(step / max(self.total_timesteps, 1), 1.0)
-
-        # Aggregate metrics across agents
-        waiting_times = [infos.get(tl, {}).get("avg_waiting_time", 0.0) for tl in self.tl_ids]
-        queue_lengths = [infos.get(tl, {}).get("avg_queue_length", 0.0) for tl in self.tl_ids]
-        throughputs = [infos.get(tl, {}).get("throughput", 0) for tl in self.tl_ids]
 
         payload = {
             "task_id": self.task_id,
@@ -237,9 +306,9 @@ class MultiProgressCallback:
             "total_timesteps": self.total_timesteps,
             "progress": round(progress, 4),
             "mean_reward": 0.0,
-            "avg_waiting_time": float(np.mean(waiting_times)) if waiting_times else 0.0,
-            "avg_queue_length": float(np.mean(queue_lengths)) if queue_lengths else 0.0,
-            "throughput": int(sum(throughputs)),
+            "avg_waiting_time": self.last_waiting_time,
+            "avg_queue_length": self.last_queue_length,
+            "throughput": self.last_throughput,
         }
 
         if self.baseline:
@@ -352,6 +421,7 @@ def train_traffic_light(
             json.dump(model_meta, f, indent=2)
 
         # Publish completion
+        rl_metrics = traffic_metrics_cb.get_final_metrics()
         completion = {
             "task_id": task_id,
             "status": "completed",
@@ -359,6 +429,9 @@ def train_traffic_light(
             "total_timesteps": total_timesteps,
             "progress": 1.0,
             "model_path": str(model_path) + ".zip",
+            "avg_waiting_time": rl_metrics["avg_waiting_time"],
+            "avg_queue_length": rl_metrics["avg_queue_length"],
+            "throughput": rl_metrics["throughput"],
         }
         if baseline:
             completion["baseline_avg_waiting_time"] = baseline.get("avg_waiting_time", 0.0)
@@ -433,10 +506,9 @@ def train_multi_junction(
 
         baseline = trainer.run_baseline(num_episodes=3)
 
-        callbacks = [
-            MultiCancellationCallback(task_id),
-            MultiProgressCallback(task_id, total_timesteps, tl_ids, baseline),
-        ]
+        cancellation_cb = MultiCancellationCallback(task_id)
+        multi_progress_cb = MultiProgressCallback(task_id, total_timesteps, tl_ids, baseline)
+        callbacks = [cancellation_cb, multi_progress_cb]
 
         trainer.train(total_timesteps=total_timesteps, callbacks=callbacks)
 
@@ -445,6 +517,7 @@ def train_multi_junction(
         model_dir = MODELS_DIR / f"{network_id}_multi_{algorithm}_{timestamp}"
         trainer.save(str(model_dir))
 
+        rl_metrics = multi_progress_cb.get_final_metrics()
         completion = {
             "task_id": task_id,
             "status": "completed",
@@ -452,6 +525,9 @@ def train_multi_junction(
             "total_timesteps": total_timesteps,
             "progress": 1.0,
             "model_path": str(model_dir),
+            "avg_waiting_time": rl_metrics["avg_waiting_time"],
+            "avg_queue_length": rl_metrics["avg_queue_length"],
+            "throughput": rl_metrics["throughput"],
         }
         if baseline:
             completion["baseline_avg_waiting_time"] = baseline.get("avg_waiting_time", 0.0)
