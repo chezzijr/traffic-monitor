@@ -409,9 +409,9 @@ def train_traffic_light(
             "tl_id": tl_id,
             "algorithm": algorithm,
             "total_timesteps": total_timesteps,
-            "observation_dim": env.observation_space.shape[0],
-            "action_dim": env.action_space.n,
-            "num_phases": env._num_phases,
+            "observation_dim": int(env.observation_space.shape[0]),
+            "action_dim": int(env.action_space.n),
+            "num_phases": int(env._num_phases),
             "controlled_lanes": env._controlled_lanes,
             "trained_on_scenarios": [scenario],
             "created_at": datetime.now().isoformat(),
@@ -432,6 +432,10 @@ def train_traffic_light(
             "avg_waiting_time": rl_metrics["avg_waiting_time"],
             "avg_queue_length": rl_metrics["avg_queue_length"],
             "throughput": rl_metrics["throughput"],
+            "network_id": network_id,
+            "tl_id": tl_id,
+            "algorithm": algorithm,
+            "mean_reward": metrics_logging_cb.mean_reward,
         }
         if baseline:
             completion["baseline_avg_waiting_time"] = baseline.get("avg_waiting_time", 0.0)
@@ -528,6 +532,10 @@ def train_multi_junction(
             "avg_waiting_time": rl_metrics["avg_waiting_time"],
             "avg_queue_length": rl_metrics["avg_queue_length"],
             "throughput": rl_metrics["throughput"],
+            "network_id": network_id,
+            "tl_ids": tl_ids,
+            "algorithm": algorithm,
+            "mean_reward": 0.0,
         }
         if baseline:
             completion["baseline_avg_waiting_time"] = baseline.get("avg_waiting_time", 0.0)

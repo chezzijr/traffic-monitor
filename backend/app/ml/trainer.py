@@ -190,6 +190,9 @@ class TrafficLightTrainer:
         self.algorithm = algorithm
         self._seed = seed
 
+        # Trigger lazy space initialization so observation/action spaces are correct
+        self.env.reset()
+
         # Merge custom params with defaults
         params = self._get_default_params(algorithm)
         if model_params:

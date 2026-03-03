@@ -18,7 +18,7 @@ import { useTrainingStore } from './store/trainingStore';
 import { useModelStore } from './store/modelStore';
 import { mapService } from './services/mapService';
 import { TrainingSSE } from './services/sseService';
-import type { Intersection, TrafficLight, TrainingProgressEvent } from './types';
+import type { Intersection, TrafficLight, TrainingProgressEvent, TrainingCompletionEvent, Algorithm } from './types';
 
 export default function App() {
   // Map store — individual selectors to avoid unnecessary re-renders
@@ -37,6 +37,7 @@ export default function App() {
   const activeTaskId = useTrainingStore((s) => s.activeTaskId);
   const setActiveTaskId = useTrainingStore((s) => s.setActiveTaskId);
   const updateProgress = useTrainingStore((s) => s.updateProgress);
+  const completeTask = useTrainingStore((s) => s.completeTask);
 
   // Model store
   const isPanelOpen = useModelStore((s) => s.isPanelOpen);
@@ -158,20 +159,21 @@ export default function App() {
         updateProgress(taskId, data);
         setProgressHistory((prev) => [...prev, data]);
       },
-      onComplete: (data) => {
-        toast.success(`Training complete for task ${data.task_id.slice(0, 8)}`);
+      onComplete: (data: TrainingCompletionEvent) => {
+        completeTask(data.task_id, data);
+
         if (data.model_path) {
-          const { algorithm } = useTrainingStore.getState();
-          const { currentNetworkId, selectedJunctionIds } = useMapStore.getState();
           addModel({
             model_id: `${data.task_id}_model`,
-            algorithm,
-            network_id: currentNetworkId || '',
-            tl_id: selectedJunctionIds[0] || '',
+            algorithm: data.algorithm as Algorithm,
+            network_id: data.network_id,
+            tl_id: data.tl_id || (data.tl_ids ? data.tl_ids[0] : ''),
             model_path: data.model_path,
             created_at: new Date().toISOString(),
           });
         }
+
+        toast.success(`Training complete for task ${data.task_id.slice(0, 8)}`);
       },
       onError: (data) => {
         toast.error(`Training failed: ${data.error}`);
@@ -179,7 +181,7 @@ export default function App() {
     });
 
     sse.connect(taskId);
-  }, [updateProgress, setActiveTaskId, addModel]);
+  }, [updateProgress, setActiveTaskId, addModel, completeTask]);
 
   // Handle training started from config panel
   const handleTrainingStarted = useCallback((taskId: string) => {

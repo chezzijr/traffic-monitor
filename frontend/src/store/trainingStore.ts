@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Algorithm, TrafficScenario, TaskInfo, TrainingProgressEvent } from '../types';
+import type { Algorithm, TrafficScenario, TaskInfo, TrainingProgressEvent, TrainingCompletionEvent } from '../types';
 
 interface TrainingState {
   // Config
@@ -11,6 +11,7 @@ interface TrainingState {
   tasks: TaskInfo[];
   activeTaskId: string | null;
   liveProgress: Record<string, TrainingProgressEvent>;
+  completions: Record<string, TrainingCompletionEvent>;
 
   // Actions
   setAlgorithm: (algorithm: Algorithm) => void;
@@ -21,6 +22,8 @@ interface TrainingState {
   setActiveTaskId: (taskId: string | null) => void;
   updateProgress: (taskId: string, progress: TrainingProgressEvent) => void;
   removeProgress: (taskId: string) => void;
+  completeTask: (taskId: string, data: TrainingCompletionEvent) => void;
+  dismissCompletion: (taskId: string) => void;
 }
 
 export const useTrainingStore = create<TrainingState>((set) => ({
@@ -33,6 +36,7 @@ export const useTrainingStore = create<TrainingState>((set) => ({
   tasks: [],
   activeTaskId: null,
   liveProgress: {},
+  completions: {},
 
   // Actions
   setAlgorithm: (algorithm) => set({ algorithm }),
@@ -45,6 +49,11 @@ export const useTrainingStore = create<TrainingState>((set) => ({
   updateProgress: (taskId, progress) =>
     set((state) => ({
       liveProgress: { ...state.liveProgress, [taskId]: progress },
+      tasks: state.tasks.map((t) =>
+        t.task_id === taskId
+          ? { ...t, progress: progress.progress, status: 'running' as const }
+          : t
+      ),
     })),
   removeProgress: (taskId) =>
     set((state) => ({
@@ -52,4 +61,23 @@ export const useTrainingStore = create<TrainingState>((set) => ({
         Object.entries(state.liveProgress).filter(([key]) => key !== taskId)
       ),
     })),
+  completeTask: (taskId, data) =>
+    set((state) => ({
+      completions: { ...state.completions, [taskId]: data },
+      tasks: state.tasks.map((t) =>
+        t.task_id === taskId
+          ? { ...t, status: 'completed' as const, progress: 1.0, model_path: data.model_path }
+          : t
+      ),
+    })),
+  dismissCompletion: (taskId) =>
+    set((state) => {
+      const { [taskId]: _, ...remainingCompletions } = state.completions;
+      const { [taskId]: __, ...remainingProgress } = state.liveProgress;
+      return {
+        completions: remainingCompletions,
+        liveProgress: remainingProgress,
+        activeTaskId: state.activeTaskId === taskId ? null : state.activeTaskId,
+      };
+    }),
 }));

@@ -1,8 +1,8 @@
-import type { TrainingProgressEvent } from '../types';
+import type { TrainingProgressEvent, TrainingCompletionEvent } from '../types';
 import { API_BASE_URL } from './api';
 
 type ProgressHandler = (data: TrainingProgressEvent) => void;
-type CompleteHandler = (data: { task_id: string; model_path?: string }) => void;
+type CompleteHandler = (data: TrainingCompletionEvent) => void;
 type ErrorHandler = (error: { task_id: string; error: string }) => void;
 
 interface SSEHandlers {
@@ -41,7 +41,7 @@ export class TrainingSSE {
     this.eventSource.addEventListener('complete', (e: MessageEvent) => {
       if (this.onComplete) {
         try {
-          const data = JSON.parse(e.data) as { task_id: string; model_path?: string };
+          const data = JSON.parse(e.data) as TrainingCompletionEvent;
           this.onComplete(data);
         } catch {
           console.error('Failed to parse SSE complete data:', e.data);

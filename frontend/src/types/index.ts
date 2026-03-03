@@ -134,6 +134,27 @@ export interface TrainingProgressEvent {
   baseline_throughput?: number;
 }
 
+// Training completion from SSE
+export interface TrainingCompletionEvent {
+  task_id: string;
+  status: "completed";
+  model_path: string;
+  network_id: string;
+  tl_id?: string;
+  tl_ids?: string[];
+  algorithm: string;
+  timestep: number;
+  total_timesteps: number;
+  progress: number;
+  mean_reward: number;
+  avg_waiting_time: number;
+  avg_queue_length: number;
+  throughput: number;
+  baseline_avg_waiting_time?: number;
+  baseline_avg_queue_length?: number;
+  baseline_throughput?: number;
+}
+
 // Task info
 export interface TaskInfo {
   task_id: string;
