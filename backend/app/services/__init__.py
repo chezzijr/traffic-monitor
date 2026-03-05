@@ -1,11 +1,25 @@
 # Services module
 
-from app.services import metrics_service, ml_service, osm_service, sumo_service, traffic_light_service
+from app.services import (
+    deployment_service,
+    metrics_service,
+    ml_service,
+    network_service,
+    osm_service,
+    sumo_service,
+    task_service,
+    traffic_light_service,
+    validation_service,
+)
 
 __all__ = [
-    "traffic_light_service",
+    "deployment_service",
     "metrics_service",
     "ml_service",
+    "network_service",
     "osm_service",
     "sumo_service",
+    "task_service",
+    "traffic_light_service",
+    "validation_service",
 ]

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import torch
 from stable_baselines3 import DQN, PPO
 from stable_baselines3.common.base_class import BaseAlgorithm
 from stable_baselines3.common.callbacks import BaseCallback, CallbackList
@@ -142,27 +143,32 @@ class TrafficLightTrainer:
 
     # Default hyperparameters for each algorithm
     DEFAULT_DQN_PARAMS: dict[str, Any] = {
-        "learning_rate": 1e-4,
+        "learning_rate": 1e-3,
         "buffer_size": 100_000,
         "learning_starts": 1000,
         "batch_size": 64,
         "tau": 0.005,
-        "gamma": 0.99,
+        "gamma": 0.95,
         "train_freq": 4,
-        "target_update_interval": 1000,
+        "target_update_interval": 100,
         "exploration_fraction": 0.1,
-        "exploration_final_eps": 0.05,
+        "exploration_initial_eps": 0.5,
+        "exploration_final_eps": 0.01,
+        "policy_kwargs": {"net_arch": [20, 20]},
     }
 
     DEFAULT_PPO_PARAMS: dict[str, Any] = {
         "learning_rate": 3e-4,
-        "n_steps": 2048,
-        "batch_size": 64,
-        "n_epochs": 10,
+        "n_steps": 360,
+        "batch_size": 360,
+        "n_epochs": 4,
         "gamma": 0.99,
         "gae_lambda": 0.95,
-        "clip_range": 0.2,
-        "ent_coef": 0.01,
+        "clip_range": 0.1,
+        "ent_coef": 0.001,
+        "vf_coef": 0.5,
+        "max_grad_norm": 0.5,
+        "policy_kwargs": {"net_arch": {"pi": [64, 64], "vf": [64, 64]}},
     }
 
     def __init__(
@@ -183,6 +189,9 @@ class TrafficLightTrainer:
         self.env = env
         self.algorithm = algorithm
         self._seed = seed
+
+        # Trigger lazy space initialization so observation/action spaces are correct
+        self.env.reset()
 
         # Merge custom params with defaults
         params = self._get_default_params(algorithm)
@@ -216,10 +225,12 @@ class TrafficLightTrainer:
         Returns:
             The created model
         """
+        device = "cuda" if torch.cuda.is_available() else "cpu"
         common_kwargs = {
             "env": self.env,
             "verbose": 0,
             "seed": self._seed,
+            "device": device,
         }
 
         if self.algorithm == Algorithm.DQN:
@@ -357,6 +368,49 @@ class TrafficLightTrainer:
         )
 
         return metrics
+
+    def run_baseline(self, num_episodes: int = 3) -> dict[str, float]:
+        """Run baseline episodes with SUMO's default timing.
+
+        Returns dict with avg_waiting_time, avg_queue_length, throughput.
+        """
+        logger.info(f"Running {num_episodes} baseline episodes")
+        total_waiting = 0.0
+        total_queue = 0.0
+        total_throughput = 0
+
+        for ep in range(num_episodes):
+            obs, _ = self.env.reset()
+            done = False
+            ep_waiting = 0.0
+            ep_queue = 0.0
+            ep_throughput = 0
+            steps = 0
+
+            while not done:
+                # Don't act — let SUMO's default program run
+                # Just step with current phase (no change)
+                obs, _, terminated, truncated, info = self.env.step(
+                    self.env.unwrapped._get_conn().trafficlight.getPhase(self.env.unwrapped.tl_id)
+                )
+                done = terminated or truncated
+                ep_waiting += info.get("avg_waiting_time", 0.0)
+                ep_queue += info.get("avg_queue_length", 0.0)
+                ep_throughput += info.get("throughput", 0)
+                steps += 1
+
+            if steps > 0:
+                total_waiting += ep_waiting / steps
+                total_queue += ep_queue / steps
+            total_throughput += ep_throughput
+
+        baseline = {
+            "avg_waiting_time": total_waiting / max(num_episodes, 1),
+            "avg_queue_length": total_queue / max(num_episodes, 1),
+            "throughput": total_throughput // max(num_episodes, 1),
+        }
+        logger.info(f"Baseline metrics: {baseline}")
+        return baseline
 
     @classmethod
     def from_pretrained(

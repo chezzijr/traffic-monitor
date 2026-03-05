@@ -11,6 +11,7 @@ import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from app.config import settings
 from app.models.schemas import TrafficScenario
 
 logger = logging.getLogger(__name__)
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 SUMO_HOME = os.environ.get("SUMO_HOME", "/usr/share/sumo")
 
 # Vietnamese vehicle types file path
-VTYPES_FILE = Path(__file__).parent.parent.parent.parent / "simulation" / "vtypes" / "vietnamese_vtypes.add.xml"
+VTYPES_FILE = settings.simulation_vtypes_dir / "vietnamese_vtypes.add.xml"
 
 
 # Vehicle generation periods (seconds between vehicles) for each scenario

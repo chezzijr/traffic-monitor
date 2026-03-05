@@ -1,8 +1,8 @@
+// TODO: Repurpose for training metrics in Phase 10
 import { Car, Clock, Activity, TrendingUp } from 'lucide-react';
-import type { SimulationMetrics } from '../../types';
 
 interface MetricsPanelProps {
-  metrics: SimulationMetrics | null;
+  metrics: Record<string, number> | null;
   isLoading?: boolean;
 }
 
