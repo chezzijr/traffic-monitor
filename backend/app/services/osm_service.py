@@ -551,7 +551,7 @@ def get_all_traffic_lights() -> list[dict]:
             data = json.load(f)
             
     if not os.path.exists(TRAFFIC_LIGHT_CLUSTERED_PATH):
-     cluster_traffic_light_file(TRAFFIC_LIGHT_PATH, TRAFFIC_LIGHT_CLUSTERED_PATH)
+        cluster_traffic_light_file(TRAFFIC_LIGHT_PATH, TRAFFIC_LIGHT_CLUSTERED_PATH)
     else:
         with open(TRAFFIC_LIGHT_CLUSTERED_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
