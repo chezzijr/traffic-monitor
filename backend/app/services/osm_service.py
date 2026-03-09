@@ -9,6 +9,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 import json
+from app.utils.traffic_light_clustered import cluster_traffic_light_file
 
 import osmnx as ox
 
@@ -26,6 +27,7 @@ SIMULATION_NETWORKS_DIR = Path(__file__).parent.parent.parent.parent / "simulati
 #cache
 CACHE_DIR = Path(__file__).parent.parent.parent.parent / "cache"
 TRAFFIC_LIGHT_PATH = CACHE_DIR / "all_traffic_light.json"
+TRAFFIC_LIGHT_CLUSTERED_PATH = CACHE_DIR / "traffic_light_clustered.json"
 
 # Distance threshold for OSM-to-SUMO coordinate matching (~100m at equator)
 COORD_MATCH_THRESHOLD_DEG = 0.001
@@ -544,9 +546,14 @@ def get_cached_network_ids() -> list[str]:
 def get_all_traffic_lights() -> list[dict]:
     if not os.path.exists(TRAFFIC_LIGHT_PATH):
         data = get_traffic_lights_by_point(lat=10.770487,lon=106.658213, radius=15000)
-        
     else:
         with open(TRAFFIC_LIGHT_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            
+    if not os.path.exists(TRAFFIC_LIGHT_CLUSTERED_PATH):
+     cluster_traffic_light_file(TRAFFIC_LIGHT_PATH, TRAFFIC_LIGHT_CLUSTERED_PATH)
+    else:
+        with open(TRAFFIC_LIGHT_CLUSTERED_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
             
     return data
