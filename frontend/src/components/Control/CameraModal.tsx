@@ -14,6 +14,8 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
     const [frames, setFrames] = useState<IntersectionFrames | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const trafficLight = intersection?.trafficLight;
+    const validFrames = frames?.frames?.filter(f => f.image) ?? [];
+    const showNumber = validFrames?.length >= 2;
 
 
     // Load camera data when modal opens
@@ -100,20 +102,20 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
 
                 {/* Content */}
                 {frames && (
-                    <div className="grid grid-cols-2 gap-4 mt-4">
-                        {frames.frames.map(f => (
-                            <div key={f.direction}>
-                                {f.image ? (
-                                    <img
-                                        src={`data:image/jpeg;base64,${f.image}`}
-                                        className="w-full rounded"
-                                    />
-                                ) : (
-                                    <div className="bg-gray-200 h-40 flex items-center justify-center">
-                                        No image
-                                    </div>
-                                )}
-                                <p className="text-center">{f.direction}</p>
+                    <div
+                        className={`grid gap-4 mt-4 ${validFrames.length === 1 ? "grid-cols-1" : "grid-cols-2"
+                            }`}
+                    >
+                        {validFrames.map((f, index) => (
+                            <div key={f.number}>
+                                <img
+                                    src={`data:image/jpeg;base64,${f.image}`}
+                                    className="w-full rounded"
+                                />
+
+                                <p className="text-center text-sm text-gray-600 mt-1">
+                                    {showNumber ? `Camera ${index + 1}` : "Camera"}
+                                </p>
                             </div>
                         ))}
                     </div>

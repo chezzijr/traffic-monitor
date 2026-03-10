@@ -106,7 +106,7 @@ export interface SSEErrorEvent {
 }
 
 export interface DirectionFrame {
-  direction: string;
+  number?: number;
   image: string | null;
 }
 

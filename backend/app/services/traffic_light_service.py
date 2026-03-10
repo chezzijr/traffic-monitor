@@ -17,22 +17,22 @@ except redis.exceptions.ConnectionError:
     r = None
 
 DATASET_DIR = Path(__file__).parent.parent.parent.parent / "dataset"
-DIRECTIONS = ["north","south","east","west"]
+NUMBERS = [1, 2]
 
 
-def read_disk(intersection: str, direction: str):
-    path = DATASET_DIR / intersection / direction / "latest.jpg"
+def read_disk(intersection: str, number: int):
+    path = DATASET_DIR / intersection / str(number) / "latest.jpg"
     if path.exists():
         return path.read_bytes()
     return None
 
 
-def get_frame(intersection: str, direction: str):
-    key = f"frame:{intersection}:{direction}"
+def get_frame(intersection: str, number: int):
+    key = f"frame:{intersection}:{number}"
 
     img = r.get(key)
     if not img:
-        img = read_disk(intersection, direction)
+        img = read_disk(intersection, number)
 
     if not img:
         return None
@@ -46,10 +46,10 @@ def get_frames_by_roads(roads: list[str]):
         return None
 
     frames = []
-    for d in DIRECTIONS:
+    for n in NUMBERS:
         frames.append({
-            "direction": d,
-            "image": get_frame(intersection, d)
+            "number": n,
+            "image": get_frame(intersection, n)
         })
 
     return {
