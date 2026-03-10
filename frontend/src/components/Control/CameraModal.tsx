@@ -24,11 +24,11 @@ function DirectionLightRow({ activeColour, remaining, direction }: { activeColou
     const bulbs = ['red', 'yellow', 'green'] as const;
     return (
         <div style={{
-            display: 'flex', flexDirection: 'column', alignItems: 'center',
-            marginTop: 6,
+            display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
+            gap: 6, marginTop: 6,
         }}>
-            {/* Top row: traffic light capsule + countdown */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {/* Column: capsule + direction label centered underneath */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                 <div style={{
                     display: 'flex', alignItems: 'center', gap: 4,
                     background: '#1f2937', borderRadius: 10, padding: '4px 8px',
@@ -45,16 +45,17 @@ function DirectionLightRow({ activeColour, remaining, direction }: { activeColou
                         />
                     ))}
                 </div>
-                <span style={{
-                    fontSize: 12, fontWeight: 600,
-                    color: COLOUR_HEX[activeColour] ?? '#6b7280',
-                }}>
-                    {remaining}s
+                <span style={{ fontSize: 13, color: '#374151', marginTop: 3 }}>
+                    {direction}
                 </span>
             </div>
-            {/* Direction label centered below */}
-            <span style={{ fontSize: 13, color: '#374151', marginTop: 2 }}>
-                {direction}
+            {/* Countdown next to capsule */}
+            <span style={{
+                fontSize: 12, fontWeight: 600,
+                color: COLOUR_HEX[activeColour] ?? '#6b7280',
+                marginTop: 2,
+            }}>
+                {remaining}s
             </span>
         </div>
     );
