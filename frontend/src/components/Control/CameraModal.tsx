@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { X, Loader, Camera, TrafficCone } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { cameraService } from '../../services';
+import { cameraService, trafficLightSimService } from '../../services';
 import { TrafficLightPanel } from './TrafficLightPanel';
-import type { Intersection, IntersectionFrames } from '../../types';
+import type { Intersection, IntersectionFrames, TrafficLightSimState } from '../../types';
 
 type TabKey = 'camera' | 'traffic_light';
 
@@ -13,10 +13,59 @@ interface CameraModalProps {
     onClose: () => void;
 }
 
+/* ── Horizontal traffic light (3 bulbs in a row) ── */
+const COLOUR_HEX: Record<string, string> = {
+    red: '#ef4444',
+    yellow: '#eab308',
+    green: '#22c55e',
+};
+
+function DirectionLightRow({ activeColour, remaining, direction }: { activeColour: string; remaining: number; direction: string }) {
+    const bulbs = ['red', 'yellow', 'green'] as const;
+    return (
+        <div style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center',
+            marginTop: 6,
+        }}>
+            {/* Top row: traffic light capsule + countdown */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{
+                    display: 'flex', alignItems: 'center', gap: 4,
+                    background: '#1f2937', borderRadius: 10, padding: '4px 8px',
+                }}>
+                    {bulbs.map((c) => (
+                        <div
+                            key={c}
+                            style={{
+                                width: 12, height: 12, borderRadius: '50%',
+                                background: activeColour === c ? COLOUR_HEX[c] : '#4b5563',
+                                boxShadow: activeColour === c ? `0 0 6px ${COLOUR_HEX[c]}` : 'none',
+                                transition: 'all 0.4s ease',
+                            }}
+                        />
+                    ))}
+                </div>
+                <span style={{
+                    fontSize: 12, fontWeight: 600,
+                    color: COLOUR_HEX[activeColour] ?? '#6b7280',
+                }}>
+                    {remaining}s
+                </span>
+            </div>
+            {/* Direction label centered below */}
+            <span style={{ fontSize: 13, color: '#374151', marginTop: 2 }}>
+                {direction}
+            </span>
+        </div>
+    );
+}
+
 export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps) {
     const [frames, setFrames] = useState<IntersectionFrames | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [activeTab, setActiveTab] = useState<TabKey>('camera');
+    const [lightState, setLightState] = useState<TrafficLightSimState | null>(null);
+    const lightIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const trafficLight = intersection?.trafficLight;
 
     // Reset tab when modal reopens
@@ -53,6 +102,33 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
         load();
     }, [isOpen, intersection]);
 
+    // Poll traffic-light simulation state (for the camera tab overlay)
+    useEffect(() => {
+        if (!isOpen || !intersection) {
+            setLightState(null);
+            return;
+        }
+
+        let cancelled = false;
+        const intId = intersection.id || `osm_${intersection.osm_id}`;
+
+        const fetchLight = async () => {
+            try {
+                const data = await trafficLightSimService.getState(intId);
+                if (!cancelled) setLightState(data);
+            } catch {
+                // silently ignore – the light overlay is non-critical
+            }
+        };
+
+        fetchLight();
+        lightIntervalRef.current = setInterval(fetchLight, 1000);
+
+        return () => {
+            cancelled = true;
+            if (lightIntervalRef.current) clearInterval(lightIntervalRef.current);
+        };
+    }, [isOpen, intersection]);
 
     // Handle ESC key to close modal
     useEffect(() => {
@@ -83,6 +159,13 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
         { key: 'camera', label: 'Camera', icon: <Camera size={16} /> },
         { key: 'traffic_light', label: 'Traffic Light', icon: <TrafficCone size={16} /> },
     ];
+
+    /** Look up the light colour for a given direction name. */
+    const getLightForDirection = (direction: string) => {
+        if (!lightState) return null;
+        const key = direction.toLowerCase();
+        return lightState.directions[key] ?? null;
+    };
 
     return (
         <div
@@ -143,24 +226,36 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
                                 </div>
                             ) : (
                                 <>
-                                    {/* Camera Frames */}
+                                    {/* Camera Frames with horizontal traffic lights */}
                                     {frames && (
                                         <div className="grid grid-cols-2 gap-4">
-                                            {frames.frames.map(f => (
-                                                <div key={f.direction}>
-                                                    {f.image ? (
-                                                        <img
-                                                            src={`data:image/jpeg;base64,${f.image}`}
-                                                            className="w-full rounded"
-                                                        />
-                                                    ) : (
-                                                        <div className="bg-gray-200 h-40 flex items-center justify-center rounded">
-                                                            No image
-                                                        </div>
-                                                    )}
-                                                    <p className="text-center text-sm mt-1">{f.direction}</p>
-                                                </div>
-                                            ))}
+                                            {frames.frames.map(f => {
+                                                const dirLight = getLightForDirection(f.direction);
+                                                return (
+                                                    <div key={f.direction}>
+                                                        {f.image ? (
+                                                            <img
+                                                                src={`data:image/jpeg;base64,${f.image}`}
+                                                                className="w-full rounded"
+                                                            />
+                                                        ) : (
+                                                            <div className="bg-gray-200 h-40 flex items-center justify-center rounded">
+                                                                No image
+                                                            </div>
+                                                        )}
+                                                        {/* Horizontal traffic light + direction label */}
+                                                        {dirLight ? (
+                                                            <DirectionLightRow
+                                                                activeColour={dirLight.state}
+                                                                remaining={dirLight.remaining}
+                                                                direction={f.direction}
+                                                            />
+                                                        ) : (
+                                                            <p className="text-center text-sm mt-1">{f.direction}</p>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
                                         </div>
                                     )}
 

@@ -5,3 +5,4 @@ dataset/
 simulation/models
 simulation/networks
 .agent/
+run.sh
