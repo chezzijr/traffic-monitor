@@ -1,8 +1,23 @@
-import { useEffect, useState } from 'react';
-import { X, Play, Loader } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { X, Loader } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { cameraService } from '../../services';
 import type { Intersection, IntersectionFrames } from '../../types';
+
+const formatDurationSince = (date: Date | null): string => {
+    if (!date) return 'N/A';
+
+    const diffMs = Date.now() - date.getTime();
+    if (diffMs < 0) return '00:00:00';
+
+    const totalSeconds = Math.floor(diffMs / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+};
 
 interface CameraModalProps {
     intersection: Intersection | null;
@@ -13,15 +28,38 @@ interface CameraModalProps {
 export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps) {
     const [frames, setFrames] = useState<IntersectionFrames | null>(null);
     const [isLoading, setIsLoading] = useState(false);
+    const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
+    const [, setTick] = useState(0);
     const trafficLight = intersection?.trafficLight;
     const validFrames = frames?.frames?.filter(f => f.image) ?? [];
     const showNumber = validFrames?.length >= 2;
+
+    const loadFrames = useCallback(async () => {
+        if (!trafficLight?.lat || !trafficLight?.lon) return;
+
+        setIsLoading(true);
+
+        try {
+            const data = await cameraService.getIntersection({
+                lat: trafficLight.lat,
+                lon: trafficLight.lon
+            });
+            setFrames(data);
+            setLastUpdatedAt(new Date());
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : 'Cannot load frames';
+            toast.error(msg);
+        } finally {
+            setIsLoading(false);
+        }
+    }, [trafficLight?.lat, trafficLight?.lon]);
 
 
     // Load camera data when modal opens
     useEffect(() => {
         if (!isOpen || !intersection) {
             setFrames(null);
+            setLastUpdatedAt(null);
             return;
         }
 
@@ -30,22 +68,38 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
             return;
         }
 
-        const load = async () => {
-            setIsLoading(true);
+        loadFrames();
+    }, [isOpen, intersection, trafficLight?.osm_id, loadFrames]);
 
-            try {
-                const data = await cameraService.getIntersection({ lat: trafficLight.lat, lon: trafficLight.lon });
-                setFrames(data);
-            } catch (err) {
-                const msg = err instanceof Error ? err.message : "Cannot load frames";
-                toast.error(msg);
-            } finally {
-                setIsLoading(false);
-            }
+    // Polling for new frames every 8–12 seconds
+    useEffect(() => {
+        if (!isOpen || !trafficLight?.osm_id) return;
+
+        let timeoutId: number;
+
+        const scheduleNext = () => {
+            const delay = 8000 + Math.random() * 4000;
+            timeoutId = window.setTimeout(async () => {
+                await loadFrames();
+                scheduleNext();
+            }, delay);
         };
 
-        load();
-    }, [isOpen, intersection]);
+        scheduleNext();
+
+        return () => {
+            window.clearTimeout(timeoutId);
+        };
+    }, [isOpen, trafficLight?.osm_id, loadFrames]);
+
+    // Tick every second to update "Last update" display
+    useEffect(() => {
+        const id = window.setInterval(() => {
+            setTick(tick => tick + 1);
+        }, 1000);
+
+        return () => window.clearInterval(id);
+    }, []);
 
 
     // Handle ESC key to close modal
@@ -90,7 +144,14 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
                                 ? `${frames.roads[0]} × ${frames.roads[1]}`
                                 : `OSM Traffic Light ${trafficLight?.osm_id}`}
                         </h2>
-                        <p className="text-sm text-gray-500">Camera Feed </p>
+                        <p className="text-sm text-gray-500">
+                            Camera Feed
+                            {lastUpdatedAt && (
+                                <span className="ml-2 text-xs text-gray-400">
+                                    Last update: {formatDurationSince(lastUpdatedAt)}
+                                </span>
+                            )}
+                        </p>
                     </div>
                     <button
                         onClick={onClose}
@@ -102,23 +163,29 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
 
                 {/* Content */}
                 {frames && (
-                    <div
-                        className={`grid gap-4 mt-4 ${validFrames.length === 1 ? "grid-cols-1" : "grid-cols-2"
-                            }`}
-                    >
-                        {validFrames.map((f, index) => (
-                            <div key={f.number}>
-                                <img
-                                    src={`data:image/jpeg;base64,${f.image}`}
-                                    className="w-full rounded"
-                                />
-
-                                <p className="text-center text-sm text-gray-600 mt-1">
-                                    {showNumber ? `Camera ${index + 1}` : "Camera"}
-                                </p>
-                            </div>
-                        ))}
-                    </div>
+                    validFrames.length > 0 ? (
+                        <div
+                            className={`grid gap-4 mt-4 ${validFrames.length === 1 ? "grid-cols-1" : "grid-cols-2"
+                                }`}
+                        >
+                            {validFrames.map((f, index) => (
+                                <div key={f.number}>
+                                    <img
+                                        src={`data:image/jpeg;base64,${f.image}`}
+                                        className="w-full rounded"
+                                    />
+                                    <p className="text-center text-sm text-gray-600 mt-1">
+                                        {showNumber ? `Camera ${index + 1}` : "Camera"}
+                                    </p>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        // Không có ảnh camera
+                        <div className="mt-4 flex items-center justify-center py-8">
+                            <p className="text-sm text-gray-500 italic">No camera</p>
+                        </div>
+                    )
                 )}
 
 
