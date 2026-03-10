@@ -197,3 +197,15 @@ export interface NetworkMetadata {
   traffic_light_count: number;
   created_at?: string;
 }
+
+// Traffic light simulation state
+export interface DirectionLightState {
+  state: 'red' | 'yellow' | 'green';
+  remaining: number;
+}
+
+export interface TrafficLightSimState {
+  intersection_id: string;
+  directions: Record<string, DirectionLightState>;
+  cycle_duration: number;
+}

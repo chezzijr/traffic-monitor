@@ -4,3 +4,4 @@ backend/cache/
 dataset/
 simulation/models
 simulation/networks
+.agent/
