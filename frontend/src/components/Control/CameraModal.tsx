@@ -2,7 +2,11 @@ import { useCallback, useEffect, useState } from 'react';
 import { X, Loader } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { cameraService } from '../../services';
-import type { Intersection, IntersectionFrames } from '../../types';
+import type {
+    Intersection,
+    IntersectionFrames,
+    MockDirectionSnapshot,
+} from '../../types';
 
 const formatDurationSince = (date: Date | null): string => {
     if (!date) return 'N/A';
@@ -30,6 +34,7 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
     const [isLoading, setIsLoading] = useState(false);
     const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
     const [, setTick] = useState(0);
+    const [mockDirections, setMockDirections] = useState<MockDirectionSnapshot[]>([]);
     const trafficLight = intersection?.trafficLight;
     const validFrames = frames?.frames?.filter(f => f.image) ?? [];
     const showNumber = validFrames?.length >= 2;
@@ -60,6 +65,7 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
         if (!isOpen || !intersection) {
             setFrames(null);
             setLastUpdatedAt(null);
+            setMockDirections([]);
             return;
         }
 
@@ -91,6 +97,55 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
             window.clearTimeout(timeoutId);
         };
     }, [isOpen, trafficLight?.osm_id, loadFrames]);
+
+    // Generate mock traffic light snapshot data when modal opens
+    useEffect(() => {
+        if (!isOpen || !intersection) {
+            setMockDirections([]);
+            return;
+        }
+
+        const roadNames =
+            frames?.roads && frames.roads.length >= 2
+                ? frames.roads
+                : ['Đường A', 'Đường B', 'Đường C', 'Đường D'];
+
+        const now = Date.now();
+        const baseRemaining = (now / 1000) % 30;
+
+        const data: MockDirectionSnapshot[] = [
+            {
+                id: 'north',
+                roadName: roadNames[0],
+                color: 'red',
+                remaining: 30 - baseRemaining,
+                queue: 5,
+            },
+            {
+                id: 'south',
+                roadName: roadNames[0],
+                color: 'green',
+                remaining: 10,
+                queue: 2,
+            },
+            {
+                id: 'east',
+                roadName: roadNames[1] ?? 'Đường B',
+                color: 'red',
+                remaining: 15,
+                queue: 7,
+            },
+            {
+                id: 'west',
+                roadName: roadNames[1] ?? 'Đường B',
+                color: 'red',
+                remaining: 15,
+                queue: 10,
+            },
+        ];
+
+        setMockDirections(data);
+    }, [isOpen, intersection, frames]);
 
     // Tick every second to update "Last update" display
     useEffect(() => {
@@ -188,7 +243,6 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
                     )
                 )}
 
-
                 <div className="p-6 space-y-6">
                     {isLoading ? (
                         <div className="flex justify-center items-center py-12">
@@ -196,17 +250,98 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
                         </div>
                     ) : (
                         <>
+                            {/* Mock traffic light snapshot (frontend-only) */}
+                            {mockDirections.length > 0 && (
+                                <div className="space-y-3 border-t pt-6 text-sm">
+                                    <h3 className="font-semibold mb-2">Traffic Light Snapshot (demo)</h3>
+
+                                    {/* Simple 4-direction diagram around intersection */}
+                                    <div className="relative mx-auto my-4 w-40 h-40 bg-gray-100 rounded-full flex items-center justify-center">
+                                        <div className="w-4 h-4 bg-green-500 rounded-full border-2 border-white shadow-md" />
+                                        {mockDirections.map((dir) => {
+                                            const baseClass =
+                                                dir.id === 'north'
+                                                    ? 'top-0 left-1/2 -translate-x-1/2'
+                                                    : dir.id === 'south'
+                                                        ? 'bottom-0 left-1/2 -translate-x-1/2'
+                                                        : dir.id === 'east'
+                                                            ? 'right-0 top-1/2 -translate-y-1/2'
+                                                            : 'left-0 top-1/2 -translate-y-1/2';
+
+                                            const isRed = dir.color === 'red';
+                                            const isYellow = dir.color === 'yellow';
+                                            const isGreen = dir.color === 'green';
+
+                                            return (
+                                                <div
+                                                    key={dir.id}
+                                                    className={`absolute ${baseClass} flex flex-col items-center gap-1`}
+                                                >
+                                                    <div className="w-6 h-10 rounded-md bg-gray-800 flex flex-col justify-between p-0.5">
+                                                        <span
+                                                            className={`w-3 h-3 rounded-full mx-auto ${isRed ? 'bg-red-500' : 'bg-red-500 opacity-30'}`}
+                                                        />
+                                                        <span
+                                                            className={`w-3 h-3 rounded-full mx-auto ${isYellow ? 'bg-yellow-400' : 'bg-yellow-400 opacity-30'}`}
+                                                        />
+                                                        <span
+                                                            className={`w-3 h-3 rounded-full mx-auto ${isGreen ? 'bg-green-500' : 'bg-green-500 opacity-30'}`}
+                                                        />
+                                                    </div>
+                                                    <span className="text-[10px] text-gray-600">
+                                                        {dir.queue} xe
+                                                    </span>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+
+                                    {/* Detailed per-direction info */}
+                                    <div className="grid grid-cols-2 gap-3 text-xs text-gray-700">
+                                        {mockDirections.map((dir) => (
+                                            <div
+                                                key={dir.id}
+                                                className="border rounded px-2 py-1 flex flex-col gap-0.5"
+                                            >
+                                                <div className="font-medium truncate">
+                                                    {dir.roadName}
+                                                </div>
+                                                <div>
+                                                    Đèn:{' '}
+                                                    <span
+                                                        className={
+                                                            dir.color === 'green'
+                                                                ? 'text-green-600 font-semibold'
+                                                                : dir.color === 'yellow'
+                                                                    ? 'text-yellow-500 font-semibold'
+                                                                    : 'text-red-600 font-semibold'
+                                                        }
+                                                    >
+                                                        {dir.color.toUpperCase()}
+                                                    </span>
+                                                </div>
+                                                <div>
+                                                    Còn lại:{' '}
+                                                    {Math.max(0, Math.round(dir.remaining))}
+                                                    s
+                                                </div>
+                                                <div>Số xe chờ: {dir.queue}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
 
                             {/* Intersection Info */}
                             <div className="space-y-2 border-t pt-6 text-sm">
                                 <h3 className="font-semibold mb-2">Intersection Details</h3>
                                 <div className="grid grid-cols-2 gap-2 text-gray-600">
-                                    <div>Roads: {intersection.num_roads}</div>
                                     <div>
+                                        Thông tin:
                                         {intersection.has_traffic_light ? (
-                                            <span className="text-green-600 font-medium">Has Traffic Light</span>
+                                            <span className="text-green-600 font-medium"> Có đèn giao thông</span>
                                         ) : (
-                                            'No Traffic Light'
+                                            <span className="text-red-600 font-medium"> Không có đèn giao thông</span>
                                         )}
                                     </div>
                                     <div className="col-span-2">
@@ -214,6 +349,8 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
                                     </div>
                                 </div>
                             </div>
+
+
                         </>
                     )}
                 </div>
