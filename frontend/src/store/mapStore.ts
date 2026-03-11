@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { BoundingBox, Intersection, TrafficSignal, LatLng, TrafficLight } from '../types';
+import type { BoundingBox, Intersection, TrafficSignal, LatLng, TrafficLight, SUMOTrafficLight } from '../types';
 
 interface MapState {
   // State
@@ -13,6 +13,9 @@ interface MapState {
   selectionMode: boolean;
   isLoading: boolean;
   error: string | null;
+  selectedJunctionIds: string[];
+  sumoTrafficLights: SUMOTrafficLight[];
+  osmSumoMapping: Record<string, string>;
 
   // Actions
   setIntersections: (intersections: Intersection[]) => void;
@@ -25,6 +28,11 @@ interface MapState {
   setSelectionMode: (mode: boolean) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
+  toggleJunctionSelection: (sumoTlId: string) => void;
+  selectAllJunctions: () => void;
+  clearJunctionSelection: () => void;
+  setSumoTrafficLights: (lights: SUMOTrafficLight[]) => void;
+  setOsmSumoMapping: (mapping: Record<string, string>) => void;
   reset: () => void;
 }
 
@@ -39,6 +47,9 @@ const initialState = {
   selectionMode: false,
   isLoading: false,
   error: null,
+  selectedJunctionIds: [] as string[],
+  sumoTrafficLights: [] as SUMOTrafficLight[],
+  osmSumoMapping: {} as Record<string, string>,
 };
 
 export const useMapStore = create<MapState>((set) => ({
@@ -56,5 +67,18 @@ export const useMapStore = create<MapState>((set) => ({
   setSelectionMode: (mode) => set({ selectionMode: mode }),
   setLoading: (loading) => set({ isLoading: loading }),
   setError: (error) => set({ error }),
+  toggleJunctionSelection: (sumoTlId) =>
+    set((state) => ({
+      selectedJunctionIds: state.selectedJunctionIds.includes(sumoTlId)
+        ? state.selectedJunctionIds.filter((id) => id !== sumoTlId)
+        : [...state.selectedJunctionIds, sumoTlId],
+    })),
+  selectAllJunctions: () =>
+    set((state) => ({
+      selectedJunctionIds: state.sumoTrafficLights.map((tl) => tl.id),
+    })),
+  clearJunctionSelection: () => set({ selectedJunctionIds: [] }),
+  setSumoTrafficLights: (lights) => set({ sumoTrafficLights: lights }),
+  setOsmSumoMapping: (mapping) => set({ osmSumoMapping: mapping }),
   reset: () => set(initialState),
 }));

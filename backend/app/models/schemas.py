@@ -67,31 +67,6 @@ class TrafficScenario(str, Enum):
     RUSH_HOUR = "rush_hour"
 
 
-class SimulationStartRequest(BaseModel):
-    """Request body for starting a simulation."""
-
-    network_id: str = Field(..., description="ID of the network to simulate")
-    scenario: TrafficScenario = Field(default=TrafficScenario.MODERATE, description="Traffic scenario for route generation")
-    gui: bool = Field(default=False, description="Whether to use SUMO-GUI (False for headless)")
-
-
-class SimulationStatus(BaseModel):
-    """Current simulation status."""
-
-    status: str = Field(..., description="Simulation status: idle, running, paused, started, stopped")
-    step: int = Field(..., ge=0, description="Current simulation step")
-    network_id: str | None = Field(None, description="ID of the current network (if any)")
-
-
-class SimulationStepMetrics(BaseModel):
-    """Metrics from a single simulation step."""
-
-    step: int = Field(..., ge=0, description="Current simulation step")
-    total_vehicles: int = Field(..., ge=0, description="Total number of vehicles in simulation")
-    total_wait_time: float = Field(..., ge=0, description="Sum of all vehicle waiting times (seconds)")
-    average_wait_time: float = Field(..., ge=0, description="Average waiting time per vehicle (seconds)")
-
-
 class MetricsSnapshotResponse(BaseModel):
     """Response model for a metrics snapshot."""
 
@@ -162,6 +137,108 @@ class RouteGenerationResponse(BaseModel):
     routes_path: str = Field(..., description="Path to the generated .rou.xml file")
     trip_count: int = Field(..., ge=0, description="Estimated number of generated trips")
     vehicle_distribution: dict[str, float] = Field(..., description="Vehicle type percentages")
+
+
+class TrainingRequest(BaseModel):
+    """Request to start single-junction training."""
+
+    network_id: str = Field(..., description="Network to train on")
+    tl_id: str = Field(..., description="Traffic light ID to optimize")
+    algorithm: str = Field(default="dqn", description="RL algorithm (dqn or ppo)")
+    total_timesteps: int = Field(default=10000, ge=1000, le=1000000, description="Training timesteps")
+    scenario: TrafficScenario = Field(default=TrafficScenario.MODERATE, description="Traffic scenario")
+
+
+class MultiJunctionTrainingRequest(BaseModel):
+    """Request to start multi-junction training."""
+
+    network_id: str = Field(..., description="Network to train on")
+    tl_ids: list[str] = Field(..., min_length=1, max_length=10, description="Traffic light IDs (max 10)")
+    algorithm: str = Field(default="dqn", description="RL algorithm (dqn or ppo)")
+    total_timesteps: int = Field(default=10000, ge=1000, le=1000000, description="Training timesteps")
+    scenario: TrafficScenario = Field(default=TrafficScenario.MODERATE, description="Traffic scenario")
+
+
+class TrainingTaskResponse(BaseModel):
+    """Response after dispatching a training task."""
+
+    task_id: str = Field(..., description="Celery task ID")
+    status: str = Field(default="queued", description="Initial task status")
+
+
+class TrainingProgressPayload(BaseModel):
+    """Progress update from a training task."""
+
+    task_id: str
+    status: str = "running"
+    timestep: int = 0
+    total_timesteps: int = 0
+    progress: float = 0.0
+    episode_count: int = 0
+    mean_reward: float = 0.0
+    avg_waiting_time: float = 0.0
+    avg_queue_length: float = 0.0
+    throughput: int = 0
+    baseline_avg_waiting_time: float | None = None
+    baseline_avg_queue_length: float | None = None
+    baseline_throughput: int | None = None
+
+
+class TaskInfo(BaseModel):
+    """Information about a Celery task."""
+
+    task_id: str
+    status: str
+    network_id: str | None = None
+    algorithm: str | None = None
+    tl_ids: list[str] = Field(default_factory=list)
+    total_timesteps: int | None = None
+    progress: float = 0.0
+    created_at: datetime | None = None
+    completed_at: datetime | None = None
+    error: str | None = None
+    model_path: str | None = None
+
+
+class TaskListResponse(BaseModel):
+    """Response containing a list of tasks."""
+
+    tasks: list[TaskInfo] = Field(default_factory=list)
+
+
+class DeployModelRequest(BaseModel):
+    """Request to deploy a trained model."""
+
+    tl_id: str = Field(..., description="Traffic light to control")
+    model_path: str = Field(..., description="Path to the trained model")
+    network_id: str = Field(..., description="Network the model was trained on")
+
+
+class DeployedModelInfo(BaseModel):
+    """Information about a deployed model."""
+
+    tl_id: str
+    model_id: str
+    model_path: str
+    network_id: str
+    ai_control_enabled: bool = True
+
+
+class ToggleAIControlRequest(BaseModel):
+    """Request to toggle AI control for a traffic light."""
+
+    enabled: bool = Field(..., description="Whether to enable AI control")
+
+
+class NetworkMetadata(BaseModel):
+    """Metadata for a persisted network."""
+
+    network_id: str
+    bbox: BoundingBox
+    intersection_count: int = 0
+    traffic_light_count: int = 0
+    created_at: datetime | None = None
+
 
 class DirectionFrame(BaseModel):
     direction: str

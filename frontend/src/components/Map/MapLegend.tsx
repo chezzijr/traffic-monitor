@@ -37,6 +37,16 @@ export function MapLegend({ className = '' }: MapLegendProps) {
           <div className="w-4 h-4 bg-orange-500 rounded-full border-2 border-white shadow-sm" />
           <span className="text-xs text-gray-600">OSM Traffic Light</span>
         </div>
+        {/* Selected junction */}
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 bg-amber-500 rounded-full border-2 border-white shadow-sm" />
+          <span className="text-xs text-gray-600">Selected Junction</span>
+        </div>
+        {/* Deployed junction */}
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 bg-purple-500 rounded-full border-2 border-white shadow-sm" />
+          <span className="text-xs text-gray-600">Deployed Junction</span>
+        </div>
       </div>
     </div>
   );

@@ -2,3 +2,5 @@ CLAUDE.md
 .claude/
 backend/cache/
 dataset/
+simulation/models
+simulation/networks

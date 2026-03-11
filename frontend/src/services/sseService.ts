@@ -1,56 +1,73 @@
-import type { SSEStepEvent, SSEStatusEvent, SSEErrorEvent } from '../types';
+import type { TrainingProgressEvent, TrainingCompletionEvent } from '../types';
+import { API_BASE_URL } from './api';
 
-interface SimulationSSECallbacks {
-  onStep: (data: SSEStepEvent) => void;
-  onHeartbeat?: () => void;
-  onStopped?: (data: SSEStatusEvent) => void;
-  onError?: (data: SSEErrorEvent) => void;
+type ProgressHandler = (data: TrainingProgressEvent) => void;
+type CompleteHandler = (data: TrainingCompletionEvent) => void;
+type ErrorHandler = (error: { task_id: string; error: string }) => void;
+
+interface SSEHandlers {
+  onProgress?: ProgressHandler;
+  onComplete?: CompleteHandler;
+  onError?: ErrorHandler;
 }
 
-export class SimulationSSE {
+export class TrainingSSE {
   private eventSource: EventSource | null = null;
-  private callbacks: SimulationSSECallbacks;
+  private onProgress: ProgressHandler | null = null;
+  private onComplete: CompleteHandler | null = null;
+  private onError: ErrorHandler | null = null;
 
-  constructor(callbacks: SimulationSSECallbacks) {
-    this.callbacks = callbacks;
+  setHandlers(handlers: SSEHandlers): void {
+    this.onProgress = handlers.onProgress ?? null;
+    this.onComplete = handlers.onComplete ?? null;
+    this.onError = handlers.onError ?? null;
   }
 
-  connect(stepInterval: number = 100): void {
-    // Close existing connection
+  connect(taskId: string): void {
     this.disconnect();
+    this.eventSource = new EventSource(`${API_BASE_URL}/tasks/${taskId}/stream`);
 
-    // Create new EventSource
-    this.eventSource = new EventSource(
-      `/api/simulation/stream?step_interval=${stepInterval}`
-    );
-
-    // Register event listeners
-    this.eventSource.addEventListener('step', (event) => {
-      const data = JSON.parse(event.data) as SSEStepEvent;
-      this.callbacks.onStep(data);
-    });
-
-    this.eventSource.addEventListener('heartbeat', () => {
-      this.callbacks.onHeartbeat?.();
-    });
-
-    this.eventSource.addEventListener('stopped', (event) => {
-      const data = JSON.parse(event.data) as SSEStatusEvent;
-      this.callbacks.onStopped?.(data);
-    });
-
-    this.eventSource.addEventListener('error', (event) => {
-      // Check if this is a custom error event from the server
-      if (event instanceof MessageEvent && event.data) {
-        const data = JSON.parse(event.data) as SSEErrorEvent;
-        this.callbacks.onError?.(data);
+    this.eventSource.addEventListener('progress', (e: MessageEvent) => {
+      if (this.onProgress) {
+        try {
+          const data = JSON.parse(e.data) as TrainingProgressEvent;
+          this.onProgress(data);
+        } catch {
+          console.error('Failed to parse SSE progress data:', e.data);
+        }
       }
     });
 
-    // Handle connection error
-    this.eventSource.onerror = () => {
-      this.callbacks.onError?.({ message: 'SSE connection error' });
+    this.eventSource.addEventListener('complete', (e: MessageEvent) => {
+      if (this.onComplete) {
+        try {
+          const data = JSON.parse(e.data) as TrainingCompletionEvent;
+          this.onComplete(data);
+        } catch {
+          console.error('Failed to parse SSE complete data:', e.data);
+        }
+      }
       this.disconnect();
+    });
+
+    // Application-level error event (server sends event: error with JSON data)
+    this.eventSource.addEventListener('error', (e: MessageEvent) => {
+      if (e.data && this.onError) {
+        try {
+          const data = JSON.parse(e.data) as { task_id: string; error: string };
+          this.onError(data);
+        } catch {
+          console.error('Failed to parse SSE error data:', e.data);
+        }
+      }
+      this.disconnect();
+    });
+
+    // Transport-level error (connection lost) — EventSource auto-reconnects by default
+    this.eventSource.onerror = () => {
+      if (this.eventSource?.readyState === EventSource.CLOSED) {
+        this.disconnect();
+      }
     };
   }
 

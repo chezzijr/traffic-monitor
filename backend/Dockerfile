@@ -34,8 +34,8 @@ RUN uv sync --frozen --no-dev --no-install-project
 # Copy application code
 COPY app/ ./app/
 
-# Copy simulation files
-COPY simulation/ ./simulation/
+# Create simulation directory structure (populated at runtime via volume mount)
+RUN mkdir -p ./simulation/models ./simulation/networks ./simulation/vtypes
 
 # Expose the API port
 EXPOSE 8000
