@@ -10,6 +10,7 @@ from app.api.routes.tasks import router as tasks_router
 from app.api.routes.networks import router as networks_router
 from app.api.routes.models import router as models_router
 from app.api.routes.deployment import router as deployment_router
+from app.api.routes.waiting_count import router as waiting_count_router
 
 __all__ = [
     "traffic_light_router",
@@ -22,4 +23,5 @@ __all__ = [
     "networks_router",
     "models_router",
     "deployment_router",
+    "waiting_count_router",
 ]

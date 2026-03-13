@@ -14,6 +14,7 @@ from app.api.routes import (
     traffic_light_router,
     traffic_light_sim_router,
     training_router,
+    waiting_count_router,
 )
 from app.config import settings
 
@@ -43,6 +44,7 @@ app.include_router(tasks_router, prefix=settings.api_prefix)
 app.include_router(networks_router, prefix=settings.api_prefix)
 app.include_router(models_router, prefix=settings.api_prefix)
 app.include_router(deployment_router, prefix=settings.api_prefix)
+app.include_router(waiting_count_router, prefix=settings.api_prefix)
 
 
 @app.get("/health")

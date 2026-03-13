@@ -10,6 +10,7 @@ from app.services import (
     task_service,
     traffic_light_service,
     validation_service,
+    waiting_count_service,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "task_service",
     "traffic_light_service",
     "validation_service",
+    "waiting_count_service",
 ]
