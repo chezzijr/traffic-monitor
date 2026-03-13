@@ -230,18 +230,6 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
         }
     };
 
-    const tabs: { key: TabKey; label: string; icon: React.ReactNode }[] = [
-        { key: 'camera', label: 'Camera', icon: <Camera size={16} /> },
-        { key: 'traffic_light', label: 'Traffic Light', icon: <TrafficCone size={16} /> },
-    ];
-
-    /** Look up the light colour for a given direction name. */
-    const getLightForDirection = (direction: string) => {
-        if (!lightState) return null;
-        const key = direction.toLowerCase();
-        return lightState.directions[key] ?? null;
-    };
-
     return (
         <div
             className="fixed inset-0 bg-gray-800/50 flex items-center justify-center z-[9999]"
