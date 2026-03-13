@@ -1,6 +1,6 @@
 import redis
 from service.config import REDIS_HOST, REDIS_PORT
-from service.topology import CAM_TO_INTERSECTION, CAM_TO_DIRECTION
+from service.topology import CAM_TO_INTERSECTION, CAM_TO_NUMBER
 
 r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=False)
 
@@ -8,10 +8,10 @@ TTL = 20
 
 def cache_latest(cam_id: str, img: bytes):
     inter = CAM_TO_INTERSECTION.get(cam_id)
-    direction = CAM_TO_DIRECTION.get(cam_id)
+    number = CAM_TO_NUMBER.get(cam_id)
 
-    if not inter or not direction:
+    if not inter or not number:
         return
 
-    key = f"frame:{inter}:{direction}"
+    key = f"frame:{inter}:{number}"
     r.setex(key, TTL, img)

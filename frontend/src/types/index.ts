@@ -66,8 +66,22 @@ export interface TrafficLightInfo {
   program: string;
 }
 
+// Mock traffic light snapshot (frontend-only, for UI demo)
+export type MockSignalColor = "red" | "yellow" | "green";
+
+export interface MockDirectionSnapshot {
+  id: string; // e.g. 'north', 'south', 'east', 'west'
+  roadName: string;
+  color: MockSignalColor;
+  remaining: number; // seconds remaining for this phase
+  queue: number; // number of waiting vehicles
+}
+
+// Legacy types for backwards compatibility
+export type SimulationStatus = 'idle' | 'running' | 'paused' | 'stopped';
+
 export interface DirectionFrame {
-  direction: string;
+  number?: number;
   image: string | null;
 }
 
