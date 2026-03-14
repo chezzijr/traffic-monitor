@@ -6,3 +6,7 @@ simulation/models
 simulation/networks
 .agent/
 *.sh
+
+# Ignore large files of Digital Twin
+backend/app/data/traffic_video
+backend/app/digital_twin/yolo11x.pt

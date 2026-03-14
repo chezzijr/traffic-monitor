@@ -223,3 +223,13 @@ export interface TrafficLightSimState {
   directions: Record<string, DirectionLightState>;
   cycle_duration: number;
 }
+
+// Waiting vehicle count per direction from backend
+export interface WaitingCountResponse {
+  id_camera: string;
+  north: number;
+  south: number;
+  east: number;
+  west: number;
+  total: number;
+}

@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { X, Loader } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { cameraService } from '../../services';
+import { cameraService, trafficLightSimService, waitingCountService } from '../../services';
 import type {
     Intersection,
     IntersectionFrames,
-    MockDirectionSnapshot,
+    TrafficLightSimState,
+    WaitingCountResponse,
 } from '../../types';
 
 const formatDurationSince = (date: Date | null): string => {
@@ -77,12 +78,20 @@ function DirectionLightRow({ activeColour, remaining, direction }: { activeColou
     );
 }
 
+const DIRECTIONS = ['north', 'south', 'east', 'west'] as const;
+
 export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps) {
     const [frames, setFrames] = useState<IntersectionFrames | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
     const [, setTick] = useState(0);
-    const [mockDirections, setMockDirections] = useState<MockDirectionSnapshot[]>([]);
+
+    // Real data from backend
+    const [lightState, setLightState] = useState<TrafficLightSimState | null>(null);
+    const [waitingCount, setWaitingCount] = useState<WaitingCountResponse | null>(null);
+    const [isWaitingLoading, setIsWaitingLoading] = useState(false);
+    const lightIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
     const trafficLight = intersection?.trafficLight;
     const validFrames = frames?.frames?.filter(f => f.image) ?? [];
     const showNumber = validFrames?.length >= 2;
@@ -107,13 +116,29 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
         }
     }, [trafficLight?.lat, trafficLight?.lon]);
 
+    // Load waiting count from backend
+    const loadWaitingCount = useCallback(async () => {
+        if (!intersection) return;
+
+        setIsWaitingLoading(true);
+        try {
+            const idCamera = intersection.id || `osm_${intersection.osm_id}`;
+            const data = await waitingCountService.getWaitingCount(idCamera);
+            setWaitingCount(data);
+        } catch (err) {
+            console.warn('Could not load waiting count:', err);
+        } finally {
+            setIsWaitingLoading(false);
+        }
+    }, [intersection]);
 
     // Load camera data when modal opens
     useEffect(() => {
         if (!isOpen || !intersection) {
             setFrames(null);
             setLastUpdatedAt(null);
-            setMockDirections([]);
+            setLightState(null);
+            setWaitingCount(null);
             return;
         }
 
@@ -123,7 +148,8 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
         }
 
         loadFrames();
-    }, [isOpen, intersection, trafficLight?.osm_id, loadFrames]);
+        loadWaitingCount();
+    }, [isOpen, intersection, trafficLight?.osm_id, loadFrames, loadWaitingCount]);
 
     // Polling for new frames every 8–12 seconds
     useEffect(() => {
@@ -146,54 +172,33 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
         };
     }, [isOpen, trafficLight?.osm_id, loadFrames]);
 
-    // Generate mock traffic light snapshot data when modal opens
+    // Poll traffic light simulation state every second
     useEffect(() => {
         if (!isOpen || !intersection) {
-            setMockDirections([]);
+            setLightState(null);
             return;
         }
 
-        const roadNames =
-            frames?.roads && frames.roads.length >= 2
-                ? frames.roads
-                : ['Đường A', 'Đường B', 'Đường C', 'Đường D'];
+        let cancelled = false;
+        const intId = intersection.id || `osm_${intersection.osm_id}`;
 
-        const now = Date.now();
-        const baseRemaining = (now / 1000) % 30;
+        const fetchLight = async () => {
+            try {
+                const data = await trafficLightSimService.getState(intId);
+                if (!cancelled) setLightState(data);
+            } catch {
+                // silently ignore – the light overlay is non-critical
+            }
+        };
 
-        const data: MockDirectionSnapshot[] = [
-            {
-                id: 'north',
-                roadName: roadNames[0],
-                color: 'red',
-                remaining: 30 - baseRemaining,
-                queue: 5,
-            },
-            {
-                id: 'south',
-                roadName: roadNames[0],
-                color: 'green',
-                remaining: 10,
-                queue: 2,
-            },
-            {
-                id: 'east',
-                roadName: roadNames[1] ?? 'Đường B',
-                color: 'red',
-                remaining: 15,
-                queue: 7,
-            },
-            {
-                id: 'west',
-                roadName: roadNames[1] ?? 'Đường B',
-                color: 'red',
-                remaining: 15,
-                queue: 10,
-            },
-        ];
+        fetchLight();
+        lightIntervalRef.current = setInterval(fetchLight, 1000);
 
-        setMockDirections(data);
-    }, [isOpen, intersection, frames]);
+        return () => {
+            cancelled = true;
+            if (lightIntervalRef.current) clearInterval(lightIntervalRef.current);
+        };
+    }, [isOpen, intersection]);
 
     // Tick every second to update "Last update" display
     useEffect(() => {
@@ -203,7 +208,6 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
 
         return () => window.clearInterval(id);
     }, []);
-
 
     // Handle ESC key to close modal
     useEffect(() => {
@@ -230,6 +234,13 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
         }
     };
 
+    /** Look up the light colour for a given direction name. */
+    const getLightForDirection = (direction: string) => {
+        if (!lightState) return null;
+        const key = direction.toLowerCase();
+        return lightState.directions[key] ?? null;
+    };
+
     return (
         <div
             className="fixed inset-0 bg-gray-800/50 flex items-center justify-center z-[9999]"
@@ -240,7 +251,7 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
                 onClick={(e) => e.stopPropagation()}
             >
                 {/* Header */}
-                <div className="flex items-center justify-between p-4 border-b sticky top-0 bg-white">
+                <div className="flex items-center justify-between p-4 border-b sticky top-0 bg-white z-10 rounded-t-lg">
                     <div>
                         <h2>
                             {frames?.roads && frames.roads.length >= 2
@@ -264,27 +275,37 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
                     </button>
                 </div>
 
-                {/* Content */}
+                {/* Camera frames with traffic light overlay */}
                 {frames && (
                     validFrames.length > 0 ? (
                         <div
-                            className={`grid gap-4 mt-4 ${validFrames.length === 1 ? "grid-cols-1" : "grid-cols-2"
-                                }`}
+                            className={`grid gap-4 p-4 ${validFrames.length === 1 ? "grid-cols-1" : "grid-cols-2"}`}
                         >
-                            {validFrames.map((f, index) => (
-                                <div key={f.number}>
-                                    <img
-                                        src={`data:image/jpeg;base64,${f.image}`}
-                                        className="w-full rounded"
-                                    />
-                                    <p className="text-center text-sm text-gray-600 mt-1">
-                                        {showNumber ? `Camera ${index + 1}` : "Camera"}
-                                    </p>
-                                </div>
-                            ))}
+                            {validFrames.map((f, index) => {
+                                const directionName = DIRECTIONS[index] ?? `cam_${index}`;
+                                const dirLight = getLightForDirection(directionName);
+                                return (
+                                    <div key={f.number ?? index}>
+                                        <img
+                                            src={`data:image/jpeg;base64,${f.image}`}
+                                            className="w-full rounded"
+                                        />
+                                        {dirLight ? (
+                                            <DirectionLightRow
+                                                activeColour={dirLight.state}
+                                                remaining={dirLight.remaining}
+                                                direction={directionName}
+                                            />
+                                        ) : (
+                                            <p className="text-center text-sm text-gray-600 mt-1">
+                                                {showNumber ? `Camera ${index + 1}` : 'Camera'}
+                                            </p>
+                                        )}
+                                    </div>
+                                );
+                            })}
                         </div>
                     ) : (
-                        // Không có ảnh camera
                         <div className="mt-4 flex items-center justify-center py-8">
                             <p className="text-sm text-gray-500 italic">No camera</p>
                         </div>
@@ -298,31 +319,34 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
                         </div>
                     ) : (
                         <>
-                            {/* Mock traffic light snapshot (frontend-only) */}
-                            {mockDirections.length > 0 && (
+                            {/* Traffic Light Status from backend */}
+                            {lightState && (
                                 <div className="space-y-3 border-t pt-6 text-sm">
-                                    <h3 className="font-semibold mb-2">Traffic Light Snapshot (demo)</h3>
+                                    <h3 className="font-semibold mb-2">Traffic Light Status</h3>
 
-                                    {/* Simple 4-direction diagram around intersection */}
+                                    {/* 4-direction diagram */}
                                     <div className="relative mx-auto my-4 w-40 h-40 bg-gray-100 rounded-full flex items-center justify-center">
                                         <div className="w-4 h-4 bg-green-500 rounded-full border-2 border-white shadow-md" />
-                                        {mockDirections.map((dir) => {
+                                        {DIRECTIONS.map((dir) => {
+                                            const dirLight = lightState.directions[dir];
+                                            if (!dirLight) return null;
+
                                             const baseClass =
-                                                dir.id === 'north'
+                                                dir === 'north'
                                                     ? 'top-0 left-1/2 -translate-x-1/2'
-                                                    : dir.id === 'south'
+                                                    : dir === 'south'
                                                         ? 'bottom-0 left-1/2 -translate-x-1/2'
-                                                        : dir.id === 'east'
+                                                        : dir === 'east'
                                                             ? 'right-0 top-1/2 -translate-y-1/2'
                                                             : 'left-0 top-1/2 -translate-y-1/2';
 
-                                            const isRed = dir.color === 'red';
-                                            const isYellow = dir.color === 'yellow';
-                                            const isGreen = dir.color === 'green';
+                                            const isRed = dirLight.state === 'red';
+                                            const isYellow = dirLight.state === 'yellow';
+                                            const isGreen = dirLight.state === 'green';
 
                                             return (
                                                 <div
-                                                    key={dir.id}
+                                                    key={dir}
                                                     className={`absolute ${baseClass} flex flex-col items-center gap-1`}
                                                 >
                                                     <div className="w-6 h-10 rounded-md bg-gray-800 flex flex-col justify-between p-0.5">
@@ -337,46 +361,85 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
                                                         />
                                                     </div>
                                                     <span className="text-[10px] text-gray-600">
-                                                        {dir.queue} xe
+                                                        {Math.round(dirLight.remaining)}s
                                                     </span>
                                                 </div>
                                             );
                                         })}
                                     </div>
 
-                                    {/* Detailed per-direction info */}
+                                    {/* Per-direction detail cards */}
                                     <div className="grid grid-cols-2 gap-3 text-xs text-gray-700">
-                                        {mockDirections.map((dir) => (
+                                        {DIRECTIONS.map((dir) => {
+                                            const dirLight = lightState.directions[dir];
+                                            if (!dirLight) return null;
+                                            const wCount = waitingCount ? waitingCount[dir] : null;
+
+                                            return (
+                                                <div
+                                                    key={dir}
+                                                    className="border rounded px-2 py-1 flex flex-col gap-0.5"
+                                                >
+                                                    <div className="font-medium capitalize">
+                                                        {dir}
+                                                    </div>
+                                                    <div>
+                                                        Đèn:{' '}
+                                                        <span
+                                                            className={
+                                                                dirLight.state === 'green'
+                                                                    ? 'text-green-600 font-semibold'
+                                                                    : dirLight.state === 'yellow'
+                                                                        ? 'text-yellow-500 font-semibold'
+                                                                        : 'text-red-600 font-semibold'
+                                                            }
+                                                        >
+                                                            {dirLight.state.toUpperCase()}
+                                                        </span>
+                                                    </div>
+                                                    <div>
+                                                        Còn lại:{' '}
+                                                        {Math.max(0, Math.round(dirLight.remaining))}s
+                                                    </div>
+                                                    <div>
+                                                        Số xe chờ:{' '}
+                                                        {wCount !== null ? wCount : '—'}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Waiting Count Section (shown even without traffic light state) */}
+                            {!lightState && waitingCount && (
+                                <div className="space-y-3 border-t pt-6 text-sm">
+                                    <h3 className="font-semibold mb-2">Waiting Vehicle Count</h3>
+                                    <div className="grid grid-cols-2 gap-3 text-xs text-gray-700">
+                                        {DIRECTIONS.map((dir) => (
                                             <div
-                                                key={dir.id}
-                                                className="border rounded px-2 py-1 flex flex-col gap-0.5"
+                                                key={dir}
+                                                className="border rounded px-3 py-2 flex items-center justify-between"
                                             >
-                                                <div className="font-medium truncate">
-                                                    {dir.roadName}
-                                                </div>
-                                                <div>
-                                                    Đèn:{' '}
-                                                    <span
-                                                        className={
-                                                            dir.color === 'green'
-                                                                ? 'text-green-600 font-semibold'
-                                                                : dir.color === 'yellow'
-                                                                    ? 'text-yellow-500 font-semibold'
-                                                                    : 'text-red-600 font-semibold'
-                                                        }
-                                                    >
-                                                        {dir.color.toUpperCase()}
-                                                    </span>
-                                                </div>
-                                                <div>
-                                                    Còn lại:{' '}
-                                                    {Math.max(0, Math.round(dir.remaining))}
-                                                    s
-                                                </div>
-                                                <div>Số xe chờ: {dir.queue}</div>
+                                                <span className="font-medium capitalize">{dir}</span>
+                                                <span className="text-lg font-bold text-blue-600">
+                                                    {waitingCount[dir]}
+                                                </span>
                                             </div>
                                         ))}
                                     </div>
+                                    <div className="text-center text-sm font-semibold text-gray-600 mt-2">
+                                        Total waiting: <span className="text-blue-600 text-lg">{waitingCount.total}</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Waiting count loading indicator */}
+                            {isWaitingLoading && !waitingCount && (
+                                <div className="flex items-center gap-2 text-sm text-gray-500 border-t pt-4">
+                                    <Loader className="animate-spin" size={16} />
+                                    Loading waiting vehicle count...
                                 </div>
                             )}
 
@@ -397,8 +460,6 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
                                     </div>
                                 </div>
                             </div>
-
-
                         </>
                     )}
                 </div>

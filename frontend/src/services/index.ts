@@ -6,4 +6,5 @@ export { taskService } from './taskService';
 export { modelService } from './modelService';
 export { deploymentService } from './deploymentService';
 export { trafficLightSimService } from './trafficLightSimService';
+export { waitingCountService } from './waitingCountService';
 export { TrainingSSE } from './sseService';
