@@ -72,6 +72,16 @@ def list_models() -> list[dict[str, Any]]:
             except Exception:
                 pass
 
+        # Try to load results
+        results_path = Path(str(model_file) + ".results.json")
+        results = None
+        if results_path.exists():
+            try:
+                with open(results_path) as f:
+                    results = json.load(f)
+            except Exception:
+                pass
+
         stat = model_file.stat()
         models.append({
             "model_id": model_file.stem,
@@ -85,6 +95,7 @@ def list_models() -> list[dict[str, Any]]:
             "size_bytes": stat.st_size,
             "created_at": metadata.get("created_at", datetime.fromtimestamp(stat.st_ctime).isoformat()),
             "type": "single",
+            "results": results,
         })
 
     # Multi-agent models: directories with metadata.json
@@ -95,6 +106,16 @@ def list_models() -> list[dict[str, Any]]:
                 metadata = json.load(f)
         except Exception:
             continue
+
+        # Try to load results
+        results_path = model_dir / "results.json"
+        results = None
+        if results_path.exists():
+            try:
+                with open(results_path) as f:
+                    results = json.load(f)
+            except Exception:
+                pass
 
         # Count agent .zip files
         agent_zips = list(model_dir.glob("*.zip"))
@@ -111,6 +132,7 @@ def list_models() -> list[dict[str, Any]]:
             "num_agents": len(agent_zips),
             "created_at": metadata.get("created_at", "unknown"),
             "type": "multi",
+            "results": results,
         })
 
     models.sort(key=lambda m: m.get("created_at", ""), reverse=True)
@@ -212,6 +234,10 @@ def delete_model(model_path: str) -> dict[str, Any]:
         meta_path = Path(str(path) + ".metadata.json")
         if meta_path.exists():
             meta_path.unlink()
+        # Also delete results file if exists
+        results_path = Path(str(path) + ".results.json")
+        if results_path.exists():
+            results_path.unlink()
 
     return {"status": "deleted", "path": str(path)}
 

@@ -1,7 +1,8 @@
 """Network management API routes."""
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException
 
+from app.models.schemas import NetworkMetadata
 from app.services import network_service
 
 router = APIRouter(prefix="/networks", tags=["networks"])
@@ -13,7 +14,7 @@ def list_networks():
     return network_service.list_networks()
 
 
-@router.get("/{network_id}")
+@router.get("/{network_id}", response_model=NetworkMetadata)
 def get_network(network_id: str):
     """Get network metadata."""
     metadata = network_service.load_metadata(network_id)

@@ -75,6 +75,7 @@ class ProgressPublishingCallback(BaseCallback):
         self._redis = None
         self._traffic_metrics = traffic_metrics_callback
         self._metrics_logging = metrics_logging_callback
+        self.progress_history: list[dict] = []
 
     def _get_redis(self):
         if self._redis is None:
@@ -108,6 +109,13 @@ class ProgressPublishingCallback(BaseCallback):
             payload["baseline_avg_waiting_time"] = self.baseline.get("avg_waiting_time", 0.0)
             payload["baseline_avg_queue_length"] = self.baseline.get("avg_queue_length", 0.0)
             payload["baseline_throughput"] = self.baseline.get("throughput", 0)
+
+        self.progress_history.append({
+            "timestep": self.num_timesteps,
+            "avg_waiting_time": payload["avg_waiting_time"],
+            "throughput": payload["throughput"],
+            "mean_reward": payload["mean_reward"],
+        })
 
         payload_json = json.dumps(payload)
         r.publish(f"task:{self.task_id}:updates", payload_json)
@@ -266,6 +274,7 @@ class MultiProgressCallback:
         self.last_waiting_time = 0.0
         self.last_queue_length = 0.0
         self.last_throughput = 0
+        self.progress_history: list[dict] = []
 
     def _get_redis(self):
         if self._redis is None:
@@ -315,6 +324,13 @@ class MultiProgressCallback:
             payload["baseline_avg_waiting_time"] = self.baseline.get("avg_waiting_time", 0.0)
             payload["baseline_avg_queue_length"] = self.baseline.get("avg_queue_length", 0.0)
             payload["baseline_throughput"] = self.baseline.get("throughput", 0)
+
+        self.progress_history.append({
+            "timestep": step,
+            "avg_waiting_time": self.last_waiting_time,
+            "throughput": self.last_throughput,
+            "mean_reward": payload["mean_reward"],
+        })
 
         payload_json = json.dumps(payload)
         r.publish(f"task:{self.task_id}:updates", payload_json)
@@ -382,15 +398,16 @@ def train_traffic_light(
         # Create callbacks - metrics callbacks first so they have data when progress publishes
         traffic_metrics_cb = TrafficMetricsCallback()
         metrics_logging_cb = MetricsLoggingCallback()
+        progress_cb = ProgressPublishingCallback(
+            task_id, total_timesteps, baseline,
+            traffic_metrics_callback=traffic_metrics_cb,
+            metrics_logging_callback=metrics_logging_cb,
+        )
         callbacks = [
             CancellationCallback(task_id),
             traffic_metrics_cb,
             metrics_logging_cb,
-            ProgressPublishingCallback(
-                task_id, total_timesteps, baseline,
-                traffic_metrics_callback=traffic_metrics_cb,
-                metrics_logging_callback=metrics_logging_cb,
-            ),
+            progress_cb,
         ]
 
         # Train
@@ -422,6 +439,27 @@ def train_traffic_light(
 
         # Publish completion
         rl_metrics = traffic_metrics_cb.get_final_metrics()
+
+        # Save training results
+        results = {
+            "baseline": baseline or {},
+            "trained": {
+                "avg_waiting_time": rl_metrics["avg_waiting_time"],
+                "avg_queue_length": rl_metrics["avg_queue_length"],
+                "throughput": rl_metrics["throughput"],
+                "mean_reward": metrics_logging_cb.mean_reward,
+            },
+            "training_config": {
+                "algorithm": algorithm,
+                "total_timesteps": total_timesteps,
+                "scenario": scenario,
+            },
+            "progress_history": progress_cb.progress_history,
+        }
+        results_path = Path(str(model_path) + ".zip.results.json")
+        with open(results_path, "w") as f:
+            json.dump(results, f, indent=2)
+
         completion = {
             "task_id": task_id,
             "status": "completed",
@@ -522,6 +560,27 @@ def train_multi_junction(
         trainer.save(str(model_dir))
 
         rl_metrics = multi_progress_cb.get_final_metrics()
+
+        # Save training results
+        results = {
+            "baseline": baseline or {},
+            "trained": {
+                "avg_waiting_time": rl_metrics["avg_waiting_time"],
+                "avg_queue_length": rl_metrics["avg_queue_length"],
+                "throughput": rl_metrics["throughput"],
+                "mean_reward": 0.0,
+            },
+            "training_config": {
+                "algorithm": algorithm,
+                "total_timesteps": total_timesteps,
+                "scenario": scenario,
+            },
+            "progress_history": multi_progress_cb.progress_history,
+        }
+        results_path = model_dir / "results.json"
+        with open(results_path, "w") as f:
+            json.dump(results, f, indent=2)
+
         completion = {
             "task_id": task_id,
             "status": "completed",
