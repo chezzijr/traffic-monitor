@@ -18,9 +18,12 @@ logger = logging.getLogger(__name__)
 class TrafficLightEnv(gym.Env):
     """Gymnasium environment for single traffic light optimization.
 
-    Observation: [lane_vehicle_counts..., phase_one_hot...]
-    Action: Discrete(num_phases) - select next traffic light phase
-    Reward: Algorithm-specific via rewards.py
+    Action space restricted to green phases only. Yellow transitions are
+    automatically inserted when switching between green phases.
+
+    Observation: [lane_vehicle_counts..., green_phase_one_hot...]
+    Action: Discrete(num_green_phases) - select next green phase
+    Reward: Algorithm-specific, averaged over action interval sub-steps
     """
 
     metadata = {"render_modes": ["human"]}
@@ -32,7 +35,7 @@ class TrafficLightEnv(gym.Env):
         tl_id: str,
         algorithm: str = "dqn",
         max_steps: int = 3600,
-        steps_per_action: int = 5,
+        steps_per_action: int = 10,
         gui: bool = False,
         routes_path: str | None = None,
         scenario: str = "moderate",
@@ -52,6 +55,11 @@ class TrafficLightEnv(gym.Env):
         self._current_step = 0
         self._controlled_lanes: list[str] = []
         self._num_phases = 0
+        self._green_phases: list[int] = []
+        self._yellow_duration: int = 4
+        self._current_green_phase: int = 0
+        self.max_green: int = 50
+        self._time_since_last_phase_change: int = 0
         self._is_initialized = False
         self._sumo_running = False
         self._conn_label = f"train_{tl_id}_{id(self)}"
@@ -131,34 +139,48 @@ class TrafficLightEnv(gym.Env):
         """Initialize action and observation spaces from SUMO."""
         conn = self._get_conn()
 
-        # Get controlled lanes
-        self._controlled_lanes = list(conn.trafficlight.getControlledLanes(self.tl_id))
-        # Remove duplicates while preserving order
+        # Get controlled lanes (deduplicated)
+        raw_lanes = list(conn.trafficlight.getControlledLanes(self.tl_id))
         seen = set()
         unique_lanes = []
-        for lane in self._controlled_lanes:
+        for lane in raw_lanes:
             if lane not in seen:
                 seen.add(lane)
                 unique_lanes.append(lane)
         self._controlled_lanes = unique_lanes
 
-        # Get number of phases
+        # Get phases and identify green-only phases
         logics = conn.trafficlight.getAllProgramLogics(self.tl_id)
-        self._num_phases = len(logics[0].phases) if logics else 4
+        phases = logics[0].phases if logics else []
+        self._num_phases = len(phases) if phases else 4
 
-        # Action space
-        self.action_space = spaces.Discrete(self._num_phases)
+        green_indices = [
+            i for i, p in enumerate(phases)
+            if 'G' in p.state or 'g' in p.state
+        ]
+        self._green_phases = green_indices if green_indices else [0]
 
-        # Observation: lane_vehicle_counts + phase_one_hot
+        # Yellow duration from first yellow phase
+        for p in phases:
+            if 'y' in p.state:
+                self._yellow_duration = max(int(float(p.duration)), 1)
+                break
+
+        # Action space = green phases only
+        num_green = len(self._green_phases)
         num_lanes = len(self._controlled_lanes)
-        obs_dim = num_lanes + self._num_phases
+        obs_dim = num_lanes + num_green
+
+        self.action_space = spaces.Discrete(num_green)
         self.observation_space = spaces.Box(
             low=0.0, high=np.inf, shape=(obs_dim,), dtype=np.float32,
         )
 
         self._is_initialized = True
         logger.info(
-            f"Env initialized: {num_lanes} lanes, {self._num_phases} phases, obs_dim={obs_dim}"
+            f"Env initialized: {num_lanes} lanes, {self._num_phases} total phases, "
+            f"{num_green} green phases {self._green_phases}, "
+            f"yellow_dur={self._yellow_duration}s, obs_dim={obs_dim}"
         )
 
     def reset(
@@ -175,30 +197,80 @@ class TrafficLightEnv(gym.Env):
             self._initialize_spaces()
 
         self._current_step = 0
+        self._time_since_last_phase_change = 0
+
+        # Initialize to first green phase
+        conn = self._get_conn()
+        self._current_green_phase = self._green_phases[0]
+        conn.trafficlight.setPhase(self.tl_id, self._current_green_phase)
 
         observation = self._get_observation()
         info = {
             "step": self._current_step,
             "tl_id": self.tl_id,
             "num_lanes": len(self._controlled_lanes),
-            "num_phases": self._num_phases,
+            "num_phases": len(self._green_phases),
         }
         return observation, info
 
     def step(self, action: int) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
         conn = self._get_conn()
 
-        # Set traffic light phase
-        conn.trafficlight.setPhase(self.tl_id, int(action))
+        # Translate green-index to SUMO phase with yellow transition
+        desired_green = self._green_phases[int(action)]
 
-        # Advance simulation
+        # max_green enforcement: force next phase if held too long
+        if (
+            self._time_since_last_phase_change >= self.max_green
+            and desired_green == self._current_green_phase
+        ):
+            current_idx = self._green_phases.index(self._current_green_phase)
+            desired_green = self._green_phases[(current_idx + 1) % len(self._green_phases)]
+
+        if desired_green != self._current_green_phase:
+            yellow_idx = (self._current_green_phase + 1) % self._num_phases
+            conn.trafficlight.setPhase(self.tl_id, yellow_idx)
+            for _ in range(self._yellow_duration):
+                conn.simulationStep()
+                self._current_step += 1
+            self._time_since_last_phase_change = 0
+
+        # Set desired green phase
+        conn.trafficlight.setPhase(self.tl_id, desired_green)
+        self._current_green_phase = desired_green
+
+        # Advance simulation, collecting halting counts for reward averaging
+        sub_step_halting: list[list[int]] = []
         for _ in range(self.steps_per_action):
             conn.simulationStep()
             self._current_step += 1
+            self._time_since_last_phase_change += 1
+            halting = [
+                conn.lane.getLastStepHaltingNumber(lane)
+                for lane in self._controlled_lanes
+            ]
+            sub_step_halting.append(halting)
 
-        # Compute reward using rewards.py
-        from app.ml.rewards import compute_reward
-        reward = compute_reward(self.algorithm, self._controlled_lanes, conn)
+        # Compute reward averaged over all sub-steps (LibSignal pattern)
+        if sub_step_halting and sub_step_halting[0]:
+            avg_halting = [
+                float(np.mean([step[i] for step in sub_step_halting]))
+                for i in range(len(sub_step_halting[0]))
+            ]
+            if self.algorithm.lower() == "dqn":
+                reward = -float(np.mean(avg_halting)) * 12.0
+            else:
+                # PPO: use waiting time based reward
+                lane_vehicle_ids = []
+                for lane in self._controlled_lanes:
+                    lane_vehicle_ids.extend(conn.lane.getLastStepVehicleIDs(lane))
+                waiting_times = [
+                    conn.vehicle.getWaitingTime(vid) for vid in lane_vehicle_ids
+                ]
+                mean_wait = float(np.mean(waiting_times)) if waiting_times else 0.0
+                reward = float(np.clip(-mean_wait / 224.0, -4.0, 4.0))
+        else:
+            reward = 0.0
 
         observation = self._get_observation()
 
@@ -227,10 +299,9 @@ class TrafficLightEnv(gym.Env):
         return observation, reward, terminated, truncated, info
 
     def _get_observation(self) -> np.ndarray:
-        """Observation: [lane_vehicle_counts, phase_one_hot]."""
+        """Observation: [lane_vehicle_counts, green_phase_one_hot]."""
         conn = self._get_conn()
 
-        # Lane vehicle counts (NOT halting, NOT waiting times)
         vehicle_counts = []
         for lane_id in self._controlled_lanes:
             try:
@@ -239,20 +310,19 @@ class TrafficLightEnv(gym.Env):
             except Exception:
                 vehicle_counts.append(0.0)
 
-        # Phase one-hot
+        # Green phase one-hot
+        num_green = len(self._green_phases)
+        phase_one_hot = np.zeros(num_green, dtype=np.float32)
         try:
-            current_phase = conn.trafficlight.getPhase(self.tl_id)
-        except Exception:
-            current_phase = 0
-        phase_one_hot = np.zeros(self._num_phases, dtype=np.float32)
-        if 0 <= current_phase < self._num_phases:
-            phase_one_hot[current_phase] = 1.0
+            green_idx = self._green_phases.index(self._current_green_phase)
+            phase_one_hot[green_idx] = 1.0
+        except ValueError:
+            phase_one_hot[0] = 1.0
 
-        observation = np.concatenate([
+        return np.concatenate([
             np.array(vehicle_counts, dtype=np.float32),
             phase_one_hot,
         ])
-        return observation
 
     def render(self) -> None:
         pass
@@ -297,11 +367,7 @@ class MultiScenarioEnvWrapper(gym.Wrapper):
         return obs, info
 
     def _select_scenario(self) -> str:
-        if self.mode == "round_robin":
-            scenario = self.scenarios[self._scenario_index % len(self.scenarios)]
-            self._scenario_index += 1
-            return scenario
-        elif self.mode == "random":
+        if self.mode == "random":
             return random.choice(self.scenarios)
         elif self.mode == "curriculum":
             level = min(
@@ -309,4 +375,7 @@ class MultiScenarioEnvWrapper(gym.Wrapper):
                 len(self.scenarios) - 1,
             )
             return self.scenarios[level]
-        return self.scenarios[0]
+        else:
+            scenario = self.scenarios[self._scenario_index]
+            self._scenario_index = (self._scenario_index + 1) % len(self.scenarios)
+            return scenario

@@ -33,6 +33,7 @@ export default function App() {
   const setActiveTaskId = useTrainingStore((s) => s.setActiveTaskId);
   const updateProgress = useTrainingStore((s) => s.updateProgress);
   const completeTask = useTrainingStore((s) => s.completeTask);
+  const cancelTask = useTrainingStore((s) => s.cancelTask);
 
   // Model store
   const isPanelOpen = useModelStore((s) => s.isPanelOpen);
@@ -130,10 +131,14 @@ export default function App() {
       onError: (data) => {
         toast.error(`Training failed: ${data.error}`);
       },
+      onCancelled: (data) => {
+        cancelTask(data.task_id);
+        toast.success('Training cancelled');
+      },
     });
 
     sse.connect(taskId);
-  }, [updateProgress, setActiveTaskId, setModels, completeTask]);
+  }, [updateProgress, setActiveTaskId, setModels, completeTask, cancelTask]);
 
   // Handle training started from config panel
   const handleTrainingStarted = useCallback((taskId: string) => {

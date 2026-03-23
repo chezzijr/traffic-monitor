@@ -18,6 +18,9 @@ class MultiAgentTrafficLightEnv:
     """Multi-agent environment: N traffic lights sharing one SUMO instance.
 
     NOT a gym.Env subclass. Returns dicts keyed by tl_id.
+
+    Action space restricted to green phases only. Yellow transitions are
+    automatically inserted when switching between green phases.
     """
 
     def __init__(
@@ -27,7 +30,7 @@ class MultiAgentTrafficLightEnv:
         tl_ids: list[str],
         algorithm: str = "dqn",
         max_steps: int = 3600,
-        steps_per_action: int = 5,
+        steps_per_action: int = 10,
         gui: bool = False,
         routes_path: str | None = None,
         scenario: str = "moderate",
@@ -47,9 +50,16 @@ class MultiAgentTrafficLightEnv:
         self._conn_label = f"multi_{network_id}_{id(self)}"
         self._is_initialized = False
 
+        self._last_arrived = 0
+
         # Per-agent data (populated after first reset)
         self._controlled_lanes: dict[str, list[str]] = {}
         self._num_phases: dict[str, int] = {}
+        self._green_phases: dict[str, list[int]] = {}
+        self._yellow_duration: dict[str, int] = {}
+        self._current_green_phase: dict[str, int] = {}
+        self.max_green: int = 50
+        self._time_since_last_phase_change: dict[str, int] = {}
         self.observation_spaces: dict[str, spaces.Box] = {}
         self.action_spaces: dict[str, spaces.Discrete] = {}
 
@@ -126,20 +136,44 @@ class MultiAgentTrafficLightEnv:
                     unique_lanes.append(lane)
             self._controlled_lanes[tl_id] = unique_lanes
 
-            # Get phases
+            # Get phases and identify green-only phases
             logics = conn.trafficlight.getAllProgramLogics(tl_id)
-            num_phases = len(logics[0].phases) if logics else 4
+            phases = logics[0].phases if logics else []
+            num_phases = len(phases) if phases else 4
             self._num_phases[tl_id] = num_phases
 
-            # Observation/action spaces
+            # Green phases: those containing 'G' or 'g' in state string
+            green_indices = [
+                i for i, p in enumerate(phases)
+                if 'G' in p.state or 'g' in p.state
+            ]
+            self._green_phases[tl_id] = green_indices if green_indices else [0]
+
+            # Yellow duration from first yellow phase
+            yellow_dur = 4
+            for p in phases:
+                if 'y' in p.state:
+                    yellow_dur = max(int(float(p.duration)), 1)
+                    break
+            self._yellow_duration[tl_id] = yellow_dur
+
+            # Action space = number of GREEN phases only
+            num_green = len(self._green_phases[tl_id])
             num_lanes = len(unique_lanes)
-            obs_dim = num_lanes + num_phases
+            obs_dim = num_lanes + num_green
             self.observation_spaces[tl_id] = spaces.Box(
                 low=0.0, high=np.inf, shape=(obs_dim,), dtype=np.float32,
             )
-            self.action_spaces[tl_id] = spaces.Discrete(num_phases)
+            self.action_spaces[tl_id] = spaces.Discrete(num_green)
 
         self._is_initialized = True
+        for tl_id in self.tl_ids:
+            logger.info(
+                f"[DIAG] TL {tl_id}: {len(self._controlled_lanes[tl_id])} controlled lanes, "
+                f"{self._num_phases[tl_id]} total phases, "
+                f"{len(self._green_phases[tl_id])} green phases {self._green_phases[tl_id]}, "
+                f"yellow_dur={self._yellow_duration[tl_id]}s"
+            )
         logger.info(f"Multi-agent env initialized: {len(self.tl_ids)} agents")
 
     def reset(self, seed: int | None = None) -> dict[str, np.ndarray]:
@@ -149,6 +183,15 @@ class MultiAgentTrafficLightEnv:
             self._initialize()
 
         self._current_step = 0
+        self._last_arrived = 0
+
+        # Initialize each TL to its first green phase
+        conn = self._get_conn()
+        for tl_id in self.tl_ids:
+            self._time_since_last_phase_change[tl_id] = 0
+            first_green = self._green_phases[tl_id][0]
+            conn.trafficlight.setPhase(tl_id, first_green)
+            self._current_green_phase[tl_id] = first_green
 
         observations = {}
         for tl_id in self.tl_ids:
@@ -167,17 +210,64 @@ class MultiAgentTrafficLightEnv:
     ]:
         conn = self._get_conn()
 
-        # Set all traffic light phases simultaneously
+        # Translate green-index actions and handle yellow transitions
+        any_phase_changed = False
+        desired_greens: dict[str, int] = {}
         for tl_id, action in actions.items():
-            conn.trafficlight.setPhase(tl_id, int(action))
+            desired_green = self._green_phases[tl_id][int(action)]
+            current_green = self._current_green_phase[tl_id]
 
-        # Advance simulation
+            # max_green enforcement
+            if (
+                self._time_since_last_phase_change.get(tl_id, 0) >= self.max_green
+                and desired_green == current_green
+            ):
+                current_idx = self._green_phases[tl_id].index(current_green)
+                desired_green = self._green_phases[tl_id][
+                    (current_idx + 1) % len(self._green_phases[tl_id])
+                ]
+
+            desired_greens[tl_id] = desired_green
+
+            if desired_green != current_green:
+                any_phase_changed = True
+                # Insert yellow: phase immediately after current green (SUMO convention)
+                yellow_idx = (current_green + 1) % self._num_phases[tl_id]
+                conn.trafficlight.setPhase(tl_id, yellow_idx)
+
+        # Run yellow duration if any phase changed
+        if any_phase_changed:
+            yellow_dur = max(
+                self._yellow_duration[tl_id]
+                for tl_id in actions
+                if desired_greens[tl_id] != self._current_green_phase[tl_id]
+            )
+            for _ in range(yellow_dur):
+                conn.simulationStep()
+                self._current_step += 1
+
+        # Set all desired green phases
+        for tl_id in actions:
+            if desired_greens[tl_id] != self._current_green_phase[tl_id]:
+                self._time_since_last_phase_change[tl_id] = 0
+            conn.trafficlight.setPhase(tl_id, desired_greens[tl_id])
+            self._current_green_phase[tl_id] = desired_greens[tl_id]
+
+        # Advance simulation, collecting halting counts for reward averaging
+        sub_step_halting: dict[str, list[list[int]]] = {
+            tl_id: [] for tl_id in self.tl_ids
+        }
         for _ in range(self.steps_per_action):
             conn.simulationStep()
             self._current_step += 1
-
-        # Compute per-agent results
-        from app.ml.rewards import compute_reward
+            for tl_id in self.tl_ids:
+                self._time_since_last_phase_change[tl_id] = self._time_since_last_phase_change.get(tl_id, 0) + 1
+            for tl_id in self.tl_ids:
+                halting = [
+                    conn.lane.getLastStepHaltingNumber(lane)
+                    for lane in self._controlled_lanes[tl_id]
+                ]
+                sub_step_halting[tl_id].append(halting)
 
         observations = {}
         rewards = {}
@@ -187,13 +277,57 @@ class MultiAgentTrafficLightEnv:
 
         truncated = self._current_step >= self.max_steps
 
+        # Per-step throughput (delta, not cumulative)
+        step_arrived = conn.simulation.getArrivedNumber()
+        step_throughput = step_arrived - self._last_arrived
+        self._last_arrived = step_arrived
+
+        # Periodic diagnostic logging
+        if self._current_step % 500 == 0:
+            total_vehicles = conn.vehicle.getIDCount()
+            per_tl_vehicles = {}
+            for tl_id in self.tl_ids:
+                tl_veh_count = sum(
+                    conn.lane.getLastStepVehicleNumber(lane)
+                    for lane in self._controlled_lanes[tl_id]
+                )
+                tl_halt_count = sum(
+                    conn.lane.getLastStepHaltingNumber(lane)
+                    for lane in self._controlled_lanes[tl_id]
+                )
+                per_tl_vehicles[tl_id] = f"{tl_veh_count}({tl_halt_count}halting)"
+            logger.info(
+                f"[DIAG] sim_step={self._current_step}, "
+                f"total_vehicles={total_vehicles}, "
+                f"arrived={step_arrived}, "
+                f"per_tl={per_tl_vehicles}"
+            )
+
         for tl_id in self.tl_ids:
             observations[tl_id] = self._get_observation(tl_id)
-            rewards[tl_id] = compute_reward(
-                self.algorithm, self._controlled_lanes[tl_id], conn
-            )
+
+            # Compute reward averaged over all sub-steps (LibSignal pattern)
+            all_halting = sub_step_halting[tl_id]
+            if all_halting and all_halting[0]:
+                avg_halting = [
+                    float(np.mean([step[i] for step in all_halting]))
+                    for i in range(len(all_halting[0]))
+                ]
+                rewards[tl_id] = -float(np.mean(avg_halting)) * 12.0
+            else:
+                rewards[tl_id] = 0.0
+
             terminateds[tl_id] = False
             truncateds[tl_id] = truncated
+
+            # Per-agent waiting time from vehicles on controlled lanes
+            lane_vehicle_ids = []
+            for lane in self._controlled_lanes[tl_id]:
+                lane_vehicle_ids.extend(conn.lane.getLastStepVehicleIDs(lane))
+            waiting_time = sum(
+                conn.vehicle.getWaitingTime(vid) for vid in lane_vehicle_ids
+            )
+            num_vehicles = len(lane_vehicle_ids)
 
             queue_length = sum(
                 conn.lane.getLastStepHaltingNumber(lane)
@@ -202,14 +336,16 @@ class MultiAgentTrafficLightEnv:
             infos[tl_id] = {
                 "step": self._current_step,
                 "action": actions.get(tl_id, 0),
+                "avg_waiting_time": waiting_time / max(num_vehicles, 1),
                 "avg_queue_length": queue_length / max(len(self._controlled_lanes[tl_id]), 1),
-                "throughput": conn.simulation.getArrivedNumber(),
+                "throughput": step_throughput,
+                "reward": rewards[tl_id],
             }
 
         return observations, rewards, terminateds, truncateds, infos
 
     def _get_observation(self, tl_id: str) -> np.ndarray:
-        """Per-agent observation: [lane_vehicle_counts, phase_one_hot]."""
+        """Per-agent observation: [lane_vehicle_counts, green_phase_one_hot]."""
         conn = self._get_conn()
 
         vehicle_counts = []
@@ -220,15 +356,16 @@ class MultiAgentTrafficLightEnv:
             except Exception:
                 vehicle_counts.append(0.0)
 
+        # One-hot for green phase index (not total phase index)
+        green_phases = self._green_phases[tl_id]
+        num_green = len(green_phases)
+        phase_one_hot = np.zeros(num_green, dtype=np.float32)
+        current_green = self._current_green_phase.get(tl_id, green_phases[0])
         try:
-            current_phase = conn.trafficlight.getPhase(tl_id)
-        except Exception:
-            current_phase = 0
-
-        num_phases = self._num_phases[tl_id]
-        phase_one_hot = np.zeros(num_phases, dtype=np.float32)
-        if 0 <= current_phase < num_phases:
-            phase_one_hot[current_phase] = 1.0
+            green_idx = green_phases.index(current_green)
+            phase_one_hot[green_idx] = 1.0
+        except ValueError:
+            phase_one_hot[0] = 1.0
 
         return np.concatenate([
             np.array(vehicle_counts, dtype=np.float32),

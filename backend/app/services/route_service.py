@@ -123,7 +123,8 @@ def generate_routes(
             # Adjust period for this vehicle type's proportion
             # E.g., for MODERATE (period=1.25s) and motorbike (80%):
             # type_period = 1.25 / 0.80 = 1.5625s between motorbikes
-            type_period = period / proportion
+            # Halve period to compensate for ~50% route validation drop rate
+            type_period = (period / proportion) * 0.5
             type_trips_file = output_path / f"{network_name}_{scenario.value}_{vtype}.trips.xml"
             temp_trip_files.append(type_trips_file)
 
@@ -224,7 +225,23 @@ def generate_routes(
                 logger.error(f"duarouter failed: {result.stderr}")
                 raise RuntimeError(f"duarouter failed: {result.stderr}")
 
-            logger.info(f"Routes generated successfully: {routes_file}")
+            # Count actual vehicles in output to detect silent drops
+            try:
+                tree = ET.parse(str(routes_file))
+                actual_vehicles = len(tree.findall('.//vehicle'))
+                yield_pct = actual_vehicles / max(estimated_trips, 1) * 100
+                logger.info(
+                    f"Routes generated: {routes_file} — "
+                    f"{actual_vehicles}/{estimated_trips} vehicles ({yield_pct:.0f}% yield)"
+                )
+                if yield_pct < 50:
+                    logger.warning(
+                        f"Low route yield ({yield_pct:.0f}%): duarouter dropped "
+                        f"{estimated_trips - actual_vehicles} vehicles due to invalid routes"
+                    )
+            except Exception as count_err:
+                logger.warning(f"Could not count vehicles in route file: {count_err}")
+                logger.info(f"Routes generated successfully: {routes_file}")
 
         except subprocess.TimeoutExpired:
             logger.error("duarouter timed out after 5 minutes")

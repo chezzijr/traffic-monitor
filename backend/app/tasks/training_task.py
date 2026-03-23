@@ -274,6 +274,12 @@ class MultiProgressCallback:
         self.last_waiting_time = 0.0
         self.last_queue_length = 0.0
         self.last_throughput = 0
+        self.last_mean_reward = 0.0
+        self._window_size = 100
+        self._waiting_window: list[float] = []
+        self._queue_window: list[float] = []
+        self._reward_window: list[float] = []
+        self._throughput_window: list[int] = []
         self.progress_history: list[dict] = []
 
     def _get_redis(self):
@@ -282,13 +288,32 @@ class MultiProgressCallback:
         return self._redis
 
     def on_step(self, step: int, total_steps: int, infos: dict) -> bool:
-        # Always update latest metrics so get_final_metrics() is never stale
+        # Collect per-step values
         waiting_times = [infos.get(tl, {}).get("avg_waiting_time", 0.0) for tl in self.tl_ids]
         queue_lengths = [infos.get(tl, {}).get("avg_queue_length", 0.0) for tl in self.tl_ids]
         throughputs = [infos.get(tl, {}).get("throughput", 0) for tl in self.tl_ids]
-        self.last_waiting_time = float(np.mean(waiting_times)) if waiting_times else 0.0
-        self.last_queue_length = float(np.mean(queue_lengths)) if queue_lengths else 0.0
-        self.last_throughput = int(sum(throughputs))
+        reward_vals = [infos.get(tl, {}).get("reward", 0.0) for tl in self.tl_ids]
+
+        # Append to rolling windows
+        self._waiting_window.append(float(np.mean(waiting_times)) if waiting_times else 0.0)
+        self._queue_window.append(float(np.mean(queue_lengths)) if queue_lengths else 0.0)
+        self._reward_window.append(float(np.mean(reward_vals)) if reward_vals else 0.0)
+
+        # Append throughput to window
+        self._throughput_window.append(int(max(throughputs)) if throughputs else 0)
+
+        # Trim windows to size
+        if len(self._waiting_window) > self._window_size:
+            self._waiting_window = self._waiting_window[-self._window_size:]
+            self._queue_window = self._queue_window[-self._window_size:]
+            self._reward_window = self._reward_window[-self._window_size:]
+            self._throughput_window = self._throughput_window[-self._window_size:]
+
+        # Compute rolling averages
+        self.last_waiting_time = float(np.mean(self._waiting_window))
+        self.last_queue_length = float(np.mean(self._queue_window))
+        self.last_mean_reward = float(np.mean(self._reward_window))
+        self.last_throughput = int(np.sum(self._throughput_window))
 
         if step % self._publish_interval == 0:
             self._publish(step)
@@ -302,6 +327,7 @@ class MultiProgressCallback:
             "avg_waiting_time": self.last_waiting_time,
             "avg_queue_length": self.last_queue_length,
             "throughput": self.last_throughput,
+            "mean_reward": self.last_mean_reward,
         }
 
     def _publish(self, step: int):
@@ -314,7 +340,7 @@ class MultiProgressCallback:
             "timestep": step,
             "total_timesteps": self.total_timesteps,
             "progress": round(progress, 4),
-            "mean_reward": 0.0,
+            "mean_reward": self.last_mean_reward,
             "avg_waiting_time": self.last_waiting_time,
             "avg_queue_length": self.last_queue_length,
             "throughput": self.last_throughput,
@@ -371,7 +397,7 @@ def train_traffic_light(
     r.lpush("tasks:list", task_id)
 
     try:
-        from app.ml.environment import TrafficLightEnv
+        from app.ml.environment_v2 import TrafficLightEnvV2
         from app.ml.trainer import Algorithm, TrafficLightTrainer
 
         # Find network file
@@ -379,8 +405,8 @@ def train_traffic_light(
         if not Path(network_path).exists():
             raise FileNotFoundError(f"Network file not found: {network_path}")
 
-        # Create environment
-        env = TrafficLightEnv(
+        # Create environment (v2: SUMO-RL aligned with diff-waiting-time reward)
+        env = TrafficLightEnvV2(
             network_path=network_path,
             network_id=network_id,
             tl_id=tl_id,
@@ -428,7 +454,7 @@ def train_traffic_light(
             "total_timesteps": total_timesteps,
             "observation_dim": int(env.observation_space.shape[0]),
             "action_dim": int(env.action_space.n),
-            "num_phases": int(env._num_phases),
+            "num_phases": int(getattr(env, '_num_green', getattr(env, '_num_phases', 0))),
             "controlled_lanes": env._controlled_lanes,
             "trained_on_scenarios": [scenario],
             "created_at": datetime.now().isoformat(),
@@ -527,7 +553,7 @@ def train_multi_junction(
     r.lpush("tasks:list", task_id)
 
     try:
-        from app.ml.multi_agent_env import MultiAgentTrafficLightEnv
+        from app.ml.multi_agent_env_v2 import MultiAgentTrafficLightEnvV2
         from app.ml.multi_agent_trainer import MultiAgentTrainer
         from app.ml.trainer import Algorithm as AlgoEnum
 
@@ -535,7 +561,8 @@ def train_multi_junction(
         if not Path(network_path).exists():
             raise FileNotFoundError(f"Network file not found: {network_path}")
 
-        env = MultiAgentTrafficLightEnv(
+        # v2: SUMO-RL aligned with diff-waiting-time reward, min/max green
+        env = MultiAgentTrafficLightEnvV2(
             network_path=network_path,
             network_id=network_id,
             tl_ids=tl_ids,
@@ -554,6 +581,15 @@ def train_multi_junction(
 
         trainer.train(total_timesteps=total_timesteps, callbacks=callbacks)
 
+        # Check if training was cancelled
+        progress_json = r.get(f"task:{task_id}:progress")
+        if progress_json:
+            progress = json.loads(progress_json)
+            if progress.get("status") == "cancelled":
+                env.close()
+                logger.info(f"Multi-junction task {task_id} was cancelled")
+                return {"status": "cancelled", "task_id": task_id}
+
         # Save models
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         model_dir = MODELS_DIR / f"{network_id}_multi_{algorithm}_{timestamp}"
@@ -568,7 +604,7 @@ def train_multi_junction(
                 "avg_waiting_time": rl_metrics["avg_waiting_time"],
                 "avg_queue_length": rl_metrics["avg_queue_length"],
                 "throughput": rl_metrics["throughput"],
-                "mean_reward": 0.0,
+                "mean_reward": rl_metrics.get("mean_reward", 0.0),
             },
             "training_config": {
                 "algorithm": algorithm,

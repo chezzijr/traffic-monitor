@@ -66,13 +66,13 @@ export function ModelMap({ networkId, trainedJunctionIds }: ModelMapProps) {
 
   return (
     <div>
-      <div className="h-36 rounded overflow-hidden leaflet-mini-map">
+      <div className="h-48 rounded overflow-hidden leaflet-mini-map">
         <MapContainer
           center={center}
           bounds={bounds}
-          zoomControl={false}
-          dragging={false}
-          scrollWheelZoom={false}
+          zoomControl={true}
+          dragging={true}
+          scrollWheelZoom={true}
           attributionControl={false}
           style={{ height: '100%', width: '100%' }}
         >

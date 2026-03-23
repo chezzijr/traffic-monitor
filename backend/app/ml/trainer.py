@@ -142,7 +142,24 @@ class TrafficLightTrainer:
     """
 
     # Default hyperparameters for each algorithm
+    # SUMO-RL aligned DQN params (source: github.com/LucasAlegre/sumo-rl)
     DEFAULT_DQN_PARAMS: dict[str, Any] = {
+        "learning_rate": 1e-3,
+        "buffer_size": 100_000,
+        "learning_starts": 0,
+        "batch_size": 64,
+        "tau": 1.0,
+        "gamma": 0.95,
+        "train_freq": 1,
+        "target_update_interval": 500,
+        "exploration_fraction": 0.5,
+        "exploration_initial_eps": 1.0,
+        "exploration_final_eps": 0.01,
+        "policy_kwargs": {"net_arch": [20, 20]},
+    }
+
+    # Original DQN params (pre-SUMO-RL alignment)
+    LEGACY_DQN_PARAMS: dict[str, Any] = {
         "learning_rate": 1e-3,
         "buffer_size": 100_000,
         "learning_starts": 1000,
@@ -379,26 +396,40 @@ class TrafficLightTrainer:
         total_queue = 0.0
         total_throughput = 0
 
-        for ep in range(num_episodes):
-            obs, _ = self.env.reset()
-            done = False
+        for _ in range(num_episodes):
+            self.env.reset()
+            env = self.env.unwrapped
+            conn = env._get_conn()
+
+            # Restore SUMO's default fixed-time program
+            conn.trafficlight.setProgram(env.tl_id, "0")
+
             ep_waiting = 0.0
             ep_queue = 0.0
-            ep_throughput = 0
             steps = 0
 
-            while not done:
-                # Don't act — let SUMO's default program run
-                # Just step with current phase (no change)
-                obs, _, terminated, truncated, info = self.env.step(
-                    self.env.unwrapped._get_conn().trafficlight.getPhase(self.env.unwrapped.tl_id)
-                )
-                done = terminated or truncated
-                ep_waiting += info.get("avg_waiting_time", 0.0)
-                ep_queue += info.get("avg_queue_length", 0.0)
-                ep_throughput += info.get("throughput", 0)
-                steps += 1
+            num_seconds = getattr(env, 'num_seconds', getattr(env, 'max_steps', 3600))
+            delta_time = getattr(env, 'delta_time', getattr(env, 'steps_per_action', 5))
+            lanes = getattr(env, '_lanes', getattr(env, '_controlled_lanes', []))
 
+            for sim_step in range(num_seconds):
+                conn.simulationStep()
+
+                if (sim_step + 1) % delta_time == 0:
+                    lane_vids = []
+                    for lane in lanes:
+                        lane_vids.extend(conn.lane.getLastStepVehicleIDs(lane))
+                    wait = sum(conn.vehicle.getWaitingTime(v) for v in lane_vids)
+                    ep_waiting += wait / max(len(lane_vids), 1)
+
+                    queue = sum(
+                        conn.lane.getLastStepHaltingNumber(lane)
+                        for lane in lanes
+                    )
+                    ep_queue += queue / max(len(lanes), 1)
+                    steps += 1
+
+            ep_throughput = conn.simulation.getArrivedNumber()
             if steps > 0:
                 total_waiting += ep_waiting / steps
                 total_queue += ep_queue / steps
