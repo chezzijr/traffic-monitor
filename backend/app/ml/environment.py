@@ -272,9 +272,15 @@ class TrafficLightEnv(gym.Env):
         self._current_step = 0
         self._time_since_last_phase_change = 0
 
-        # Re-install RL program and initialize to first green phase
+        # Re-install RL program (SUMO was restarted, so the program is gone)
         conn = self._get_conn()
-        conn.trafficlight.setProgram(self.tl_id, f"{self.tl_id}_rl")
+        if self._full_phases:
+            traci = _get_traci()
+            rl_logic = traci.trafficlight.Logic(
+                f"{self.tl_id}_rl", 0, 0, self._full_phases
+            )
+            conn.trafficlight.setProgramLogic(self.tl_id, rl_logic)
+            conn.trafficlight.setProgram(self.tl_id, f"{self.tl_id}_rl")
         conn.trafficlight.setPhase(self.tl_id, 0)  # First green phase = index 0 in _full_phases
         self._current_green_idx = 0
 
