@@ -55,9 +55,11 @@ class TrafficLightEnv(gym.Env):
         self._current_step = 0
         self._controlled_lanes: list[str] = []
         self._num_phases = 0
-        self._green_phases: list[int] = []
+        self._green_phases: list[int] = []  # Indices into _full_phases (0..N-1)
         self._yellow_duration: int = 4
-        self._current_green_phase: int = 0
+        self._yellow_dict: dict[str, int] = {}  # "i_j" -> phase index in _full_phases
+        self._full_phases: list = []  # Green phases + generated yellow phases
+        self._current_green_idx: int = 0  # Index into _green_phases (0-based)
         self.max_green: int = 50
         self._time_since_last_phase_change: int = 0
         self._is_initialized = False
@@ -135,8 +137,57 @@ class TrafficLightEnv(gym.Env):
         traci = _get_traci()
         return traci.getConnection(self._conn_label)
 
+    def _create_yellows(self, green_phase_objects: list) -> list:
+        """Create yellow transition phases between all pairs of green phases.
+
+        Ported from LibSignal's Intersection.create_yellows() pattern.
+        For each pair of green phases (i, j) where i != j, build a yellow
+        string: for each signal position, if phase_i has G/g and phase_j has
+        r/s, output 'r'; else keep phase_i's character.
+
+        Returns the full phase list: green phases + generated yellow phases.
+        """
+        traci = _get_traci()
+        full_phases = list(green_phase_objects)
+        self._yellow_dict = {}
+
+        num_greens = len(green_phase_objects)
+        if num_greens <= 1:
+            logger.debug(f"TL {self.tl_id}: only {num_greens} green phase(s), no yellows needed")
+            return full_phases
+
+        for i in range(num_greens):
+            for j in range(num_greens):
+                if i == j:
+                    continue
+                state_i = green_phase_objects[i].state
+                state_j = green_phase_objects[j].state
+                yellow_str = ""
+                need_yellow = False
+                for pos in range(len(state_i)):
+                    if state_i[pos] in ('G', 'g') and state_j[pos] in ('r', 's'):
+                        yellow_str += 'r'  # LibSignal uses 'r' for transitioning signals
+                        need_yellow = True
+                    else:
+                        yellow_str += state_i[pos]
+
+                if need_yellow:
+                    new_idx = len(full_phases)
+                    yellow_phase = traci.trafficlight.Phase(
+                        self._yellow_duration, yellow_str
+                    )
+                    full_phases.append(yellow_phase)
+                    self._yellow_dict[f"{i}_{j}"] = new_idx
+
+        logger.debug(
+            f"TL {self.tl_id}: created {len(self._yellow_dict)} yellow transitions, "
+            f"yellow_dict={self._yellow_dict}"
+        )
+        return full_phases
+
     def _initialize_spaces(self) -> None:
         """Initialize action and observation spaces from SUMO."""
+        traci = _get_traci()
         conn = self._get_conn()
 
         # Get controlled lanes (deduplicated)
@@ -154,17 +205,34 @@ class TrafficLightEnv(gym.Env):
         phases = logics[0].phases if logics else []
         self._num_phases = len(phases) if phases else 4
 
-        green_indices = [
-            i for i, p in enumerate(phases)
+        green_phase_objects = [
+            p for p in phases
             if 'G' in p.state or 'g' in p.state
         ]
-        self._green_phases = green_indices if green_indices else [0]
+        if not green_phase_objects:
+            # Fallback: use all phases if no green phases found
+            green_phase_objects = list(phases) if phases else []
 
-        # Yellow duration from first yellow phase
-        for p in phases:
-            if 'y' in p.state:
-                self._yellow_duration = max(int(float(p.duration)), 1)
-                break
+        # Yellow duration = min duration across all original phases
+        if phases:
+            self._yellow_duration = max(
+                int(min(float(p.duration) for p in phases)), 1
+            )
+        else:
+            self._yellow_duration = 4
+
+        # Build full phase list: greens (0..N-1) + generated yellows (N..M)
+        self._full_phases = self._create_yellows(green_phase_objects)
+
+        # _green_phases stores indices into _full_phases (0..N-1)
+        self._green_phases = list(range(len(green_phase_objects)))
+
+        # Install as new SUMO program
+        rl_logic = traci.trafficlight.Logic(
+            f"{self.tl_id}_rl", 0, 0, self._full_phases
+        )
+        conn.trafficlight.setProgramLogic(self.tl_id, rl_logic)
+        conn.trafficlight.setProgram(self.tl_id, f"{self.tl_id}_rl")
 
         # Action space = green phases only
         num_green = len(self._green_phases)
@@ -178,10 +246,15 @@ class TrafficLightEnv(gym.Env):
 
         self._is_initialized = True
         logger.info(
-            f"Env initialized: {num_lanes} lanes, {self._num_phases} total phases, "
-            f"{num_green} green phases {self._green_phases}, "
-            f"yellow_dur={self._yellow_duration}s, obs_dim={obs_dim}"
+            f"Env initialized: {num_lanes} lanes, {self._num_phases} original phases, "
+            f"{num_green} green phases (indices {self._green_phases}), "
+            f"{len(self._yellow_dict)} yellow transitions, "
+            f"yellow_dur={self._yellow_duration}s, obs_dim={obs_dim}, "
+            f"full_phases={len(self._full_phases)} total"
         )
+        logger.debug(f"TL {self.tl_id} yellow_dict: {self._yellow_dict}")
+        for i, p in enumerate(self._full_phases):
+            logger.debug(f"  full_phase[{i}]: state={p.state}, dur={p.duration}")
 
     def reset(
         self,
@@ -199,10 +272,11 @@ class TrafficLightEnv(gym.Env):
         self._current_step = 0
         self._time_since_last_phase_change = 0
 
-        # Initialize to first green phase
+        # Re-install RL program and initialize to first green phase
         conn = self._get_conn()
-        self._current_green_phase = self._green_phases[0]
-        conn.trafficlight.setPhase(self.tl_id, self._current_green_phase)
+        conn.trafficlight.setProgram(self.tl_id, f"{self.tl_id}_rl")
+        conn.trafficlight.setPhase(self.tl_id, 0)  # First green phase = index 0 in _full_phases
+        self._current_green_idx = 0
 
         observation = self._get_observation()
         info = {
@@ -216,28 +290,38 @@ class TrafficLightEnv(gym.Env):
     def step(self, action: int) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
         conn = self._get_conn()
 
-        # Translate green-index to SUMO phase with yellow transition
-        desired_green = self._green_phases[int(action)]
+        # desired_green_idx is the index into _green_phases (0-based)
+        desired_green_idx = int(action)
 
         # max_green enforcement: force next phase if held too long
         if (
             self._time_since_last_phase_change >= self.max_green
-            and desired_green == self._current_green_phase
+            and desired_green_idx == self._current_green_idx
         ):
-            current_idx = self._green_phases.index(self._current_green_phase)
-            desired_green = self._green_phases[(current_idx + 1) % len(self._green_phases)]
+            desired_green_idx = (self._current_green_idx + 1) % len(self._green_phases)
 
-        if desired_green != self._current_green_phase:
-            yellow_idx = (self._current_green_phase + 1) % self._num_phases
-            conn.trafficlight.setPhase(self.tl_id, yellow_idx)
+        if desired_green_idx != self._current_green_idx:
+            # Yellow transition using LibSignal pattern
+            y_key = f"{self._current_green_idx}_{desired_green_idx}"
+            if y_key in self._yellow_dict:
+                conn.trafficlight.setPhase(self.tl_id, self._yellow_dict[y_key])
+                logger.debug(
+                    f"TL {self.tl_id}: yellow transition {y_key} -> "
+                    f"phase {self._yellow_dict[y_key]}"
+                )
             for _ in range(self._yellow_duration):
                 conn.simulationStep()
                 self._current_step += 1
             self._time_since_last_phase_change = 0
 
-        # Set desired green phase
-        conn.trafficlight.setPhase(self.tl_id, desired_green)
-        self._current_green_phase = desired_green
+        # Set desired green phase (green phases occupy indices 0..N-1 in _full_phases)
+        sumo_phase_idx = self._green_phases[desired_green_idx]
+        conn.trafficlight.setPhase(self.tl_id, sumo_phase_idx)
+        logger.debug(
+            f"TL {self.tl_id}: green phase idx={desired_green_idx} -> "
+            f"SUMO phase={sumo_phase_idx}"
+        )
+        self._current_green_idx = desired_green_idx
 
         # Advance simulation, collecting halting counts for reward averaging
         sub_step_halting: list[list[int]] = []
@@ -252,23 +336,13 @@ class TrafficLightEnv(gym.Env):
             sub_step_halting.append(halting)
 
         # Compute reward averaged over all sub-steps (LibSignal pattern)
+        # Same reward for all algorithms: -mean(halting) * 12.0
         if sub_step_halting and sub_step_halting[0]:
             avg_halting = [
                 float(np.mean([step[i] for step in sub_step_halting]))
                 for i in range(len(sub_step_halting[0]))
             ]
-            if self.algorithm.lower() == "dqn":
-                reward = -float(np.mean(avg_halting)) * 12.0
-            else:
-                # PPO: use waiting time based reward
-                lane_vehicle_ids = []
-                for lane in self._controlled_lanes:
-                    lane_vehicle_ids.extend(conn.lane.getLastStepVehicleIDs(lane))
-                waiting_times = [
-                    conn.vehicle.getWaitingTime(vid) for vid in lane_vehicle_ids
-                ]
-                mean_wait = float(np.mean(waiting_times)) if waiting_times else 0.0
-                reward = float(np.clip(-mean_wait / 224.0, -4.0, 4.0))
+            reward = -float(np.mean(avg_halting)) * 12.0
         else:
             reward = 0.0
 
@@ -296,6 +370,14 @@ class TrafficLightEnv(gym.Env):
             "throughput": conn.simulation.getArrivedNumber(),
         }
 
+        # Periodic debug logging every 100 sim steps
+        if self._current_step % 100 == 0:
+            logger.debug(
+                f"[DIAG] TL {self.tl_id}: sim_step={self._current_step}, "
+                f"vehicles={total_vehicles}, halting={queue_length}, "
+                f"green_idx={self._current_green_idx}, reward={reward:.2f}"
+            )
+
         return observation, reward, terminated, truncated, info
 
     def _get_observation(self) -> np.ndarray:
@@ -310,13 +392,12 @@ class TrafficLightEnv(gym.Env):
             except Exception:
                 vehicle_counts.append(0.0)
 
-        # Green phase one-hot
+        # Green phase one-hot using _current_green_idx (index into _green_phases)
         num_green = len(self._green_phases)
         phase_one_hot = np.zeros(num_green, dtype=np.float32)
-        try:
-            green_idx = self._green_phases.index(self._current_green_phase)
-            phase_one_hot[green_idx] = 1.0
-        except ValueError:
+        if 0 <= self._current_green_idx < num_green:
+            phase_one_hot[self._current_green_idx] = 1.0
+        else:
             phase_one_hot[0] = 1.0
 
         return np.concatenate([
