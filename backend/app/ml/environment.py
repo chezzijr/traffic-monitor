@@ -62,6 +62,10 @@ class TrafficLightEnv(gym.Env):
         self._current_green_idx: int = 0  # Index into _green_phases (0-based)
         self.max_green: int = 50
         self._time_since_last_phase_change: int = 0
+        self._cumulative_throughput: int = 0
+        self._cumulative_waiting: float = 0.0
+        self._cumulative_queue: float = 0.0
+        self._num_info_steps: int = 0
         self._is_initialized = False
         self._sumo_running = False
         self._conn_label = f"train_{tl_id}_{id(self)}"
@@ -271,6 +275,10 @@ class TrafficLightEnv(gym.Env):
 
         self._current_step = 0
         self._time_since_last_phase_change = 0
+        self._cumulative_throughput = 0
+        self._cumulative_waiting = 0.0
+        self._cumulative_queue = 0.0
+        self._num_info_steps = 0
 
         # Re-install RL program (SUMO was restarted, so the program is gone)
         conn = self._get_conn()
@@ -357,7 +365,7 @@ class TrafficLightEnv(gym.Env):
         terminated = False
         truncated = self._current_step >= self.max_steps
 
-        # Collect info metrics
+        # Collect info metrics (cumulative for episode-level reporting)
         total_vehicles = conn.vehicle.getIDCount()
         total_waiting = sum(
             conn.vehicle.getWaitingTime(vid) for vid in conn.vehicle.getIDList()
@@ -366,14 +374,21 @@ class TrafficLightEnv(gym.Env):
         queue_length = sum(
             conn.lane.getLastStepHaltingNumber(lane) for lane in self._controlled_lanes
         )
+        step_throughput = conn.simulation.getArrivedNumber()
+
+        # Accumulate for episode-level averages
+        self._cumulative_throughput += step_throughput
+        self._cumulative_waiting += avg_waiting
+        self._cumulative_queue += queue_length / max(len(self._controlled_lanes), 1)
+        self._num_info_steps += 1
 
         info = {
             "step": self._current_step,
             "action": action,
             "total_vehicles": total_vehicles,
-            "avg_waiting_time": avg_waiting,
-            "avg_queue_length": queue_length / max(len(self._controlled_lanes), 1),
-            "throughput": conn.simulation.getArrivedNumber(),
+            "avg_waiting_time": self._cumulative_waiting / max(self._num_info_steps, 1),
+            "avg_queue_length": self._cumulative_queue / max(self._num_info_steps, 1),
+            "throughput": self._cumulative_throughput,
         }
 
         # Periodic debug logging every 100 sim steps
