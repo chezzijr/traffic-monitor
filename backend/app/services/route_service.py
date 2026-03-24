@@ -276,6 +276,50 @@ def generate_routes(
     }
 
 
+def _resolve_tl_nodes(net, tl_id: str) -> list:
+    """Resolve a traffic light ID to its junction node(s) in sumolib.
+
+    Handles various SUMO TL naming conventions:
+    - Simple: '411918637' → node '411918637'
+    - Cluster: 'cluster_X_Y_Z' → node 'cluster_X_Y_Z'
+    - Guessed signal: 'GS_411926667' → try node '411926667'
+    - Joined signal: 'joinedS_X_Y' → try nodes X, Y individually
+    """
+    # Try direct match first
+    try:
+        return [net.getNode(tl_id)]
+    except KeyError:
+        pass
+
+    # Try stripping GS_ prefix
+    if tl_id.startswith("GS_"):
+        try:
+            return [net.getNode(tl_id[3:])]
+        except KeyError:
+            pass
+
+    # Try resolving joinedS_ to constituent nodes
+    if tl_id.startswith("joinedS_"):
+        parts = tl_id[8:].split("_")
+        nodes = []
+        # Try each part and also try joining consecutive parts (for cluster_ sub-IDs)
+        for part in parts:
+            try:
+                nodes.append(net.getNode(part))
+            except KeyError:
+                pass
+        if nodes:
+            return nodes
+
+    # Last resort: search all nodes for partial match
+    for node in net.getNodes():
+        nid = node.getID()
+        if tl_id in nid or nid in tl_id:
+            return [node]
+
+    return []
+
+
 def generate_junction_routes(
     network_path: str,
     tl_id: str,
@@ -320,15 +364,26 @@ def generate_junction_routes(
 
     net = sumolib.net.readNet(str(network_path))
 
-    # Find the junction node
-    try:
-        node = net.getNode(tl_id)
-    except KeyError:
-        raise ValueError(f"Junction node '{tl_id}' not found in network")
+    # Find the junction node(s) — handle cluster_, GS_, joinedS_ prefixes
+    nodes = _resolve_tl_nodes(net, tl_id)
+    if not nodes:
+        raise ValueError(f"Could not resolve junction node(s) for TL '{tl_id}' in network")
 
-    # Get incoming and outgoing edges (exclude internal edges)
-    incoming_edges = [e for e in node.getIncoming() if not e.getID().startswith(":")]
-    outgoing_edges = [e for e in node.getOutgoing() if not e.getID().startswith(":")]
+    # Collect incoming/outgoing edges from all resolved nodes
+    incoming_edges = []
+    outgoing_edges = []
+    seen_in, seen_out = set(), set()
+    for node in nodes:
+        for e in node.getIncoming():
+            eid = e.getID()
+            if not eid.startswith(":") and eid not in seen_in:
+                incoming_edges.append(e)
+                seen_in.add(eid)
+        for e in node.getOutgoing():
+            eid = e.getID()
+            if not eid.startswith(":") and eid not in seen_out:
+                outgoing_edges.append(e)
+                seen_out.add(eid)
 
     if not incoming_edges or not outgoing_edges:
         raise ValueError(
@@ -341,9 +396,8 @@ def generate_junction_routes(
         f"{len(outgoing_edges)} outgoing edges"
     )
 
-    # Calculate flow rate per (incoming, outgoing, vtype) combination
+    # Calculate total flow rate from scenario
     total_rate = 1.0 / SCENARIO_PERIODS[scenario]  # vehicles per second
-    num_pairs = len(incoming_edges) * len(outgoing_edges)
 
     # Build route XML with flows
     network_name = network_file.stem.replace(".net", "")
@@ -359,32 +413,62 @@ def generate_junction_routes(
     for vtype_elem in vtypes_root.findall("vType"):
         routes_root.append(vtype_elem)
 
-    # Create flows for each (incoming, outgoing, vehicle_type) combination
-    flow_id = 0
+    # Build valid (incoming, outgoing) pairs — only pairs with actual connections
+    valid_pairs = []
     for in_edge in incoming_edges:
         for out_edge in outgoing_edges:
-            # Skip U-turns (same road, opposite direction)
-            if in_edge.getID().replace("-", "") == out_edge.getID().replace("-", ""):
+            in_id = in_edge.getID()
+            out_id = out_edge.getID()
+            # Skip U-turns: -edgeX ↔ edgeX
+            in_base = in_id.lstrip("-")
+            out_base = out_id.lstrip("-")
+            if in_base == out_base:
+                continue
+            # Check if any node connects these edges
+            connected = False
+            for node in nodes:
+                if node.getConnections(in_edge, out_edge):
+                    connected = True
+                    break
+            if connected:
+                valid_pairs.append((in_edge, out_edge))
+
+    if not valid_pairs:
+        logger.warning(
+            f"No valid connected edge pairs for TL {tl_id}, "
+            f"falling back to all in→out combinations"
+        )
+        for in_edge in incoming_edges:
+            for out_edge in outgoing_edges:
+                in_base = in_edge.getID().lstrip("-")
+                out_base = out_edge.getID().lstrip("-")
+                if in_base != out_base:
+                    valid_pairs.append((in_edge, out_edge))
+
+    num_pairs = len(valid_pairs)
+    logger.info(f"Junction {tl_id}: {num_pairs} valid edge pairs for flows")
+
+    # Create flows for each (pair, vehicle_type) combination
+    flow_id = 0
+    for in_edge, out_edge in valid_pairs:
+        for vtype, proportion in VEHICLE_DISTRIBUTION.items():
+            # Rate for this specific flow: total_rate * proportion / num_pairs
+            flow_rate = (total_rate * proportion) / max(num_pairs, 1)
+
+            if flow_rate < 0.001:
                 continue
 
-            for vtype, proportion in VEHICLE_DISTRIBUTION.items():
-                # Rate for this specific flow: total_rate * proportion / num_pairs
-                flow_rate = (total_rate * proportion) / max(num_pairs, 1)
-
-                if flow_rate < 0.001:
-                    continue
-
-                flow_elem = ET.SubElement(routes_root, "flow")
-                flow_elem.set("id", f"{vtype}_{flow_id}")
-                flow_elem.set("type", vtype)
-                flow_elem.set("begin", "0")
-                flow_elem.set("end", str(duration))
-                flow_elem.set("probability", f"{flow_rate:.4f}")
-                flow_elem.set("from", in_edge.getID())
-                flow_elem.set("to", out_edge.getID())
-                flow_elem.set("departLane", "best")
-                flow_elem.set("departSpeed", "max")
-                flow_id += 1
+            flow_elem = ET.SubElement(routes_root, "flow")
+            flow_elem.set("id", f"{vtype}_{flow_id}")
+            flow_elem.set("type", vtype)
+            flow_elem.set("begin", "0")
+            flow_elem.set("end", str(duration))
+            flow_elem.set("probability", f"{flow_rate:.4f}")
+            flow_elem.set("from", in_edge.getID())
+            flow_elem.set("to", out_edge.getID())
+            flow_elem.set("departLane", "best")
+            flow_elem.set("departSpeed", "max")
+            flow_id += 1
 
     estimated_vehicles = int(total_rate * duration)
     logger.info(
