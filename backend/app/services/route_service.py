@@ -123,8 +123,8 @@ def generate_routes(
             # Adjust period for this vehicle type's proportion
             # E.g., for MODERATE (period=1.25s) and motorbike (80%):
             # type_period = 1.25 / 0.80 = 1.5625s between motorbikes
-            # Halve period to compensate for ~50% route validation drop rate
-            type_period = (period / proportion) * 0.5
+            # Quarter period to compensate for ~65% route validation drop on OSM networks
+            type_period = (period / proportion) * 0.25
             type_trips_file = output_path / f"{network_name}_{scenario.value}_{vtype}.trips.xml"
             temp_trip_files.append(type_trips_file)
 

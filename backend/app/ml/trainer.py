@@ -118,7 +118,7 @@ class TrafficLightTrainer:
                 lr=1e-3,
                 gamma=0.95,
                 epsilon_start=0.1,
-                epsilon_decay=0.995,
+                epsilon_decay=0.9995,
                 epsilon_min=0.01,
                 buffer_size=5000,
                 batch_size=64,

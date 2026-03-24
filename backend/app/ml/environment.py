@@ -66,6 +66,7 @@ class TrafficLightEnv(gym.Env):
         self._cumulative_waiting: float = 0.0
         self._cumulative_queue: float = 0.0
         self._num_info_steps: int = 0
+        self._cached_routes_path: str | None = None
         self._is_initialized = False
         self._sumo_running = False
         self._conn_label = f"train_{tl_id}_{id(self)}"
@@ -83,27 +84,29 @@ class TrafficLightEnv(gym.Env):
         # Stop existing connection if any
         self._stop_sumo()
 
-        # Generate routes if needed
+        # Generate routes once and cache, or reuse explicit routes_path
         routes_path = self.routes_path
         if routes_path is None:
-            from app.models.schemas import TrafficScenario
-            from app.services import route_service
+            if self._cached_routes_path is None:
+                from app.models.schemas import TrafficScenario
+                from app.services import route_service
 
-            scenario_map = {
-                "light": TrafficScenario.LIGHT,
-                "moderate": TrafficScenario.MODERATE,
-                "heavy": TrafficScenario.HEAVY,
-                "rush_hour": TrafficScenario.RUSH_HOUR,
-            }
-            scenario_enum = scenario_map.get(self.scenario, TrafficScenario.MODERATE)
-            output_dir = str(Path(self.network_path).parent)
-            route_result = route_service.generate_routes(
-                network_path=self.network_path,
-                output_dir=output_dir,
-                scenario=scenario_enum,
-                seed=seed,
-            )
-            routes_path = route_result["routes_path"]
+                scenario_map = {
+                    "light": TrafficScenario.LIGHT,
+                    "moderate": TrafficScenario.MODERATE,
+                    "heavy": TrafficScenario.HEAVY,
+                    "rush_hour": TrafficScenario.RUSH_HOUR,
+                }
+                scenario_enum = scenario_map.get(self.scenario, TrafficScenario.MODERATE)
+                output_dir = str(Path(self.network_path).parent)
+                route_result = route_service.generate_routes(
+                    network_path=self.network_path,
+                    output_dir=output_dir,
+                    scenario=scenario_enum,
+                    seed=seed,
+                )
+                self._cached_routes_path = route_result["routes_path"]
+            routes_path = self._cached_routes_path
 
         sumo_binary = os.path.join(
             os.environ.get("SUMO_HOME", "/usr/share/sumo"),
