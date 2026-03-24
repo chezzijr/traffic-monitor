@@ -276,6 +276,133 @@ def generate_routes(
     }
 
 
+def generate_junction_routes(
+    network_path: str,
+    tl_id: str,
+    output_dir: str,
+    scenario: TrafficScenario,
+    duration: int = 3600,
+    seed: int | None = None,
+) -> dict:
+    """Generate routes concentrated at a specific junction for training.
+
+    Instead of random trips across the whole network, creates SUMO flow
+    definitions that send all traffic through the target junction's
+    incoming→outgoing edge pairs. Similar to LibSignal's approach where
+    all traffic flows through one intersection.
+
+    Args:
+        network_path: Path to the SUMO .net.xml file
+        tl_id: Traffic light ID to concentrate traffic at
+        output_dir: Directory to store generated route files
+        scenario: Traffic scenario determining vehicle generation rate
+        duration: Simulation duration in seconds
+        seed: Random seed (unused, kept for API compatibility)
+
+    Returns:
+        dict with routes_path key
+    """
+    import sys
+    sumo_tools = os.path.join(SUMO_HOME, "tools")
+    if sumo_tools not in sys.path:
+        sys.path.append(sumo_tools)
+    import sumolib
+
+    network_file = Path(network_path)
+    if not network_file.exists():
+        raise FileNotFoundError(f"Network file not found: {network_path}")
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    if not VTYPES_FILE.exists():
+        raise RuntimeError(f"Vehicle types file not found: {VTYPES_FILE}")
+
+    net = sumolib.net.readNet(str(network_path))
+
+    # Find the junction node
+    try:
+        node = net.getNode(tl_id)
+    except KeyError:
+        raise ValueError(f"Junction node '{tl_id}' not found in network")
+
+    # Get incoming and outgoing edges (exclude internal edges)
+    incoming_edges = [e for e in node.getIncoming() if not e.getID().startswith(":")]
+    outgoing_edges = [e for e in node.getOutgoing() if not e.getID().startswith(":")]
+
+    if not incoming_edges or not outgoing_edges:
+        raise ValueError(
+            f"Junction '{tl_id}' has {len(incoming_edges)} incoming, "
+            f"{len(outgoing_edges)} outgoing edges — cannot generate routes"
+        )
+
+    logger.info(
+        f"Junction {tl_id}: {len(incoming_edges)} incoming edges, "
+        f"{len(outgoing_edges)} outgoing edges"
+    )
+
+    # Calculate flow rate per (incoming, outgoing, vtype) combination
+    total_rate = 1.0 / SCENARIO_PERIODS[scenario]  # vehicles per second
+    num_pairs = len(incoming_edges) * len(outgoing_edges)
+
+    # Build route XML with flows
+    network_name = network_file.stem.replace(".net", "")
+    routes_file = output_path / f"{network_name}_{tl_id}_{scenario.value}_jn.rou.xml"
+
+    # Read vtypes from file to include inline
+    vtypes_tree = ET.parse(str(VTYPES_FILE))
+    vtypes_root = vtypes_tree.getroot()
+
+    routes_root = ET.Element("routes")
+
+    # Copy vtypes
+    for vtype_elem in vtypes_root.findall("vType"):
+        routes_root.append(vtype_elem)
+
+    # Create flows for each (incoming, outgoing, vehicle_type) combination
+    flow_id = 0
+    for in_edge in incoming_edges:
+        for out_edge in outgoing_edges:
+            # Skip U-turns (same road, opposite direction)
+            if in_edge.getID().replace("-", "") == out_edge.getID().replace("-", ""):
+                continue
+
+            for vtype, proportion in VEHICLE_DISTRIBUTION.items():
+                # Rate for this specific flow: total_rate * proportion / num_pairs
+                flow_rate = (total_rate * proportion) / max(num_pairs, 1)
+
+                if flow_rate < 0.001:
+                    continue
+
+                flow_elem = ET.SubElement(routes_root, "flow")
+                flow_elem.set("id", f"{vtype}_{flow_id}")
+                flow_elem.set("type", vtype)
+                flow_elem.set("begin", "0")
+                flow_elem.set("end", str(duration))
+                flow_elem.set("probability", f"{flow_rate:.4f}")
+                flow_elem.set("from", in_edge.getID())
+                flow_elem.set("to", out_edge.getID())
+                flow_elem.set("departLane", "best")
+                flow_elem.set("departSpeed", "max")
+                flow_id += 1
+
+    estimated_vehicles = int(total_rate * duration)
+    logger.info(
+        f"Generated {flow_id} flow definitions for junction {tl_id}, "
+        f"~{estimated_vehicles} vehicles over {duration}s ({scenario.value})"
+    )
+
+    tree = ET.ElementTree(routes_root)
+    ET.indent(tree, space="    ")
+    tree.write(str(routes_file), encoding="unicode", xml_declaration=True)
+
+    return {
+        "routes_path": str(routes_file),
+        "trip_count": estimated_vehicles,
+        "vehicle_distribution": VEHICLE_DISTRIBUTION.copy(),
+    }
+
+
 def get_vtypes_file_path() -> str:
     """Get the path to the Vietnamese vehicle types file.
 
