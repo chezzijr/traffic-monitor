@@ -365,16 +365,16 @@ class TrafficLightEnv(gym.Env):
         terminated = False
         truncated = self._current_step >= self.max_steps
 
-        # Collect info metrics (cumulative for episode-level reporting)
-        total_vehicles = conn.vehicle.getIDCount()
-        total_waiting = sum(
-            conn.vehicle.getWaitingTime(vid) for vid in conn.vehicle.getIDList()
-        )
-        avg_waiting = total_waiting / max(total_vehicles, 1)
+        # Collect junction-specific metrics (controlled lanes only)
+        junction_vids = []
+        for lane in self._controlled_lanes:
+            junction_vids.extend(conn.lane.getLastStepVehicleIDs(lane))
+        junction_waiting = sum(conn.vehicle.getWaitingTime(v) for v in junction_vids)
+        avg_waiting = junction_waiting / max(len(junction_vids), 1)
         queue_length = sum(
             conn.lane.getLastStepHaltingNumber(lane) for lane in self._controlled_lanes
         )
-        step_throughput = conn.simulation.getArrivedNumber()
+        step_throughput = len(junction_vids)
 
         # Accumulate for episode-level averages
         self._cumulative_throughput += step_throughput
@@ -385,7 +385,7 @@ class TrafficLightEnv(gym.Env):
         info = {
             "step": self._current_step,
             "action": action,
-            "total_vehicles": total_vehicles,
+            "junction_vehicles": len(junction_vids),
             "avg_waiting_time": self._cumulative_waiting / max(self._num_info_steps, 1),
             "avg_queue_length": self._cumulative_queue / max(self._num_info_steps, 1),
             "throughput": self._cumulative_throughput,
@@ -395,7 +395,7 @@ class TrafficLightEnv(gym.Env):
         if self._current_step % 100 == 0:
             logger.debug(
                 f"[DIAG] TL {self.tl_id}: sim_step={self._current_step}, "
-                f"vehicles={total_vehicles}, halting={queue_length}, "
+                f"junction_veh={len(junction_vids)}, halting={queue_length}, "
                 f"green_idx={self._current_green_idx}, reward={reward:.2f}"
             )
 
