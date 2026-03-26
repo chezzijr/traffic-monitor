@@ -31,6 +31,8 @@ class MultiAgentTrafficLightEnv:
         algorithm: str = "dqn",
         max_steps: int = 3600,
         steps_per_action: int = 10,
+        yellow_time: int = 2,
+        min_green: int = 10,
         gui: bool = False,
         routes_path: str | None = None,
         scenario: str = "moderate",
@@ -49,8 +51,8 @@ class MultiAgentTrafficLightEnv:
         self._sumo_running = False
         self._conn_label = f"multi_{network_id}_{id(self)}"
         self._is_initialized = False
-
-        self._last_arrived = 0
+        self.yellow_time = yellow_time
+        self.min_green = min_green
 
         # Per-agent data (populated after first reset)
         self._controlled_lanes: dict[str, list[str]] = {}
@@ -60,6 +62,7 @@ class MultiAgentTrafficLightEnv:
         self._current_green_phase: dict[str, int] = {}
         self.max_green: int = 50
         self._time_since_last_phase_change: dict[str, int] = {}
+        self._seen_vehicle_ids: dict[str, set[str]] = {}
         self.observation_spaces: dict[str, spaces.Box] = {}
         self.action_spaces: dict[str, spaces.Discrete] = {}
 
@@ -149,13 +152,9 @@ class MultiAgentTrafficLightEnv:
             ]
             self._green_phases[tl_id] = green_indices if green_indices else [0]
 
-            # Yellow duration from first yellow phase
-            yellow_dur = 4
-            for p in phases:
-                if 'y' in p.state:
-                    yellow_dur = max(int(float(p.duration)), 1)
-                    break
-            self._yellow_duration[tl_id] = yellow_dur
+            # Yellow duration from constructor parameter (default 2s)
+            self._yellow_duration[tl_id] = self.yellow_time
+            self._seen_vehicle_ids[tl_id] = set()
 
             # Action space = number of GREEN phases only
             num_green = len(self._green_phases[tl_id])
@@ -183,12 +182,12 @@ class MultiAgentTrafficLightEnv:
             self._initialize()
 
         self._current_step = 0
-        self._last_arrived = 0
 
         # Initialize each TL to its first green phase
         conn = self._get_conn()
         for tl_id in self.tl_ids:
             self._time_since_last_phase_change[tl_id] = 0
+            self._seen_vehicle_ids[tl_id] = set()
             first_green = self._green_phases[tl_id][0]
             conn.trafficlight.setPhase(tl_id, first_green)
             self._current_green_phase[tl_id] = first_green
@@ -226,6 +225,13 @@ class MultiAgentTrafficLightEnv:
                 desired_green = self._green_phases[tl_id][
                     (current_idx + 1) % len(self._green_phases[tl_id])
                 ]
+
+            # min_green enforcement: ignore switch if green too short
+            if (
+                desired_green != current_green
+                and self._time_since_last_phase_change.get(tl_id, 0) < self.min_green
+            ):
+                desired_green = current_green
 
             desired_greens[tl_id] = desired_green
 
@@ -277,11 +283,6 @@ class MultiAgentTrafficLightEnv:
 
         truncated = self._current_step >= self.max_steps
 
-        # Per-step throughput (delta, not cumulative)
-        step_arrived = conn.simulation.getArrivedNumber()
-        step_throughput = step_arrived - self._last_arrived
-        self._last_arrived = step_arrived
-
         # Periodic diagnostic logging
         if self._current_step % 500 == 0:
             total_vehicles = conn.vehicle.getIDCount()
@@ -299,7 +300,6 @@ class MultiAgentTrafficLightEnv:
             logger.info(
                 f"[DIAG] sim_step={self._current_step}, "
                 f"total_vehicles={total_vehicles}, "
-                f"arrived={step_arrived}, "
                 f"per_tl={per_tl_vehicles}"
             )
 
@@ -333,12 +333,14 @@ class MultiAgentTrafficLightEnv:
                 conn.lane.getLastStepHaltingNumber(lane)
                 for lane in self._controlled_lanes[tl_id]
             )
+            # Track unique vehicles served per junction
+            self._seen_vehicle_ids[tl_id].update(lane_vehicle_ids)
             infos[tl_id] = {
                 "step": self._current_step,
                 "action": actions.get(tl_id, 0),
                 "avg_waiting_time": waiting_time / max(num_vehicles, 1),
                 "avg_queue_length": queue_length / max(len(self._controlled_lanes[tl_id]), 1),
-                "throughput": step_throughput,
+                "throughput": len(self._seen_vehicle_ids[tl_id]),
                 "reward": rewards[tl_id],
             }
 

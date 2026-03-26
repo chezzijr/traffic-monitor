@@ -211,7 +211,7 @@ class MultiProgressCallback:
         self._waiting_window.append(float(np.mean(waiting_times)) if waiting_times else 0.0)
         self._queue_window.append(float(np.mean(queue_lengths)) if queue_lengths else 0.0)
         self._reward_window.append(float(np.mean(reward_vals)) if reward_vals else 0.0)
-        self._throughput_window.append(int(max(throughputs)) if throughputs else 0)
+        self._throughput_window.append(int(np.mean(throughputs)) if throughputs else 0)
 
         if len(self._waiting_window) > self._window_size:
             self._waiting_window = self._waiting_window[-self._window_size:]
@@ -222,7 +222,7 @@ class MultiProgressCallback:
         self.last_waiting_time = float(np.mean(self._waiting_window))
         self.last_queue_length = float(np.mean(self._queue_window))
         self.last_mean_reward = float(np.mean(self._reward_window))
-        self.last_throughput = int(np.sum(self._throughput_window))
+        self.last_throughput = int(np.mean(self._throughput_window[-10:])) if self._throughput_window else 0
 
         if step % self._publish_interval == 0:
             self._publish(step)

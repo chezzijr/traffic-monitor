@@ -36,6 +36,8 @@ class TrafficLightEnv(gym.Env):
         algorithm: str = "dqn",
         max_steps: int = 3600,
         steps_per_action: int = 10,
+        yellow_time: int = 2,
+        min_green: int = 10,
         gui: bool = False,
         routes_path: str | None = None,
         scenario: str = "moderate",
@@ -56,13 +58,15 @@ class TrafficLightEnv(gym.Env):
         self._controlled_lanes: list[str] = []
         self._num_phases = 0
         self._green_phases: list[int] = []  # Indices into _full_phases (0..N-1)
-        self._yellow_duration: int = 4
+        self._yellow_time: int = yellow_time
+        self._yellow_duration: int = yellow_time
         self._yellow_dict: dict[str, int] = {}  # "i_j" -> phase index in _full_phases
         self._full_phases: list = []  # Green phases + generated yellow phases
         self._current_green_idx: int = 0  # Index into _green_phases (0-based)
         self.max_green: int = 50
+        self.min_green: int = min_green
         self._time_since_last_phase_change: int = 0
-        self._cumulative_throughput: int = 0
+        self._seen_vehicle_ids: set[str] = set()
         self._cumulative_waiting: float = 0.0
         self._cumulative_queue: float = 0.0
         self._num_info_steps: int = 0
@@ -221,13 +225,8 @@ class TrafficLightEnv(gym.Env):
             # Fallback: use all phases if no green phases found
             green_phase_objects = list(phases) if phases else []
 
-        # Yellow duration = min duration across all original phases
-        if phases:
-            self._yellow_duration = max(
-                int(min(float(p.duration) for p in phases)), 1
-            )
-        else:
-            self._yellow_duration = 4
+        # Yellow duration from constructor parameter (default 2s, matching V2)
+        self._yellow_duration = self._yellow_time
 
         # Build full phase list: greens (0..N-1) + generated yellows (N..M)
         self._full_phases = self._create_yellows(green_phase_objects)
@@ -279,7 +278,7 @@ class TrafficLightEnv(gym.Env):
 
         self._current_step = 0
         self._time_since_last_phase_change = 0
-        self._cumulative_throughput = 0
+        self._seen_vehicle_ids = set()
         self._cumulative_waiting = 0.0
         self._cumulative_queue = 0.0
         self._num_info_steps = 0
@@ -317,6 +316,13 @@ class TrafficLightEnv(gym.Env):
             and desired_green_idx == self._current_green_idx
         ):
             desired_green_idx = (self._current_green_idx + 1) % len(self._green_phases)
+
+        # min_green enforcement: ignore switch if green too short
+        if (
+            desired_green_idx != self._current_green_idx
+            and self._time_since_last_phase_change < self.min_green
+        ):
+            desired_green_idx = self._current_green_idx
 
         if desired_green_idx != self._current_green_idx:
             # Yellow transition using LibSignal pattern
@@ -378,10 +384,10 @@ class TrafficLightEnv(gym.Env):
         queue_length = sum(
             conn.lane.getLastStepHaltingNumber(lane) for lane in self._controlled_lanes
         )
-        step_throughput = len(junction_vids)
+        # Track unique vehicles served (not occupancy)
+        self._seen_vehicle_ids.update(junction_vids)
 
         # Accumulate for episode-level averages
-        self._cumulative_throughput += step_throughput
         self._cumulative_waiting += avg_waiting
         self._cumulative_queue += queue_length / max(len(self._controlled_lanes), 1)
         self._num_info_steps += 1
@@ -392,7 +398,7 @@ class TrafficLightEnv(gym.Env):
             "junction_vehicles": len(junction_vids),
             "avg_waiting_time": self._cumulative_waiting / max(self._num_info_steps, 1),
             "avg_queue_length": self._cumulative_queue / max(self._num_info_steps, 1),
-            "throughput": self._cumulative_throughput,
+            "throughput": len(self._seen_vehicle_ids),
         }
 
         # Periodic debug logging every 100 sim steps
