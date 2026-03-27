@@ -320,6 +320,156 @@ def _resolve_tl_nodes(net, tl_id: str) -> list:
     return []
 
 
+def _find_fringe_edges(net) -> tuple[list, list]:
+    """Find source (entry) and sink (exit) fringe edges at network boundary.
+
+    Source fringes: edges whose from-node has no incoming non-internal edges
+    (traffic enters the network here from outside).
+
+    Sink fringes: edges whose to-node has no outgoing non-internal edges
+    (traffic exits the network here).
+    """
+    sources, sinks = [], []
+    for edge in net.getEdges(withInternal=False):
+        from_node = edge.getFromNode()
+        to_node = edge.getToNode()
+        incoming = [e for e in from_node.getIncoming() if not e.getID().startswith(":")]
+        outgoing = [e for e in to_node.getOutgoing() if not e.getID().startswith(":")]
+        if not incoming:
+            sources.append(edge)
+        if not outgoing:
+            sinks.append(edge)
+    return sources, sinks
+
+
+def _find_fringe_routes(net, nodes: list, incoming_edges: list, outgoing_edges: list) -> list[tuple]:
+    """Find valid fringe route tuples through the junction.
+
+    Strategy (tried in order):
+    1. Full fringe routing: (source_fringe, junction_in_edge, sink_fringe)
+       Vehicles travel from boundary → through junction → to boundary.
+    2. Source-to-outgoing: (source_fringe, outgoing_edge, None)
+       For dead-end junctions where outgoing edges can't reach any sink.
+       Vehicles travel from boundary → through junction → exit at outgoing edge.
+
+    Returns list of tuples:
+    - 3-tuples (source, in_edge, sink) for full fringe routing
+    - 3-tuples (source, out_edge, None) for source-to-outgoing fallback
+    """
+    sources, sinks = _find_fringe_edges(net)
+    if not sources:
+        logger.info("No source fringe edges found")
+        return []
+
+    logger.info(f"Found {len(sources)} source fringes, {len(sinks)} sink fringes")
+
+    # For each incoming edge, find which source fringes can reach it
+    reachable_sources: dict[str, list] = {}
+    for in_edge in incoming_edges:
+        in_id = in_edge.getID()
+        reachable_sources[in_id] = []
+        for source in sources:
+            if source.getID() == in_id:
+                continue
+            path, cost = net.getShortestPath(source, in_edge)
+            if path is not None:
+                reachable_sources[in_id].append((source, cost))
+        reachable_sources[in_id].sort(key=lambda x: x[1])
+        reachable_sources[in_id] = reachable_sources[in_id][:5]
+
+    # For each outgoing edge, find which sink fringes are reachable from it
+    reachable_sinks: dict[str, list] = {}
+    has_any_sinks = False
+    if sinks:
+        for out_edge in outgoing_edges:
+            out_id = out_edge.getID()
+            reachable_sinks[out_id] = []
+            for sink in sinks:
+                if sink.getID() == out_id:
+                    continue
+                path, cost = net.getShortestPath(out_edge, sink)
+                if path is not None:
+                    reachable_sinks[out_id].append((sink, cost))
+            reachable_sinks[out_id].sort(key=lambda x: x[1])
+            reachable_sinks[out_id] = reachable_sinks[out_id][:5]
+            if reachable_sinks[out_id]:
+                has_any_sinks = True
+
+    # Build valid (in_edge, out_edge) pairs through the junction
+    valid_jn_pairs = []
+    for in_edge in incoming_edges:
+        for out_edge in outgoing_edges:
+            in_id = in_edge.getID()
+            out_id = out_edge.getID()
+            in_base = in_id.lstrip("-")
+            out_base = out_id.lstrip("-")
+            if in_base == out_base:
+                continue
+            for node in nodes:
+                if node.getConnections(in_edge, out_edge):
+                    valid_jn_pairs.append((in_edge, out_edge))
+                    break
+
+    if not valid_jn_pairs:
+        for in_edge in incoming_edges:
+            for out_edge in outgoing_edges:
+                in_base = in_edge.getID().lstrip("-")
+                out_base = out_edge.getID().lstrip("-")
+                if in_base != out_base:
+                    valid_jn_pairs.append((in_edge, out_edge))
+
+    triples: list[tuple] = []
+
+    if has_any_sinks:
+        # Strategy 1: Full fringe routing (source → via junction → sink)
+        for in_edge, out_edge in valid_jn_pairs:
+            in_id = in_edge.getID()
+            out_id = out_edge.getID()
+            for source, _ in reachable_sources.get(in_id, []):
+                for sink, _ in reachable_sinks.get(out_id, []):
+                    if source.getID() != sink.getID():
+                        triples.append((source, in_edge, sink))
+
+    if not triples:
+        # Strategy 2: Source-to-outgoing (for dead-end junctions)
+        # Vehicles travel from fringe → through junction → outgoing edge
+        # The path necessarily crosses the junction since outgoing edges
+        # are only reachable via the junction's incoming edges.
+        logger.info("No full fringe routes, trying source-to-outgoing strategy")
+        for out_edge in outgoing_edges:
+            out_id = out_edge.getID()
+            for source in sources:
+                if source.getID() == out_id:
+                    continue
+                path, cost = net.getShortestPath(source, out_edge)
+                if path is not None:
+                    triples.append((source, out_edge, None))
+        # Deduplicate and keep top routes per outgoing edge
+        seen = set()
+        deduped = []
+        for t in triples:
+            key = (t[0].getID(), t[1].getID())
+            if key not in seen:
+                seen.add(key)
+                deduped.append(t)
+        triples = deduped
+
+    # Cap to avoid too many flow definitions
+    if len(triples) > 50:
+        by_edge: dict[str, list] = {}
+        for t in triples:
+            key = t[1].getID()
+            by_edge.setdefault(key, []).append(t)
+        capped = []
+        per_edge = max(50 // len(by_edge), 1)
+        for group in by_edge.values():
+            capped.extend(group[:per_edge])
+        triples = capped[:50]
+
+    logger.info(f"Found {len(triples)} fringe route tuples through junction")
+    return triples
+
+
 def generate_junction_routes(
     network_path: str,
     tl_id: str,
@@ -413,62 +563,104 @@ def generate_junction_routes(
     for vtype_elem in vtypes_root.findall("vType"):
         routes_root.append(vtype_elem)
 
-    # Build valid (incoming, outgoing) pairs — only pairs with actual connections
-    valid_pairs = []
-    for in_edge in incoming_edges:
-        for out_edge in outgoing_edges:
-            in_id = in_edge.getID()
-            out_id = out_edge.getID()
-            # Skip U-turns: -edgeX ↔ edgeX
-            in_base = in_id.lstrip("-")
-            out_base = out_id.lstrip("-")
-            if in_base == out_base:
-                continue
-            # Check if any node connects these edges
-            connected = False
-            for node in nodes:
-                if node.getConnections(in_edge, out_edge):
-                    connected = True
-                    break
-            if connected:
-                valid_pairs.append((in_edge, out_edge))
+    # Try fringe-based routing first (vehicles from network boundary through junction)
+    fringe_routes = _find_fringe_routes(net, nodes, incoming_edges, outgoing_edges)
 
-    if not valid_pairs:
-        logger.warning(
-            f"No valid connected edge pairs for TL {tl_id}, "
-            f"falling back to all in→out combinations"
+    flow_id = 0
+    if fringe_routes:
+        # Fringe-based flow generation: vehicles spawn from boundary edges,
+        # travel through junction, exit at boundary or outgoing edges
+        num_triples = len(fringe_routes)
+        logger.info(
+            f"Using fringe-based routing: {num_triples} route tuples for junction {tl_id}"
         )
+
+        for source, mid_edge, sink in fringe_routes:
+            for vtype, proportion in VEHICLE_DISTRIBUTION.items():
+                flow_rate = (total_rate * proportion) / max(num_triples, 1)
+
+                if flow_rate < 0.001:
+                    continue
+
+                flow_elem = ET.SubElement(routes_root, "flow")
+                flow_elem.set("id", f"{vtype}_{flow_id}")
+                flow_elem.set("type", vtype)
+                flow_elem.set("begin", "0")
+                flow_elem.set("end", str(duration))
+                flow_elem.set("probability", f"{flow_rate:.4f}")
+                flow_elem.set("from", source.getID())
+                flow_elem.set("departLane", "best")
+                flow_elem.set("departSpeed", "max")
+
+                if sink is not None:
+                    # Full fringe: source → via(junction_in) → sink
+                    flow_elem.set("to", sink.getID())
+                    flow_elem.set("via", mid_edge.getID())
+                else:
+                    # Source-to-outgoing: source → outgoing_edge (crosses junction)
+                    flow_elem.set("to", mid_edge.getID())
+
+                flow_id += 1
+    else:
+        # Fallback: junction-concentrated flows (existing behavior)
+        logger.warning(
+            f"No fringe routes found for TL {tl_id}, "
+            f"falling back to junction-concentrated flows"
+        )
+
+        # Build valid (incoming, outgoing) pairs — only pairs with actual connections
+        valid_pairs = []
         for in_edge in incoming_edges:
             for out_edge in outgoing_edges:
-                in_base = in_edge.getID().lstrip("-")
-                out_base = out_edge.getID().lstrip("-")
-                if in_base != out_base:
+                in_id = in_edge.getID()
+                out_id = out_edge.getID()
+                # Skip U-turns: -edgeX ↔ edgeX
+                in_base = in_id.lstrip("-")
+                out_base = out_id.lstrip("-")
+                if in_base == out_base:
+                    continue
+                # Check if any node connects these edges
+                connected = False
+                for node in nodes:
+                    if node.getConnections(in_edge, out_edge):
+                        connected = True
+                        break
+                if connected:
                     valid_pairs.append((in_edge, out_edge))
 
-    num_pairs = len(valid_pairs)
-    logger.info(f"Junction {tl_id}: {num_pairs} valid edge pairs for flows")
+        if not valid_pairs:
+            logger.warning(
+                f"No valid connected edge pairs for TL {tl_id}, "
+                f"falling back to all in→out combinations"
+            )
+            for in_edge in incoming_edges:
+                for out_edge in outgoing_edges:
+                    in_base = in_edge.getID().lstrip("-")
+                    out_base = out_edge.getID().lstrip("-")
+                    if in_base != out_base:
+                        valid_pairs.append((in_edge, out_edge))
 
-    # Create flows for each (pair, vehicle_type) combination
-    flow_id = 0
-    for in_edge, out_edge in valid_pairs:
-        for vtype, proportion in VEHICLE_DISTRIBUTION.items():
-            # Rate for this specific flow: total_rate * proportion / num_pairs
-            flow_rate = (total_rate * proportion) / max(num_pairs, 1)
+        num_pairs = len(valid_pairs)
+        logger.info(f"Junction {tl_id}: {num_pairs} valid edge pairs for flows")
 
-            if flow_rate < 0.001:
-                continue
+        for in_edge, out_edge in valid_pairs:
+            for vtype, proportion in VEHICLE_DISTRIBUTION.items():
+                flow_rate = (total_rate * proportion) / max(num_pairs, 1)
 
-            flow_elem = ET.SubElement(routes_root, "flow")
-            flow_elem.set("id", f"{vtype}_{flow_id}")
-            flow_elem.set("type", vtype)
-            flow_elem.set("begin", "0")
-            flow_elem.set("end", str(duration))
-            flow_elem.set("probability", f"{flow_rate:.4f}")
-            flow_elem.set("from", in_edge.getID())
-            flow_elem.set("to", out_edge.getID())
-            flow_elem.set("departLane", "best")
-            flow_elem.set("departSpeed", "max")
-            flow_id += 1
+                if flow_rate < 0.001:
+                    continue
+
+                flow_elem = ET.SubElement(routes_root, "flow")
+                flow_elem.set("id", f"{vtype}_{flow_id}")
+                flow_elem.set("type", vtype)
+                flow_elem.set("begin", "0")
+                flow_elem.set("end", str(duration))
+                flow_elem.set("probability", f"{flow_rate:.4f}")
+                flow_elem.set("from", in_edge.getID())
+                flow_elem.set("to", out_edge.getID())
+                flow_elem.set("departLane", "best")
+                flow_elem.set("departSpeed", "max")
+                flow_id += 1
 
     estimated_vehicles = int(total_rate * duration)
     logger.info(
