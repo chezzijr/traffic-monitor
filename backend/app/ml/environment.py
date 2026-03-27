@@ -66,7 +66,7 @@ class TrafficLightEnv(gym.Env):
         self.max_green: int = 50
         self.min_green: int = min_green
         self._time_since_last_phase_change: int = 0
-        self._seen_vehicle_ids: set[str] = set()
+        self._cumulative_throughput: int = 0
         self._cumulative_waiting: float = 0.0
         self._cumulative_queue: float = 0.0
         self._num_info_steps: int = 0
@@ -278,7 +278,7 @@ class TrafficLightEnv(gym.Env):
 
         self._current_step = 0
         self._time_since_last_phase_change = 0
-        self._seen_vehicle_ids = set()
+        self._cumulative_throughput = 0
         self._cumulative_waiting = 0.0
         self._cumulative_queue = 0.0
         self._num_info_steps = 0
@@ -336,6 +336,7 @@ class TrafficLightEnv(gym.Env):
             for _ in range(self._yellow_duration):
                 conn.simulationStep()
                 self._current_step += 1
+                self._cumulative_throughput += conn.simulation.getArrivedNumber()
             self._time_since_last_phase_change = 0
 
         # Set desired green phase (green phases occupy indices 0..N-1 in _full_phases)
@@ -353,6 +354,7 @@ class TrafficLightEnv(gym.Env):
             conn.simulationStep()
             self._current_step += 1
             self._time_since_last_phase_change += 1
+            self._cumulative_throughput += conn.simulation.getArrivedNumber()
             halting = [
                 conn.lane.getLastStepHaltingNumber(lane)
                 for lane in self._controlled_lanes
@@ -384,8 +386,6 @@ class TrafficLightEnv(gym.Env):
         queue_length = sum(
             conn.lane.getLastStepHaltingNumber(lane) for lane in self._controlled_lanes
         )
-        # Track unique vehicles served (not occupancy)
-        self._seen_vehicle_ids.update(junction_vids)
 
         # Accumulate for episode-level averages
         self._cumulative_waiting += avg_waiting
@@ -398,7 +398,7 @@ class TrafficLightEnv(gym.Env):
             "junction_vehicles": len(junction_vids),
             "avg_waiting_time": self._cumulative_waiting / max(self._num_info_steps, 1),
             "avg_queue_length": self._cumulative_queue / max(self._num_info_steps, 1),
-            "throughput": len(self._seen_vehicle_ids),
+            "throughput": self._cumulative_throughput,
         }
 
         # Periodic debug logging every 100 sim steps

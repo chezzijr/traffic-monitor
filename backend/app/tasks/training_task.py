@@ -222,7 +222,7 @@ class MultiProgressCallback:
         self.last_waiting_time = float(np.mean(self._waiting_window))
         self.last_queue_length = float(np.mean(self._queue_window))
         self.last_mean_reward = float(np.mean(self._reward_window))
-        self.last_throughput = int(np.mean(self._throughput_window[-10:])) if self._throughput_window else 0
+        self.last_throughput = self._throughput_window[-1] if self._throughput_window else 0
 
         if step % self._publish_interval == 0:
             self._publish(step)

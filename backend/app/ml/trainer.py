@@ -457,7 +457,7 @@ class TrafficLightTrainer:
 
             ep_waiting = 0.0
             ep_queue = 0.0
-            ep_seen_vids: set[str] = set()
+            ep_throughput = 0
             steps = 0
 
             num_seconds = getattr(env, "num_seconds", getattr(env, "max_steps", 3600))
@@ -466,6 +466,8 @@ class TrafficLightTrainer:
 
             for sim_step in range(num_seconds):
                 conn.simulationStep()
+                # Accumulate throughput every step (getArrivedNumber is per-step)
+                ep_throughput += conn.simulation.getArrivedNumber()
 
                 if (sim_step + 1) % delta_time == 0:
                     lane_vids = []
@@ -478,13 +480,12 @@ class TrafficLightTrainer:
                         conn.lane.getLastStepHaltingNumber(lane) for lane in lanes
                     )
                     ep_queue += queue / max(len(lanes), 1)
-                    ep_seen_vids.update(lane_vids)
                     steps += 1
 
             if steps > 0:
                 total_waiting += ep_waiting / steps
                 total_queue += ep_queue / steps
-            total_throughput += len(ep_seen_vids)
+            total_throughput += ep_throughput
 
         baseline = {
             "avg_waiting_time": total_waiting / max(num_episodes, 1),

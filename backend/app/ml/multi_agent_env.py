@@ -62,7 +62,7 @@ class MultiAgentTrafficLightEnv:
         self._current_green_phase: dict[str, int] = {}
         self.max_green: int = 50
         self._time_since_last_phase_change: dict[str, int] = {}
-        self._seen_vehicle_ids: dict[str, set[str]] = {}
+        self._cumulative_throughput: int = 0
         self.observation_spaces: dict[str, spaces.Box] = {}
         self.action_spaces: dict[str, spaces.Discrete] = {}
 
@@ -154,7 +154,6 @@ class MultiAgentTrafficLightEnv:
 
             # Yellow duration from constructor parameter (default 2s)
             self._yellow_duration[tl_id] = self.yellow_time
-            self._seen_vehicle_ids[tl_id] = set()
 
             # Action space = number of GREEN phases only
             num_green = len(self._green_phases[tl_id])
@@ -185,9 +184,9 @@ class MultiAgentTrafficLightEnv:
 
         # Initialize each TL to its first green phase
         conn = self._get_conn()
+        self._cumulative_throughput = 0
         for tl_id in self.tl_ids:
             self._time_since_last_phase_change[tl_id] = 0
-            self._seen_vehicle_ids[tl_id] = set()
             first_green = self._green_phases[tl_id][0]
             conn.trafficlight.setPhase(tl_id, first_green)
             self._current_green_phase[tl_id] = first_green
@@ -251,6 +250,7 @@ class MultiAgentTrafficLightEnv:
             for _ in range(yellow_dur):
                 conn.simulationStep()
                 self._current_step += 1
+                self._cumulative_throughput += conn.simulation.getArrivedNumber()
 
         # Set all desired green phases
         for tl_id in actions:
@@ -266,6 +266,7 @@ class MultiAgentTrafficLightEnv:
         for _ in range(self.steps_per_action):
             conn.simulationStep()
             self._current_step += 1
+            self._cumulative_throughput += conn.simulation.getArrivedNumber()
             for tl_id in self.tl_ids:
                 self._time_since_last_phase_change[tl_id] = self._time_since_last_phase_change.get(tl_id, 0) + 1
             for tl_id in self.tl_ids:
@@ -333,14 +334,12 @@ class MultiAgentTrafficLightEnv:
                 conn.lane.getLastStepHaltingNumber(lane)
                 for lane in self._controlled_lanes[tl_id]
             )
-            # Track unique vehicles served per junction
-            self._seen_vehicle_ids[tl_id].update(lane_vehicle_ids)
             infos[tl_id] = {
                 "step": self._current_step,
                 "action": actions.get(tl_id, 0),
                 "avg_waiting_time": waiting_time / max(num_vehicles, 1),
                 "avg_queue_length": queue_length / max(len(self._controlled_lanes[tl_id]), 1),
-                "throughput": len(self._seen_vehicle_ids[tl_id]),
+                "throughput": self._cumulative_throughput,
                 "reward": rewards[tl_id],
             }
 
