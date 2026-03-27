@@ -8,28 +8,16 @@
             ],
             "approaches": [
                 {
-                    "direction": "north",
-                    "bearing": 0,
+                    "number": 1,
                     "cameras": [
                         "5deb576d1dc17d7c5515ad23"
                     ]
                 },
                 {
-                    "direction": "south",
-                    "bearing": 180,
+                    "number": 2,
                     "cameras": [
                         "63ae7af4bfd3d90017e8f32c"
                     ]
-                },
-                {
-                    "direction": "east",
-                    "bearing": 90,
-                    "cameras": []
-                },
-                {
-                    "direction": "west",
-                    "bearing": 270,
-                    "cameras": []
                 }
             ]
         },
@@ -41,28 +29,16 @@
             ],
             "approaches": [
                 {
-                    "direction": "north",
-                    "bearing": 0,
+                    "number": 1,
                     "cameras": [
                         "63ae7c53bfd3d90017e8f3d8"
                     ]
                 },
                 {
-                    "direction": "south",
-                    "bearing": 180,
+                    "number": 2,
                     "cameras": [
                         "63ae7c73bfd3d90017e8f3ed"
                     ]
-                },
-                {
-                    "direction": "east",
-                    "bearing": 90,
-                    "cameras": []
-                },
-                {
-                    "direction": "west",
-                    "bearing": 270,
-                    "cameras": []
                 }
             ]
         },
@@ -74,26 +50,10 @@
             ],
             "approaches": [
                 {
-                    "direction": "north",
-                    "bearing": 0,
+                    "number": 1,
                     "cameras": [
                         "66b1c34d779f74001867409e"
                     ]
-                },
-                {
-                    "direction": "south",
-                    "bearing": 180,
-                    "cameras": []
-                },
-                {
-                    "direction": "east",
-                    "bearing": 90,
-                    "cameras": []
-                },
-                {
-                    "direction": "west",
-                    "bearing": 270,
-                    "cameras": []
                 }
             ]
         },
@@ -105,28 +65,10 @@
             ],
             "approaches": [
                 {
-                    "direction": "north",
-                    "bearing": 0,
+                    "number": 1,
                     "cameras": [
                         "66b1c370779f7400186740b3"
                     ]
-                },
-                {
-                    "direction": "south",
-                    "bearing": 180,
-                    "cameras": []
-                },
-                {
-                    "direction": "east",
-                    "bearing": 90,
-                    "cameras": [
-                        ""
-                    ]
-                },
-                {
-                    "direction": "west",
-                    "bearing": 270,
-                    "cameras": []
                 }
             ]
         }

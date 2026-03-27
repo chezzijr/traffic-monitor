@@ -8,7 +8,7 @@ import io
 from service.config import CAMERA_IDS, POLL_INTERVAL, DATASET_DIR
 from service.hcm_gov import build_url, HEADERS
 from service.storage import cache_latest
-from service.topology import CAM_TO_INTERSECTION, CAM_TO_DIRECTION
+from service.topology import CAM_TO_INTERSECTION, CAM_TO_NUMBER
 
 
 last_hash = {}
@@ -77,13 +77,13 @@ async def fetch_camera(session, cam_id):
 
             # save dataset async
             inter = CAM_TO_INTERSECTION.get(cam_id)
-            direction = CAM_TO_DIRECTION.get(cam_id)
+            number = CAM_TO_NUMBER.get(cam_id)
 
-            if inter and direction:
-                inter_dir = os.path.join(DATASET_DIR, inter, direction)
+            if inter and number:
+                inter_dir = os.path.join(DATASET_DIR, inter, str(number))
                 os.makedirs(inter_dir, exist_ok=True)
 
-                ts = f'{inter}_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}'
+                # ts = f'{inter}_{number}_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}'
 
                 # 1) lưu lịch sử
                 # history_path = os.path.join(inter_dir, f"{ts}.jpg")

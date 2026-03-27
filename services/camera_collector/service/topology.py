@@ -9,7 +9,7 @@ with open(TOPOLOGY_PATH, "r", encoding="utf-8") as f:
     data = json.load(f)
 
 CAM_TO_INTERSECTION = {}
-CAM_TO_DIRECTION = {}
+CAM_TO_NUMBER = {}
 INTERSECTIONS = {}
 
 for inter in data["intersections"]:
@@ -19,7 +19,7 @@ for inter in data["intersections"]:
     INTERSECTIONS[inter_id] = inter
 
     for app in inter["approaches"]:
-        direction = app["direction"]
+        number = app["number"]
         for cam in app["cameras"]:
             CAM_TO_INTERSECTION[cam] = inter_id
-            CAM_TO_DIRECTION[cam] = direction
+            CAM_TO_NUMBER[cam] = number
