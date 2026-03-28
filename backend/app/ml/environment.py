@@ -103,11 +103,11 @@ class TrafficLightEnv(gym.Env):
                 }
                 scenario_enum = scenario_map.get(self.scenario, TrafficScenario.MODERATE)
                 output_dir = str(Path(self.network_path).parent)
-                route_result = route_service.generate_junction_routes(
+                route_result = route_service.generate_routes(
                     network_path=self.network_path,
-                    tl_id=self.tl_id,
                     output_dir=output_dir,
                     scenario=scenario_enum,
+                    duration=self.max_steps,
                     seed=seed,
                 )
                 self._cached_routes_path = route_result["routes_path"]

@@ -493,6 +493,11 @@ class TrafficLightTrainer:
             "throughput": total_throughput // max(num_episodes, 1),
         }
         logger.info(f"Baseline metrics: {baseline}")
+        if baseline["avg_waiting_time"] < 1.0 and baseline["avg_queue_length"] < 1.0:
+            logger.warning(
+                f"Baseline metrics near-zero (wait={baseline['avg_waiting_time']:.2f}s, "
+                f"queue={baseline['avg_queue_length']:.2f}). Improvement %% may be unreliable."
+            )
         return baseline
 
     @classmethod

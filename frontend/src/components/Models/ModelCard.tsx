@@ -12,8 +12,8 @@ interface ModelCardProps {
   onDelete: (modelId: string) => void;
 }
 
-function deltaPercent(baseline: number, trained: number): number | null {
-  if (baseline === 0) return null;
+function deltaPercent(baseline: number, trained: number, lowerIsBetter = false): number | null {
+  if (baseline === 0 || (lowerIsBetter && baseline < 1.0)) return null;
   return ((trained - baseline) / baseline) * 100;
 }
 
@@ -23,8 +23,8 @@ export function ModelCard({ model, isExpanded, onToggleExpand, onDeploy, onDelet
   const isMulti = model.type === 'multi' || (model.tl_ids && model.tl_ids.length > 1);
   const trainedJunctionIds = model.tl_ids ?? [model.tl_id];
 
-  const waitDelta = results ? deltaPercent(results.baseline.avg_waiting_time, results.trained.avg_waiting_time) : null;
-  const queueDelta = results ? deltaPercent(results.baseline.avg_queue_length, results.trained.avg_queue_length) : null;
+  const waitDelta = results ? deltaPercent(results.baseline.avg_waiting_time, results.trained.avg_waiting_time, true) : null;
+  const queueDelta = results ? deltaPercent(results.baseline.avg_queue_length, results.trained.avg_queue_length, true) : null;
   const throughputDelta = results ? deltaPercent(results.baseline.throughput, results.trained.throughput) : null;
 
   const chartData: TrainingProgressEvent[] = results

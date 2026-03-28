@@ -6,8 +6,8 @@ interface MetricsComparisonTableProps {
 }
 
 function formatDelta(baseline: number, trained: number, higherIsBetter: boolean): { text: string; colorClass: string } {
-  if (baseline === 0) {
-    return { text: '—', colorClass: 'text-gray-400' };
+  if (baseline === 0 || (!higherIsBetter && baseline < 1.0)) {
+    return { text: 'N/A', colorClass: 'text-gray-400' };
   }
 
   const delta = ((trained - baseline) / baseline) * 100;
