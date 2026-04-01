@@ -103,8 +103,9 @@ class TrafficLightEnv(gym.Env):
                 }
                 scenario_enum = scenario_map.get(self.scenario, TrafficScenario.MODERATE)
                 output_dir = str(Path(self.network_path).parent)
-                route_result = route_service.generate_routes(
+                route_result = route_service.generate_junction_routes(
                     network_path=self.network_path,
+                    tl_id=self.tl_id,
                     output_dir=output_dir,
                     scenario=scenario_enum,
                     duration=self.max_steps,
@@ -472,6 +473,7 @@ class MultiScenarioEnvWrapper(gym.Wrapper):
         scenario = self._select_scenario()
         self.env.unwrapped.scenario = scenario
         self.env.unwrapped.routes_path = None  # Force re-generation
+        self.env.unwrapped._cached_routes_path = None
 
         self._episode_count += 1
         obs, info = self.env.reset(**kwargs)

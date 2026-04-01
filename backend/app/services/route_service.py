@@ -38,6 +38,15 @@ VEHICLE_DISTRIBUTION = {
     "bus": 0.05,
 }
 
+# Junction-concentrated flow rates (vehicles/second total through junction)
+# Much lower than network-wide because ALL traffic goes through one junction
+JUNCTION_SCENARIO_RATES = {
+    TrafficScenario.LIGHT: 0.08,  # ~288 veh/hr
+    TrafficScenario.MODERATE: 0.15,  # ~540 veh/hr
+    TrafficScenario.HEAVY: 0.25,  # ~900 veh/hr
+    TrafficScenario.RUSH_HOUR: 0.35,  # ~1260 veh/hr
+}
+
 
 def _check_sumo_tools() -> None:
     """Check if SUMO tools are available."""
@@ -272,6 +281,226 @@ def generate_routes(
     return {
         "routes_path": str(routes_file),
         "trip_count": estimated_trips,
+        "vehicle_distribution": VEHICLE_DISTRIBUTION.copy(),
+    }
+
+
+def _resolve_tl_nodes(net, tl_id: str) -> list:
+    """Resolve a traffic light ID to its junction node(s) in sumolib.
+
+    Handles various SUMO TL naming conventions:
+    - Simple: '411918637' -> node '411918637'
+    - Cluster: 'cluster_X_Y_Z' -> node 'cluster_X_Y_Z'
+    - Guessed signal: 'GS_411926667' -> try node '411926667'
+    - Joined signal: 'joinedS_X_Y' -> try nodes X, Y individually
+    """
+    try:
+        return [net.getNode(tl_id)]
+    except KeyError:
+        pass
+
+    if tl_id.startswith("GS_"):
+        try:
+            return [net.getNode(tl_id[3:])]
+        except KeyError:
+            pass
+
+    if tl_id.startswith("joinedS_"):
+        parts = tl_id[8:].split("_")
+        nodes = []
+        for part in parts:
+            try:
+                nodes.append(net.getNode(part))
+            except KeyError:
+                pass
+        if nodes:
+            return nodes
+
+    for node in net.getNodes():
+        nid = node.getID()
+        if tl_id in nid or nid in tl_id:
+            return [node]
+
+    return []
+
+
+def generate_junction_routes(
+    network_path: str,
+    tl_id: str,
+    output_dir: str,
+    scenario: TrafficScenario,
+    duration: int = 3600,
+    seed: int | None = None,
+) -> dict:
+    """Generate routes concentrated at a specific junction for training.
+
+    Creates SUMO <flow> definitions that direct traffic through the target
+    junction's incoming->outgoing edge pairs with asymmetric rates weighted
+    by lane count (main roads get more traffic than side roads).
+
+    Args:
+        network_path: Path to the SUMO .net.xml file
+        tl_id: Traffic light ID to concentrate traffic at
+        output_dir: Directory to store generated route files
+        scenario: Traffic scenario determining vehicle generation rate
+        duration: Simulation duration in seconds
+        seed: Random seed (unused, kept for API compatibility)
+
+    Returns:
+        dict with routes_path, trip_count, vehicle_distribution
+    """
+    import sys
+
+    sumo_tools = os.path.join(SUMO_HOME, "tools")
+    if sumo_tools not in sys.path:
+        sys.path.append(sumo_tools)
+    import sumolib
+
+    network_file = Path(network_path)
+    if not network_file.exists():
+        raise FileNotFoundError(f"Network file not found: {network_path}")
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    if not VTYPES_FILE.exists():
+        raise RuntimeError(f"Vehicle types file not found: {VTYPES_FILE}")
+
+    # Check disk cache first
+    network_name = network_file.stem.replace(".net", "")
+    routes_file = output_path / f"{network_name}_{tl_id}_{scenario.value}_jn.rou.xml"
+    total_rate = JUNCTION_SCENARIO_RATES[scenario]
+    estimated_vehicles = int(total_rate * duration)
+
+    if routes_file.exists():
+        logger.info(f"Using cached junction routes: {routes_file}")
+        return {
+            "routes_path": str(routes_file),
+            "trip_count": estimated_vehicles,
+            "vehicle_distribution": VEHICLE_DISTRIBUTION.copy(),
+        }
+
+    net = sumolib.net.readNet(str(network_path))
+
+    # Resolve TL ID to node(s)
+    nodes = _resolve_tl_nodes(net, tl_id)
+    if not nodes:
+        raise ValueError(f"Could not resolve junction node(s) for TL '{tl_id}'")
+
+    # Collect incoming/outgoing edges from all resolved nodes
+    incoming_edges = []
+    outgoing_edges = []
+    seen_in, seen_out = set(), set()
+    for node in nodes:
+        for e in node.getIncoming():
+            eid = e.getID()
+            if not eid.startswith(":") and eid not in seen_in:
+                incoming_edges.append(e)
+                seen_in.add(eid)
+        for e in node.getOutgoing():
+            eid = e.getID()
+            if not eid.startswith(":") and eid not in seen_out:
+                outgoing_edges.append(e)
+                seen_out.add(eid)
+
+    if not incoming_edges or not outgoing_edges:
+        raise ValueError(
+            f"Junction '{tl_id}' has {len(incoming_edges)} incoming, "
+            f"{len(outgoing_edges)} outgoing edges — cannot generate routes"
+        )
+
+    logger.info(
+        f"Junction {tl_id}: {len(incoming_edges)} incoming, "
+        f"{len(outgoing_edges)} outgoing edges"
+    )
+
+    # Build valid (in_edge, out_edge) pairs — skip U-turns, prefer connected
+    valid_pairs = []
+    for in_edge in incoming_edges:
+        for out_edge in outgoing_edges:
+            in_base = in_edge.getID().lstrip("-")
+            out_base = out_edge.getID().lstrip("-")
+            if in_base == out_base:
+                continue
+            for node in nodes:
+                if node.getConnections(in_edge, out_edge):
+                    valid_pairs.append((in_edge, out_edge))
+                    break
+
+    if not valid_pairs:
+        logger.warning(f"No connected pairs for TL {tl_id}, using all non-U-turn combos")
+        for in_edge in incoming_edges:
+            for out_edge in outgoing_edges:
+                in_base = in_edge.getID().lstrip("-")
+                out_base = out_edge.getID().lstrip("-")
+                if in_base != out_base:
+                    valid_pairs.append((in_edge, out_edge))
+
+    if not valid_pairs:
+        raise ValueError(f"No valid edge pairs for junction '{tl_id}'")
+
+    # Asymmetric weighting by incoming edge lane count
+    in_edge_weights: dict[str, float] = {}
+    for in_edge, _ in valid_pairs:
+        eid = in_edge.getID()
+        if eid not in in_edge_weights:
+            in_edge_weights[eid] = float(in_edge.getLaneNumber())
+    total_weight = sum(in_edge_weights.values())
+
+    # Count outgoing options per incoming edge
+    out_count_per_in: dict[str, int] = {}
+    for in_edge, _ in valid_pairs:
+        eid = in_edge.getID()
+        out_count_per_in[eid] = out_count_per_in.get(eid, 0) + 1
+
+    logger.info(
+        f"Junction {tl_id}: {len(valid_pairs)} valid pairs, "
+        f"lane weights: {in_edge_weights}"
+    )
+
+    # Build route XML
+    vtypes_tree = ET.parse(str(VTYPES_FILE))
+    vtypes_root = vtypes_tree.getroot()
+
+    routes_root = ET.Element("routes")
+    for vtype_elem in vtypes_root.findall("vType"):
+        routes_root.append(vtype_elem)
+
+    flow_id = 0
+    for in_edge, out_edge in valid_pairs:
+        in_id = in_edge.getID()
+        in_fraction = in_edge_weights[in_id] / total_weight
+        pair_fraction = in_fraction / out_count_per_in[in_id]
+
+        for vtype, proportion in VEHICLE_DISTRIBUTION.items():
+            prob = total_rate * proportion * pair_fraction
+            if prob < 0.0001:
+                continue
+
+            flow_elem = ET.SubElement(routes_root, "flow")
+            flow_elem.set("id", f"{vtype}_{flow_id}")
+            flow_elem.set("type", vtype)
+            flow_elem.set("begin", "0")
+            flow_elem.set("end", str(duration))
+            flow_elem.set("probability", f"{prob:.4f}")
+            flow_elem.set("from", in_id)
+            flow_elem.set("to", out_edge.getID())
+            flow_elem.set("departLane", "best")
+            flow_elem.set("departSpeed", "max")
+            flow_id += 1
+
+    logger.info(
+        f"Generated {flow_id} flow definitions for junction {tl_id}, "
+        f"~{estimated_vehicles} vehicles over {duration}s ({scenario.value})"
+    )
+
+    tree = ET.ElementTree(routes_root)
+    ET.indent(tree, space="    ")
+    tree.write(str(routes_file), encoding="unicode", xml_declaration=True)
+
+    return {
+        "routes_path": str(routes_file),
+        "trip_count": estimated_vehicles,
         "vehicle_distribution": VEHICLE_DISTRIBUTION.copy(),
     }
 
