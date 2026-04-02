@@ -26,6 +26,7 @@ class Algorithm(str, Enum):
 
     DQN = "dqn"
     PPO = "ppo"
+    COLIGHT = "colight"
 
 
 @dataclass

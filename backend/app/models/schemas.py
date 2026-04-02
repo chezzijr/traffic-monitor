@@ -144,7 +144,7 @@ class TrainingRequest(BaseModel):
 
     network_id: str = Field(..., description="Network to train on")
     tl_id: str = Field(..., description="Traffic light ID to optimize")
-    algorithm: str = Field(default="dqn", description="RL algorithm (dqn or ppo)")
+    algorithm: str = Field(default="dqn", description="RL algorithm (dqn, ppo, or colight)")
     total_timesteps: int = Field(default=10000, ge=1000, le=1000000, description="Training timesteps")
     scenario: TrafficScenario = Field(default=TrafficScenario.MODERATE, description="Traffic scenario")
 
@@ -154,7 +154,7 @@ class MultiJunctionTrainingRequest(BaseModel):
 
     network_id: str = Field(..., description="Network to train on")
     tl_ids: list[str] = Field(..., min_length=1, max_length=10, description="Traffic light IDs (max 10)")
-    algorithm: str = Field(default="dqn", description="RL algorithm (dqn or ppo)")
+    algorithm: str = Field(default="dqn", description="RL algorithm (dqn, ppo, or colight)")
     total_timesteps: int = Field(default=10000, ge=1000, le=1000000, description="Training timesteps")
     scenario: TrafficScenario = Field(default=TrafficScenario.MODERATE, description="Traffic scenario")
 

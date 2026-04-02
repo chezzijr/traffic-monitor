@@ -452,92 +452,199 @@ def train_multi_junction(
     r.lpush("tasks:list", task_id)
 
     try:
-        from app.ml.multi_agent_env_v2 import MultiAgentTrafficLightEnvV2
-        from app.ml.multi_agent_trainer import MultiAgentTrainer
-        from app.ml.trainer import Algorithm as AlgoEnum
-
         network_path = str(SIMULATION_NETWORKS_DIR / f"{network_id}.net.xml")
         if not Path(network_path).exists():
             raise FileNotFoundError(f"Network file not found: {network_path}")
 
-        env = MultiAgentTrafficLightEnvV2(
-            network_path=network_path,
-            network_id=network_id,
-            tl_ids=tl_ids,
-            algorithm=algorithm,
-            scenario=scenario,
-        )
+        if algorithm.lower() == "colight":
+            # ── CoLight: V1-style custom training loop with graph attention ──
+            from app.ml.colight_env import CoLightEnv
+            from app.ml.colight_trainer import CoLightTrainer
 
-        algo_enum = AlgoEnum.DQN if algorithm.lower() == "dqn" else AlgoEnum.PPO
-        trainer = MultiAgentTrainer(env=env, algorithm=algo_enum)
+            env = CoLightEnv(
+                network_path=network_path,
+                network_id=network_id,
+                tl_ids=tl_ids,
+                scenario=scenario,
+            )
+            trainer = CoLightTrainer(env=env)
+            baseline = trainer.run_baseline(num_episodes=3)
 
-        baseline = trainer.run_baseline(num_episodes=3)
+            # V1-style callbacks (CoLightTrainer uses TrainingCallback interface)
+            progress_cb = ProgressPublishingCallback(task_id, total_timesteps, baseline)
+            colight_callbacks: list[TrainingCallback] = [
+                CancellationCallback(task_id),
+                progress_cb,
+            ]
+            trainer.train(total_timesteps=total_timesteps, callbacks=colight_callbacks)
 
-        cancellation_cb = MultiCancellationCallback(task_id)
-        multi_progress_cb = MultiProgressCallback(task_id, total_timesteps, tl_ids, baseline)
-        callbacks = [cancellation_cb, multi_progress_cb]
+            # Check cancellation
+            progress_json = r.get(f"task:{task_id}:progress")
+            if progress_json:
+                progress = json.loads(progress_json)
+                if progress.get("status") == "cancelled":
+                    env.close()
+                    logger.info(f"CoLight task {task_id} was cancelled")
+                    return {"status": "cancelled", "task_id": task_id}
 
-        trainer.train(total_timesteps=total_timesteps, callbacks=callbacks)
+            # Save as single .pt file
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            model_filename = f"{network_id}_multi_colight_{timestamp}.pt"
+            model_path = MODELS_DIR / model_filename
+            MODELS_DIR.mkdir(parents=True, exist_ok=True)
+            trainer.save(str(model_path))
 
-        progress_json = r.get(f"task:{task_id}:progress")
-        if progress_json:
-            progress = json.loads(progress_json)
-            if progress.get("status") == "cancelled":
-                env.close()
-                logger.info(f"Multi-junction task {task_id} was cancelled")
-                return {"status": "cancelled", "task_id": task_id}
+            # Save metadata
+            model_meta = {
+                "format": "pytorch",
+                "algorithm": "colight",
+                "network_id": network_id,
+                "tl_ids": tl_ids,
+                "total_timesteps": total_timesteps,
+                "observation_dim": env.ob_length,
+                "action_dim": env.num_actions,
+                "num_intersections": len(tl_ids),
+                "phase_lengths": env.phase_lengths,
+                "trained_on_scenarios": [scenario],
+                "created_at": datetime.now().isoformat(),
+            }
+            meta_path = Path(str(model_path) + ".metadata.json")
+            with open(meta_path, "w") as f:
+                json.dump(model_meta, f, indent=2)
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        model_dir = MODELS_DIR / f"{network_id}_multi_{algorithm}_{timestamp}"
-        trainer.save(str(model_dir))
+            # Gather final metrics
+            rl_metrics = progress_cb.get_final_metrics()
+            results = {
+                "baseline": baseline or {},
+                "trained": {
+                    "avg_waiting_time": rl_metrics["avg_waiting_time"],
+                    "avg_queue_length": rl_metrics["avg_queue_length"],
+                    "throughput": rl_metrics["throughput"],
+                    "mean_reward": progress_cb.mean_reward,
+                },
+                "training_config": {
+                    "algorithm": algorithm,
+                    "total_timesteps": total_timesteps,
+                    "scenario": scenario,
+                },
+                "progress_history": progress_cb.progress_history,
+            }
+            results_path = Path(str(model_path) + ".results.json")
+            with open(results_path, "w") as f:
+                json.dump(results, f, indent=2)
 
-        rl_metrics = multi_progress_cb.get_final_metrics()
-
-        results = {
-            "baseline": baseline or {},
-            "trained": {
+            # Publish completion
+            completion = {
+                "task_id": task_id,
+                "status": "completed",
+                "timestep": total_timesteps,
+                "total_timesteps": total_timesteps,
+                "progress": 1.0,
+                "model_path": str(model_path),
                 "avg_waiting_time": rl_metrics["avg_waiting_time"],
                 "avg_queue_length": rl_metrics["avg_queue_length"],
                 "throughput": rl_metrics["throughput"],
-                "mean_reward": rl_metrics.get("mean_reward", 0.0),
-            },
-            "training_config": {
+                "network_id": network_id,
+                "tl_ids": tl_ids,
                 "algorithm": algorithm,
+                "mean_reward": progress_cb.mean_reward,
+            }
+            if baseline:
+                completion["baseline_avg_waiting_time"] = baseline.get("avg_waiting_time", 0.0)
+                completion["baseline_avg_queue_length"] = baseline.get("avg_queue_length", 0.0)
+                completion["baseline_throughput"] = baseline.get("throughput", 0)
+
+            r.publish(f"task:{task_id}:updates", json.dumps(completion))
+            r.setex(f"task:{task_id}:progress", 3600, json.dumps(completion))
+
+            env.close()
+            logger.info(f"CoLight training complete: {model_path}")
+            return {"status": "completed", "model_path": str(model_path)}
+
+        else:
+            # ── DQN/PPO: existing V2 multi-agent pipeline ──
+            from app.ml.multi_agent_env_v2 import MultiAgentTrafficLightEnvV2
+            from app.ml.multi_agent_trainer import MultiAgentTrainer
+            from app.ml.trainer import Algorithm as AlgoEnum
+
+            env = MultiAgentTrafficLightEnvV2(
+                network_path=network_path,
+                network_id=network_id,
+                tl_ids=tl_ids,
+                algorithm=algorithm,
+                scenario=scenario,
+            )
+
+            algo_enum = AlgoEnum.DQN if algorithm.lower() == "dqn" else AlgoEnum.PPO
+            trainer = MultiAgentTrainer(env=env, algorithm=algo_enum)
+
+            baseline = trainer.run_baseline(num_episodes=3)
+
+            cancellation_cb = MultiCancellationCallback(task_id)
+            multi_progress_cb = MultiProgressCallback(task_id, total_timesteps, tl_ids, baseline)
+            callbacks = [cancellation_cb, multi_progress_cb]
+
+            trainer.train(total_timesteps=total_timesteps, callbacks=callbacks)
+
+            progress_json = r.get(f"task:{task_id}:progress")
+            if progress_json:
+                progress = json.loads(progress_json)
+                if progress.get("status") == "cancelled":
+                    env.close()
+                    logger.info(f"Multi-junction task {task_id} was cancelled")
+                    return {"status": "cancelled", "task_id": task_id}
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            model_dir = MODELS_DIR / f"{network_id}_multi_{algorithm}_{timestamp}"
+            trainer.save(str(model_dir))
+
+            rl_metrics = multi_progress_cb.get_final_metrics()
+
+            results = {
+                "baseline": baseline or {},
+                "trained": {
+                    "avg_waiting_time": rl_metrics["avg_waiting_time"],
+                    "avg_queue_length": rl_metrics["avg_queue_length"],
+                    "throughput": rl_metrics["throughput"],
+                    "mean_reward": rl_metrics.get("mean_reward", 0.0),
+                },
+                "training_config": {
+                    "algorithm": algorithm,
+                    "total_timesteps": total_timesteps,
+                    "scenario": scenario,
+                },
+                "progress_history": multi_progress_cb.progress_history,
+            }
+            results_path = model_dir / "results.json"
+            with open(results_path, "w") as f:
+                json.dump(results, f, indent=2)
+
+            completion = {
+                "task_id": task_id,
+                "status": "completed",
+                "timestep": total_timesteps,
                 "total_timesteps": total_timesteps,
-                "scenario": scenario,
-            },
-            "progress_history": multi_progress_cb.progress_history,
-        }
-        results_path = model_dir / "results.json"
-        with open(results_path, "w") as f:
-            json.dump(results, f, indent=2)
+                "progress": 1.0,
+                "model_path": str(model_dir),
+                "avg_waiting_time": rl_metrics["avg_waiting_time"],
+                "avg_queue_length": rl_metrics["avg_queue_length"],
+                "throughput": rl_metrics["throughput"],
+                "network_id": network_id,
+                "tl_ids": tl_ids,
+                "algorithm": algorithm,
+                "mean_reward": 0.0,
+            }
+            if baseline:
+                completion["baseline_avg_waiting_time"] = baseline.get("avg_waiting_time", 0.0)
+                completion["baseline_avg_queue_length"] = baseline.get("avg_queue_length", 0.0)
+                completion["baseline_throughput"] = baseline.get("throughput", 0)
 
-        completion = {
-            "task_id": task_id,
-            "status": "completed",
-            "timestep": total_timesteps,
-            "total_timesteps": total_timesteps,
-            "progress": 1.0,
-            "model_path": str(model_dir),
-            "avg_waiting_time": rl_metrics["avg_waiting_time"],
-            "avg_queue_length": rl_metrics["avg_queue_length"],
-            "throughput": rl_metrics["throughput"],
-            "network_id": network_id,
-            "tl_ids": tl_ids,
-            "algorithm": algorithm,
-            "mean_reward": 0.0,
-        }
-        if baseline:
-            completion["baseline_avg_waiting_time"] = baseline.get("avg_waiting_time", 0.0)
-            completion["baseline_avg_queue_length"] = baseline.get("avg_queue_length", 0.0)
-            completion["baseline_throughput"] = baseline.get("throughput", 0)
+            r.publish(f"task:{task_id}:updates", json.dumps(completion))
+            r.setex(f"task:{task_id}:progress", 3600, json.dumps(completion))
 
-        r.publish(f"task:{task_id}:updates", json.dumps(completion))
-        r.setex(f"task:{task_id}:progress", 3600, json.dumps(completion))
-
-        env.close()
-        logger.info(f"Multi-junction training complete: {model_dir}")
-        return {"status": "completed", "model_path": str(model_dir)}
+            env.close()
+            logger.info(f"Multi-junction training complete: {model_dir}")
+            return {"status": "completed", "model_path": str(model_dir)}
 
     except Exception as e:
         logger.error(f"Multi-junction training failed: {e}", exc_info=True)
