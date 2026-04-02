@@ -113,6 +113,16 @@ def get_traffic_lights_by_point(lat: float, lon: float, radius: int = 700) -> li
 
     return results
 
+def _expand_bbox(
+    south: float, west: float, north: float, east: float, buffer_meters: float = 300
+) -> tuple[float, float, float, float]:
+    """Expand bounding box by buffer in all directions (meters → degrees)."""
+    lat_buffer = buffer_meters / 111320
+    avg_lat = (south + north) / 2
+    lon_buffer = buffer_meters / (111320 * math.cos(math.radians(avg_lat)))
+    return (south - lat_buffer, west - lon_buffer, north + lat_buffer, east + lon_buffer)
+
+
 def extract_network(bbox: tuple[float, float, float, float]) -> dict:
     """
     Extract road network from OpenStreetMap for the given bounding box.
@@ -150,13 +160,18 @@ def extract_network(bbox: tuple[float, float, float, float]) -> dict:
 
     logger.info(f"Extracting network for bbox: {bbox}")
 
+    # Expand bbox to capture complete road approaches at boundaries
+    exp_south, exp_west, exp_north, exp_east = _expand_bbox(south, west, north, east)
+    logger.info(f"Expanded bbox by 300m: ({exp_south:.6f}, {exp_west:.6f}, {exp_north:.6f}, {exp_east:.6f})")
+
     try:
         # Download road network from OSM
         # OSMnx 2.x expects bbox as (left, bottom, right, top) = (west, south, east, north)
         graph = ox.graph_from_bbox(
-            bbox=(west, south, east, north),
+            bbox=(exp_west, exp_south, exp_east, exp_north),
             network_type="drive",
             simplify=False,  # Must be False for save_graph_xml() to work
+            truncate_by_edge=True,  # Preserve boundary connectivity
         )
     except Exception as e:
         logger.error(f"Failed to download OSM network: {e}")
@@ -426,6 +441,87 @@ def _match_osm_to_sumo_traffic_lights(
     return osm_to_sumo_map
 
 
+def _remove_disconnected_components(net_path: Path, netconvert_path: str, osm_path: str) -> int:
+    """Remove disconnected network fragments, keeping only the largest component.
+
+    Returns the number of removed edges, or 0 if network is already fully connected.
+    """
+    import sumolib
+    from collections import deque
+
+    net = sumolib.net.readNet(str(net_path))
+    edges = net.getEdges(withInternal=False)
+    if not edges:
+        return 0
+
+    # Build adjacency: node_id → set of edge objects
+    node_to_edges: dict[str, set] = {}
+    for edge in edges:
+        for node in (edge.getFromNode(), edge.getToNode()):
+            node_to_edges.setdefault(node.getID(), set()).add(edge)
+
+    # BFS to find connected components (undirected)
+    visited_edges: set[str] = set()
+    components: list[set[str]] = []
+    for edge in edges:
+        eid = edge.getID()
+        if eid in visited_edges:
+            continue
+        component: set[str] = set()
+        queue = deque([edge])
+        while queue:
+            current = queue.popleft()
+            cid = current.getID()
+            if cid in component:
+                continue
+            component.add(cid)
+            visited_edges.add(cid)
+            for node in (current.getFromNode(), current.getToNode()):
+                for neighbor in node_to_edges.get(node.getID(), set()):
+                    if neighbor.getID() not in component:
+                        queue.append(neighbor)
+        components.append(component)
+
+    if len(components) <= 1:
+        logger.info("Network is fully connected — no fragments to remove")
+        return 0
+
+    # Find largest component
+    largest = max(components, key=len)
+    edges_to_remove = set()
+    for comp in components:
+        if comp is not largest:
+            edges_to_remove.update(comp)
+
+    logger.info(
+        f"Removing {len(edges_to_remove)} edges from {len(components) - 1} "
+        f"disconnected fragments (keeping largest with {len(largest)} edges)"
+    )
+
+    # Re-run netconvert with --remove-edges.explicit
+    cmd = [
+        netconvert_path,
+        "--osm-files", osm_path,
+        "--output-file", str(net_path),
+        "--geometry.remove",
+        "--roundabouts.guess",
+        "--ramps.guess",
+        "--junctions.join",
+        "--tls.guess-signals",
+        "--tls.guess",
+        "--tls.join",
+        "--tls.default-type", "actuated",
+        "--remove-edges.explicit", ",".join(edges_to_remove),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    if result.returncode != 0:
+        logger.warning(f"netconvert re-run failed: {result.stderr}")
+    else:
+        logger.info(f"Network cleaned: removed {len(edges_to_remove)} disconnected edges")
+
+    return len(edges_to_remove)
+
+
 def convert_to_sumo(network_id: str) -> dict:
     """
     Convert cached OSM network to SUMO format using netconvert.
@@ -516,11 +612,18 @@ def convert_to_sumo(network_id: str) -> dict:
             timeout=300,  # 5 minute timeout
         )
 
+        if result.stdout:
+            logger.info(f"netconvert output:\n{result.stdout}")
+        if result.stderr:
+            logger.warning(f"netconvert warnings:\n{result.stderr}")
+
         if result.returncode != 0:
-            logger.error(f"netconvert failed: {result.stderr}")
             raise RuntimeError(f"netconvert failed with code {result.returncode}: {result.stderr}")
 
         logger.info(f"SUMO network created: {output_path}")
+
+        # Remove disconnected fragments (keep largest connected component)
+        _remove_disconnected_components(output_path, netconvert_path, osm_temp_path)
 
         # Parse traffic lights from generated network
         tl_data = parse_sumo_traffic_lights(output_path)
