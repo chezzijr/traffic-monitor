@@ -1,5 +1,5 @@
 import { api } from './api';
-import type { BoundingBox, NetworkInfo, Intersection, TrafficLight, SUMOTrafficLight } from '../types';
+import type { BoundingBox, NetworkInfo, Intersection, SUMOTrafficLight } from '../types';
 
 export const mapService = {
   // Extract network from OSM for a given bounding box
@@ -34,18 +34,6 @@ export const mapService = {
   // Get list of cached network IDs
   async getNetworks(): Promise<string[]> {
     const response = await api.get<string[]>('/map/networks');
-    return response.data;
-  },
-
-  // Get OSM traffic lights around a point
-  async getTrafficLights(params: { lat: number; lng: number; radius: number }): Promise<TrafficLight[]> {
-    const response = await api.get<TrafficLight[]>('/map/traffic-lights', { params });
-    return response.data;
-  },
-
-  // Get all traffic lights in Ho Chi Minh City
-  async getAllTrafficLights(): Promise<TrafficLight[]> {
-    const response = await api.get<TrafficLight[]>('/map/all-traffic-lights');
     return response.data;
   },
 };

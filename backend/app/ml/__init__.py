@@ -5,17 +5,17 @@ from app.ml.multi_agent_env import MultiAgentTrafficLightEnv, SingleAgentEnvAdap
 from app.ml.trainer import (
     Algorithm,
     EvaluationMetrics,
-    MetricsLoggingCallback,
     TrafficLightTrainer,
+    TrainingCallback,
 )
 
 __all__ = [
     "Algorithm",
     "EvaluationMetrics",
-    "MetricsLoggingCallback",
     "MultiAgentTrafficLightEnv",
     "MultiScenarioEnvWrapper",
     "SingleAgentEnvAdapter",
     "TrafficLightEnv",
     "TrafficLightTrainer",
+    "TrainingCallback",
 ]

@@ -224,6 +224,13 @@ def get_intersections(network_id: str) -> list[dict]:
     return _network_cache[network_id]["intersections"]
 
 
+def get_network_bbox(network_id: str) -> tuple | None:
+    """Get the bounding box for a cached network."""
+    if network_id in _network_cache:
+        return _network_cache[network_id]["bbox"]
+    return None
+
+
 def parse_sumo_traffic_lights(net_xml_path: Path) -> dict:
     """
     Parse SUMO network XML for traffic light IDs, coordinates, and phases.

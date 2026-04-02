@@ -1,13 +1,10 @@
 import { create } from 'zustand';
-import type { BoundingBox, Intersection, TrafficSignal, LatLng, TrafficLight, SUMOTrafficLight } from '../types';
+import type { BoundingBox, Intersection, TrafficSignal, SUMOTrafficLight } from '../types';
 
 interface MapState {
   // State
   intersections: Intersection[];
   trafficSignals: TrafficSignal[];
-  trafficLights: TrafficLight[];
-  selectedLocation: LatLng | null;
-  isSelectingLocation: boolean;
   selectedRegion: BoundingBox | null;
   currentNetworkId: string | null;
   selectionMode: boolean;
@@ -20,9 +17,6 @@ interface MapState {
   // Actions
   setIntersections: (intersections: Intersection[]) => void;
   setTrafficSignals: (signals: TrafficSignal[]) => void;
-  setTrafficLights: (lights: TrafficLight[]) => void;
-  setSelectedLocation: (location: LatLng | null) => void;
-  setIsSelectingLocation: (selecting: boolean) => void;
   setSelectedRegion: (bbox: BoundingBox | null) => void;
   setCurrentNetworkId: (id: string | null) => void;
   setSelectionMode: (mode: boolean) => void;
@@ -39,9 +33,6 @@ interface MapState {
 const initialState = {
   intersections: [],
   trafficSignals: [],
-  trafficLights: [],
-  selectedLocation: null,
-  isSelectingLocation: false,
   selectedRegion: null,
   currentNetworkId: null,
   selectionMode: false,
@@ -59,9 +50,6 @@ export const useMapStore = create<MapState>((set) => ({
   // Actions
   setIntersections: (intersections) => set({ intersections }),
   setTrafficSignals: (signals) => set({ trafficSignals: signals }),
-  setTrafficLights: (lights) => set({ trafficLights: lights }),
-  setSelectedLocation: (location) => set({ selectedLocation: location }),
-  setIsSelectingLocation: (selecting) => set({ isSelectingLocation: selecting }),
   setSelectedRegion: (bbox) => set({ selectedRegion: bbox }),
   setCurrentNetworkId: (id) => set({ currentNetworkId: id }),
   setSelectionMode: (mode) => set({ selectionMode: mode }),

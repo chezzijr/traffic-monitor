@@ -18,18 +18,11 @@ def compute_dqn_reward(controlled_lanes: list[str], traci) -> float:
 
 
 def compute_ppo_reward(controlled_lanes: list[str], traci) -> float:
-    """PPO reward based on waiting times, clipped.
+    """PPO reward: same as DQN = -mean(lane_halting_counts) * 12.0
 
-    reward = clip(-mean(lane_waiting_times) / 224.0, -4.0, 4.0)
+    LibSignal uses the same reward formula for all algorithms.
     """
-    waiting_times = []
-    for lane_id in controlled_lanes:
-        vehicle_ids = traci.lane.getLastStepVehicleIDs(lane_id)
-        lane_wait = sum(traci.vehicle.getWaitingTime(vid) for vid in vehicle_ids)
-        waiting_times.append(lane_wait)
-    if not waiting_times:
-        return 0.0
-    return float(np.clip(-np.mean(waiting_times) / 224.0, -4.0, 4.0))
+    return compute_dqn_reward(controlled_lanes, traci)
 
 
 def compute_reward(algorithm: str, controlled_lanes: list[str], traci) -> float:

@@ -184,6 +184,36 @@ class TrainingProgressPayload(BaseModel):
     baseline_throughput: int | None = None
 
 
+class TrafficMetrics(BaseModel):
+    avg_waiting_time: float = 0.0
+    avg_queue_length: float = 0.0
+    throughput: int = 0
+
+
+class TrainedMetrics(TrafficMetrics):
+    mean_reward: float = 0.0
+
+
+class TrainingConfig(BaseModel):
+    algorithm: str
+    total_timesteps: int
+    scenario: str
+
+
+class ProgressSnapshot(BaseModel):
+    timestep: int
+    avg_waiting_time: float = 0.0
+    throughput: int = 0
+    mean_reward: float = 0.0
+
+
+class TrainingResults(BaseModel):
+    baseline: TrafficMetrics
+    trained: TrainedMetrics
+    training_config: TrainingConfig
+    progress_history: list[ProgressSnapshot] = Field(default_factory=list)
+
+
 class TaskInfo(BaseModel):
     """Information about a Celery task."""
 
@@ -230,6 +260,13 @@ class ToggleAIControlRequest(BaseModel):
     enabled: bool = Field(..., description="Whether to enable AI control")
 
 
+class NetworkJunction(BaseModel):
+    id: str
+    lat: float
+    lon: float
+    tl_id: str | None = None
+
+
 class NetworkMetadata(BaseModel):
     """Metadata for a persisted network."""
 
@@ -238,6 +275,8 @@ class NetworkMetadata(BaseModel):
     intersection_count: int = 0
     traffic_light_count: int = 0
     created_at: datetime | None = None
+    junctions: list[NetworkJunction] = Field(default_factory=list)
+    road_count: int = 0
 
 
 class DirectionFrame(BaseModel):

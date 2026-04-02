@@ -18,6 +18,8 @@ def save_metadata(
     bbox: dict,
     intersection_count: int = 0,
     traffic_light_count: int = 0,
+    junctions: list[dict] | None = None,
+    road_count: int = 0,
 ) -> Path:
     """Save network metadata to .meta.json file."""
     NETWORKS_DIR.mkdir(parents=True, exist_ok=True)
@@ -28,6 +30,8 @@ def save_metadata(
         "bbox": bbox,
         "intersection_count": intersection_count,
         "traffic_light_count": traffic_light_count,
+        "junctions": junctions or [],
+        "road_count": road_count,
         "created_at": datetime.now().isoformat(),
     }
 

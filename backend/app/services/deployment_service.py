@@ -21,7 +21,8 @@ class DeployedModel:
     network_id: str
     ai_control_enabled: bool = True
     controlled_lanes: list[str] | None = None
-    num_phases: int = 4
+    num_phases: int = 4  # Number of green phases (action space)
+    green_phase_indices: list[int] | None = None  # SUMO phase indices that are green
 
 
 class _DeploymentState:
@@ -115,14 +116,19 @@ def toggle_ai_control(tl_id: str, enabled: bool) -> dict[str, Any]:
 def apply_ai_action(tl_id: str, traci_conn) -> int | None:
     """Build observation from TraCI and predict action.
 
-    Returns the predicted action, or None if AI control is disabled.
+    The model was trained with green-only phase indexing (0..N-1 for N green phases).
+    We map the current SUMO phase to a green phase index for the observation,
+    and map the predicted action (green index) back to a SUMO phase index.
+
+    Returns the predicted action (SUMO phase index), or None if AI control is disabled.
     """
     deployment = _state.get(tl_id)
     if deployment is None or not deployment.ai_control_enabled:
         return None
 
     controlled_lanes = deployment.controlled_lanes or []
-    num_phases = deployment.num_phases
+    num_phases = deployment.num_phases  # Number of green phases
+    green_indices = deployment.green_phase_indices  # SUMO indices of green phases
 
     # Build observation: [vehicle_counts, phase_one_hot]
     vehicle_counts = []
@@ -133,14 +139,19 @@ def apply_ai_action(tl_id: str, traci_conn) -> int | None:
         except Exception:
             vehicle_counts.append(0.0)
 
+    # Map SUMO phase to green phase index
     try:
-        current_phase = traci_conn.trafficlight.getPhase(tl_id)
+        sumo_phase = traci_conn.trafficlight.getPhase(tl_id)
     except Exception:
-        current_phase = 0
+        sumo_phase = 0
+
+    current_green_idx = 0
+    if green_indices and sumo_phase in green_indices:
+        current_green_idx = green_indices.index(sumo_phase)
 
     phase_one_hot = np.zeros(num_phases, dtype=np.float32)
-    if 0 <= current_phase < num_phases:
-        phase_one_hot[current_phase] = 1.0
+    if 0 <= current_green_idx < num_phases:
+        phase_one_hot[current_green_idx] = 1.0
 
     observation = np.concatenate([
         np.array(vehicle_counts, dtype=np.float32),
@@ -148,10 +159,16 @@ def apply_ai_action(tl_id: str, traci_conn) -> int | None:
     ])
 
     result = ml_service.predict(observation, deterministic=True)
-    action = result["action"]
+    action_green_idx = result["action"]
 
-    traci_conn.trafficlight.setPhase(tl_id, action)
-    return action
+    # Map green index back to SUMO phase index
+    if green_indices and 0 <= action_green_idx < len(green_indices):
+        sumo_action = green_indices[action_green_idx]
+    else:
+        sumo_action = action_green_idx
+
+    traci_conn.trafficlight.setPhase(tl_id, sumo_action)
+    return sumo_action
 
 
 def list_deployments() -> list[dict[str, Any]]:

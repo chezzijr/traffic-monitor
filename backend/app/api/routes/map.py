@@ -3,7 +3,7 @@
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, status
 
 from app.models.schemas import (
     BoundingBox,
@@ -13,10 +13,8 @@ from app.models.schemas import (
     RouteGenerationRequest,
     RouteGenerationResponse,
     SUMOTrafficLight,
-    TrafficLight,
-    TrafficSignal,
 )
-from app.services import osm_service
+from app.services import network_service, osm_service
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -105,6 +103,37 @@ def convert_to_sumo(network_id: str) -> ConvertToSumoResponse:
             )
             for tl in result["traffic_lights"]
         ]
+        # Save network metadata with junction data
+        try:
+            intersections = osm_service.get_intersections(network_id)
+            bbox_tuple = osm_service.get_network_bbox(network_id)
+            osm_sumo_map = result["osm_to_sumo_tl_map"]
+
+            junctions = []
+            for inter in intersections:
+                if inter.get("has_traffic_light"):
+                    tl_id = osm_sumo_map.get(inter["id"])
+                    if tl_id:
+                        junctions.append({
+                            "id": inter["id"],
+                            "lat": inter["lat"],
+                            "lon": inter["lon"],
+                            "tl_id": tl_id,
+                        })
+
+            if bbox_tuple:
+                s, w, n, e = bbox_tuple
+                network_service.save_metadata(
+                    network_id=network_id,
+                    bbox={"south": s, "west": w, "north": n, "east": e},
+                    intersection_count=len(intersections),
+                    traffic_light_count=len(junctions),
+                    junctions=junctions,
+                    road_count=len(intersections),
+                )
+        except Exception as e:
+            logger.warning(f"Failed to save network metadata: {e}")
+
         return ConvertToSumoResponse(
             sumo_network_path=result["network_path"],
             network_id=network_id,
@@ -179,30 +208,3 @@ def generate_routes(network_id: str, request: RouteGenerationRequest) -> RouteGe
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get(
-    "/traffic-lights",
-    response_model=list[TrafficLight],
-    status_code=status.HTTP_200_OK,
-    summary="Get traffic lights around a point",
-    description="Retrieve OSM traffic lights within a radius of a lat/lng point.",
-)
-def get_traffic_lights(
-    lat: float = Query(..., ge=-90, le=90, description="Latitude"),
-    lng: float = Query(..., ge=-180, le=180, description="Longitude"),
-    radius: int = Query(500, ge=1, le=50000, description="Search radius in meters"),
-) -> list[TrafficLight]:
-    """Get traffic lights from OSM around a given point."""
-    lights = osm_service.get_traffic_lights_by_point(lat=lat, lon=lng, radius=radius)
-    return [TrafficLight(**l) for l in lights]
-
-@router.get(
-    "/all-traffic-lights",
-    response_model=list[TrafficLight],
-    status_code=status.HTTP_200_OK,
-    summary="Get all traffic lights in cache",
-    description="Access cache and get all traffic lights if its exits"
-)
-def get_all_traffic_lights()-> list[TrafficLight]:
-    """Get all traffic lights in cache"""
-    lights = osm_service.get_all_traffic_lights()
-    return [TrafficLight(**l) for l in lights]

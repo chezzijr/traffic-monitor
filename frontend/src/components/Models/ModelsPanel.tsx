@@ -11,6 +11,8 @@ export function ModelsPanel() {
   const setModels = useModelStore((s) => s.setModels);
   const removeModel = useModelStore((s) => s.removeModel);
   const addDeployment = useModelStore((s) => s.addDeployment);
+  const expandedModelId = useModelStore((s) => s.expandedModelId);
+  const toggleExpandedModel = useModelStore((s) => s.toggleExpandedModel);
 
   useEffect(() => {
     modelService.listModels()
@@ -79,6 +81,8 @@ export function ModelsPanel() {
                   <ModelCard
                     key={model.model_id}
                     model={model}
+                    isExpanded={expandedModelId === model.model_id}
+                    onToggleExpand={() => toggleExpandedModel(model.model_id)}
                     onDeploy={handleDeploy}
                     onDelete={handleDelete}
                   />

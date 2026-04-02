@@ -14,6 +14,8 @@ interface ModelState {
   addDeployment: (deployment: Deployment) => void;
   removeDeployment: (tlId: string) => void;
   togglePanel: () => void;
+  expandedModelId: string | null;
+  toggleExpandedModel: (modelId: string) => void;
 }
 
 export const useModelStore = create<ModelState>((set) => ({
@@ -37,4 +39,9 @@ export const useModelStore = create<ModelState>((set) => ({
     })),
   togglePanel: () =>
     set((state) => ({ isPanelOpen: !state.isPanelOpen })),
+  expandedModelId: null,
+  toggleExpandedModel: (modelId) =>
+    set((state) => ({
+      expandedModelId: state.expandedModelId === modelId ? null : modelId,
+    })),
 }));

@@ -6,7 +6,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({ children }: SidebarProps) {
-  const { selectionMode, setSelectionMode, currentNetworkId } = useMapStore();
+  const { selectionMode, setSelectionMode, currentNetworkId, reset } = useMapStore();
 
   return (
     <aside className="w-80 bg-gray-50 border-r overflow-y-auto flex flex-col">
@@ -29,9 +29,17 @@ export function Sidebar({ children }: SidebarProps) {
           {selectionMode ? 'Cancel Selection' : 'Select Region'}
         </button>
         {currentNetworkId && (
-          <p className="mt-2 text-sm text-gray-500 truncate">
-            Network: {currentNetworkId}
-          </p>
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <p className="text-sm text-gray-500 truncate flex-1">
+              Network: {currentNetworkId}
+            </p>
+            <button
+              onClick={() => reset()}
+              className="text-xs text-red-500 hover:text-red-700 whitespace-nowrap"
+            >
+              New Region
+            </button>
+          </div>
         )}
       </div>
 

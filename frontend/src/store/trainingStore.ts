@@ -23,13 +23,14 @@ interface TrainingState {
   updateProgress: (taskId: string, progress: TrainingProgressEvent) => void;
   removeProgress: (taskId: string) => void;
   completeTask: (taskId: string, data: TrainingCompletionEvent) => void;
+  cancelTask: (taskId: string) => void;
   dismissCompletion: (taskId: string) => void;
 }
 
 export const useTrainingStore = create<TrainingState>((set) => ({
   // Config defaults
   algorithm: 'dqn',
-  totalTimesteps: 10000,
+  totalTimesteps: 50000,
   scenario: 'moderate',
 
   // Tasks
@@ -69,6 +70,14 @@ export const useTrainingStore = create<TrainingState>((set) => ({
           ? { ...t, status: 'completed' as const, progress: 1.0, model_path: data.model_path }
           : t
       ),
+    })),
+  cancelTask: (taskId) =>
+    set((state) => ({
+      tasks: state.tasks.filter((t) => t.task_id !== taskId),
+      liveProgress: Object.fromEntries(
+        Object.entries(state.liveProgress).filter(([key]) => key !== taskId)
+      ),
+      activeTaskId: state.activeTaskId === taskId ? null : state.activeTaskId,
     })),
   dismissCompletion: (taskId) =>
     set((state) => {

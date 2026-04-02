@@ -111,7 +111,7 @@ export function TrainingConfigPanel({ onTrainingStarted }: TrainingConfigPanelPr
         <input
           type="range"
           min={1000}
-          max={100000}
+          max={500000}
           step={1000}
           value={totalTimesteps}
           onChange={(e) => setTotalTimesteps(Number(e.target.value))}
@@ -119,7 +119,7 @@ export function TrainingConfigPanel({ onTrainingStarted }: TrainingConfigPanelPr
         />
         <div className="flex justify-between text-[10px] text-gray-400">
           <span>1K</span>
-          <span>100K</span>
+          <span>500K</span>
         </div>
       </div>
 

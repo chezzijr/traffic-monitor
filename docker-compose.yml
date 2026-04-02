@@ -20,6 +20,7 @@ services:
   backend:
     build:
       context: ./backend
+    image: traffic-monitor-backend
     ports:
       - "8000:8000"
     environment:
@@ -51,14 +52,14 @@ services:
       retries: 5
 
   celery-worker:
-    build:
-      context: ./backend
+    image: traffic-monitor-backend
     command: uv run celery -A app.celery_app worker --loglevel=info --concurrency=1
     environment:
       - SUMO_HOME=/usr/share/sumo
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - REDIS_HOST=redis
+      - LIBSUMO_AS_TRACI=1
     volumes:
       - ./simulation:/app/simulation
       - ./backend/app:/app/app:ro
