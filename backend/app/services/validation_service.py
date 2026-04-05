@@ -41,16 +41,20 @@ def validate_multi_training_request(
     if not network_path.exists():
         errors.append(f"Network file not found: {network_id}")
 
-    if algorithm.lower() not in ("dqn", "ppo", "colight"):
+    algo = algorithm.lower()
+    if algo not in ("dqn", "ppo", "colight"):
         errors.append(f"Invalid algorithm: {algorithm}. Must be 'dqn', 'ppo', or 'colight'")
 
     if not tl_ids:
         errors.append("At least one traffic light ID is required")
 
-    if len(tl_ids) > 10:
-        errors.append(f"Maximum 10 junctions per task, got {len(tl_ids)}")
+    # Per-algorithm caps: DQN/PPO multi-agent pipeline stays at 10; CoLight up to 100
+    if algo in ("dqn", "ppo") and len(tl_ids) > 10:
+        errors.append(f"Maximum 10 junctions for {algo} multi-agent, got {len(tl_ids)}")
+    if algo == "colight" and len(tl_ids) > 100:
+        errors.append(f"Maximum 100 junctions for colight, got {len(tl_ids)}")
 
-    if algorithm.lower() == "colight" and len(tl_ids) < 2:
+    if algo == "colight" and len(tl_ids) < 2:
         errors.append("CoLight requires at least 2 traffic light IDs")
 
     return errors

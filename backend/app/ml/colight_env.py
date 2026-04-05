@@ -18,7 +18,7 @@ class CoLightEnv:
     NOT a gym.Env subclass. Manages N traffic lights in a single SUMO simulation
     with graph-based adjacency for CoLight's attention mechanism.
 
-    Observation per TL: [lane_vehicle_counts..., green_phase_one_hot...] padded to ob_length.
+    Observation per TL: normalized lane vehicle counts (LibSignal CoLight, phase=False), padded to ob_length.
     Action per TL: int index selecting a green phase.
     Reward per TL: -mean(halting_over_substeps) * 12.0 (LibSignal unified reward).
     """
@@ -31,8 +31,7 @@ class CoLightEnv:
         max_steps: int = 3600,
         steps_per_action: int = 10,
         yellow_time: int = 2,
-        min_green: int = 10,
-        max_green: int = 50,
+        vehicle_max: float = 1.0,
         gui: bool = False,
         routes_path: str | None = None,
         scenario: str = "moderate",
@@ -47,8 +46,7 @@ class CoLightEnv:
         self.scenario = scenario
 
         self._yellow_time = yellow_time
-        self._min_green = min_green
-        self._max_green = max_green
+        self._vehicle_max = vehicle_max
         self._current_step = 0
 
         # Per-intersection state (populated by _initialize)
@@ -57,7 +55,6 @@ class CoLightEnv:
         self._yellow_dicts: dict[str, dict[str, int]] = {}
         self._full_phases: dict[str, list] = {}
         self._current_green_idx: dict[str, int] = {}
-        self._time_since_phase_change: dict[str, int] = {}
 
         # Graph data (populated by _initialize -> _build_graph)
         self.edge_index: np.ndarray = np.empty((2, 0), dtype=np.int64)
@@ -211,7 +208,6 @@ class CoLightEnv:
 
             # Initialize counters
             self._current_green_idx[tl_id] = 0
-            self._time_since_phase_change[tl_id] = 0
 
             logger.info(
                 f"TL {tl_id}: {len(unique_lanes)} lanes, "
@@ -221,9 +217,9 @@ class CoLightEnv:
             )
 
         # Compute observation / action dimensions
+        # LibSignal CoLight observation = lane vehicle counts only (phase=False)
         self.ob_length = max(
-            len(self._controlled_lanes[tl]) + len(self._green_phases[tl])
-            for tl in self.tl_ids
+            len(self._controlled_lanes[tl]) for tl in self.tl_ids
         )
         self.phase_lengths = [
             len(self._green_phases[tl])
@@ -266,9 +262,8 @@ class CoLightEnv:
                 }
                 scenario_enum = scenario_map.get(self.scenario, TrafficScenario.MODERATE)
                 output_dir = str(Path(self.network_path).parent)
-                route_result = route_service.generate_junction_routes(
+                route_result = route_service.generate_routes(
                     network_path=self.network_path,
-                    tl_id=self.tl_ids[0],
                     output_dir=output_dir,
                     scenario=scenario_enum,
                     duration=self.max_steps,
@@ -318,7 +313,10 @@ class CoLightEnv:
     # ------------------------------------------------------------------
 
     def _get_observation(self, tl_id: str) -> np.ndarray:
-        """V1-style observation: [lane_vehicle_counts, phase_one_hot] padded to ob_length."""
+        """CoLight observation: normalized lane vehicle counts, padded to ob_length.
+
+        Matches LibSignal colight.yml (phase=False, vehicle_max normalized).
+        """
         conn = self._get_conn()
 
         vehicle_counts: list[float] = []
@@ -329,18 +327,7 @@ class CoLightEnv:
             except Exception:
                 vehicle_counts.append(0.0)
 
-        num_green = len(self._green_phases[tl_id])
-        phase_one_hot = np.zeros(num_green, dtype=np.float32)
-        current_idx = self._current_green_idx[tl_id]
-        if 0 <= current_idx < num_green:
-            phase_one_hot[current_idx] = 1.0
-        else:
-            phase_one_hot[0] = 1.0
-
-        raw_obs = np.concatenate([
-            np.array(vehicle_counts, dtype=np.float32),
-            phase_one_hot,
-        ])
+        raw_obs = np.array(vehicle_counts, dtype=np.float32) / self._vehicle_max
 
         # Pad to ob_length
         if len(raw_obs) < self.ob_length:
@@ -379,7 +366,6 @@ class CoLightEnv:
                 conn.trafficlight.setProgram(tl_id, f"{tl_id}_rl")
             conn.trafficlight.setPhase(tl_id, 0)
             self._current_green_idx[tl_id] = 0
-            self._time_since_phase_change[tl_id] = 0
 
         self._current_step = 0
         self._cumulative_throughput = 0
@@ -409,7 +395,8 @@ class CoLightEnv:
         desired_green: dict[str, int] = {}
         needs_yellow: dict[str, bool] = {}
 
-        # Phase 1: Determine desired green index per TL with min/max enforcement
+        # Phase 1: Determine desired green index per TL
+        # LibSignal CoLight lets the agent freely switch phases (no min/max green).
         for i, tl_id in enumerate(self.tl_ids):
             action = int(actions[i])
             # Clamp action to valid range for this TL
@@ -417,21 +404,6 @@ class CoLightEnv:
             action = action % num_green
 
             current_idx = self._current_green_idx[tl_id]
-
-            # max_green enforcement: force next phase if held too long
-            if (
-                self._time_since_phase_change[tl_id] >= self._max_green
-                and action == current_idx
-            ):
-                action = (current_idx + 1) % num_green
-
-            # min_green enforcement: ignore switch if green too short
-            if (
-                action != current_idx
-                and self._time_since_phase_change[tl_id] < self._min_green
-            ):
-                action = current_idx
-
             desired_green[tl_id] = action
             needs_yellow[tl_id] = action != current_idx
 
@@ -454,11 +426,6 @@ class CoLightEnv:
                 self._current_step += 1
                 self._cumulative_throughput += conn.simulation.getArrivedNumber()
 
-            # Reset phase change timer for TLs that switched
-            for tl_id in self.tl_ids:
-                if needs_yellow[tl_id]:
-                    self._time_since_phase_change[tl_id] = 0
-
         # Phase 3: Set green phases for all TLs
         for tl_id in self.tl_ids:
             sumo_phase_idx = self._green_phases[tl_id][desired_green[tl_id]]
@@ -473,7 +440,6 @@ class CoLightEnv:
             self._current_step += 1
             self._cumulative_throughput += conn.simulation.getArrivedNumber()
             for tl_id in self.tl_ids:
-                self._time_since_phase_change[tl_id] += 1
                 halting = sum(
                     conn.lane.getLastStepHaltingNumber(lane)
                     for lane in self._controlled_lanes[tl_id]
