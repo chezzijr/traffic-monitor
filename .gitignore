@@ -3,3 +3,4 @@ backend/cache/
 dataset/
 simulation/models
 simulation/networks
+simulation/data
