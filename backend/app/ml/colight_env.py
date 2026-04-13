@@ -432,27 +432,30 @@ class CoLightEnv:
             conn.trafficlight.setPhase(tl_id, sumo_phase_idx)
             self._current_green_idx[tl_id] = desired_green[tl_id]
 
-        # Phase 4: Advance simulation for steps_per_action, collecting halting per TL
-        # sub_step_halting[tl_id] = list of per-substep halting counts
-        sub_step_halting: dict[str, list[int]] = {tl_id: [] for tl_id in self.tl_ids}
+        # Phase 4: Advance simulation for steps_per_action, collecting per-substep
+        # MEAN halting across lanes per TL (LibSignal LaneVehicleGenerator average='all').
+        sub_step_halting: dict[str, list[float]] = {tl_id: [] for tl_id in self.tl_ids}
         for _ in range(self.steps_per_action):
             conn.simulationStep()
             self._current_step += 1
             self._cumulative_throughput += conn.simulation.getArrivedNumber()
             for tl_id in self.tl_ids:
-                halting = sum(
-                    conn.lane.getLastStepHaltingNumber(lane)
-                    for lane in self._controlled_lanes[tl_id]
-                )
-                sub_step_halting[tl_id].append(halting)
+                lanes = self._controlled_lanes[tl_id]
+                if not lanes:
+                    sub_step_halting[tl_id].append(0.0)
+                    continue
+                mean_halting = float(np.mean([
+                    conn.lane.getLastStepHaltingNumber(lane) for lane in lanes
+                ]))
+                sub_step_halting[tl_id].append(mean_halting)
 
-        # Phase 5: Compute per-TL rewards
+        # Phase 5: Compute per-TL rewards = -mean_substeps(mean_lanes(halting)) * 12
+        # (LibSignal unified reward; matches environment.py and rewards.py single-agent path)
         rewards = np.zeros(n, dtype=np.float32)
         for i, tl_id in enumerate(self.tl_ids):
             counts = sub_step_halting[tl_id]
             if counts:
-                avg_halting = float(np.mean(counts))
-                rewards[i] = -avg_halting * 12.0
+                rewards[i] = -float(np.mean(counts)) * 12.0
             else:
                 rewards[i] = 0.0
 

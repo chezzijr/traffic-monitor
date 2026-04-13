@@ -28,7 +28,7 @@ function MetricCard({ label, value, baseline, lowerIsBetter = false, unit = '' }
       </p>
       {delta != null && (
         <div className={`flex items-center gap-0.5 text-xs mt-0.5 ${isImproved ? 'text-green-600' : 'text-red-500'}`}>
-          {isImproved ? <ArrowDown size={10} /> : <ArrowUp size={10} />}
+          {delta > 0 ? <ArrowUp size={10} /> : <ArrowDown size={10} />}
           <span>{Math.abs(delta).toFixed(1)}</span>
           {baseline != null && baseline !== 0 && !(lowerIsBetter && baseline < 1.0) && (
             <span className="text-gray-400 ml-0.5">
