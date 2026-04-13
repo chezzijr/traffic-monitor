@@ -27,7 +27,7 @@ export function JunctionSelector() {
           onClick={selectAllJunctions}
           className="text-xs px-2 py-1 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors"
         >
-          Select All
+          Select All In Region
         </button>
         <button
           onClick={clearJunctionSelection}

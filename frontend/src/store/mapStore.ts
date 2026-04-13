@@ -62,9 +62,29 @@ export const useMapStore = create<MapState>((set) => ({
         : [...state.selectedJunctionIds, sumoTlId],
     })),
   selectAllJunctions: () =>
-    set((state) => ({
-      selectedJunctionIds: state.sumoTrafficLights.map((tl) => tl.id),
-    })),
+    set((state) => {
+      const bbox = state.selectedRegion;
+      if (!bbox) {
+        return { selectedJunctionIds: state.sumoTrafficLights.map((tl) => tl.id) };
+      }
+      const insideTlIds = new Set(
+        state.intersections
+          .filter(
+            (i) =>
+              i.sumo_tl_id &&
+              i.lat >= bbox.south &&
+              i.lat <= bbox.north &&
+              i.lon >= bbox.west &&
+              i.lon <= bbox.east,
+          )
+          .map((i) => i.sumo_tl_id as string),
+      );
+      return {
+        selectedJunctionIds: state.sumoTrafficLights
+          .map((tl) => tl.id)
+          .filter((id) => insideTlIds.has(id)),
+      };
+    }),
   clearJunctionSelection: () => set({ selectedJunctionIds: [] }),
   setSumoTrafficLights: (lights) => set({ sumoTrafficLights: lights }),
   setOsmSumoMapping: (mapping) => set({ osmSumoMapping: mapping }),
