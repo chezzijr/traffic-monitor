@@ -32,7 +32,8 @@ export function TrainingConfigPanel({ onTrainingStarted }: TrainingConfigPanelPr
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const junctionCount = selectedJunctionIds.length;
-  const canStart = junctionCount > 0 && currentNetworkId && !isSubmitting;
+  const isColightTooFew = algorithm === 'colight' && junctionCount < 2;
+  const canStart = junctionCount > 0 && currentNetworkId && !isSubmitting && !isColightTooFew;
 
   const handleStartTraining = async () => {
     if (!canStart || !currentNetworkId) return;
@@ -100,6 +101,9 @@ export function TrainingConfigPanel({ onTrainingStarted }: TrainingConfigPanelPr
             </button>
           ))}
         </div>
+        {isColightTooFew && (
+          <p className="text-xs text-red-600 mt-1">CoLight requires ≥2 junctions</p>
+        )}
       </div>
 
       {/* Timesteps slider */}
