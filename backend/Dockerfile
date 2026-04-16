@@ -13,6 +13,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     sumo \
     sumo-tools \
+    osmium-tool \
     libgl1 \
     libglib2.0-0 \
     libsm6 \
@@ -35,7 +36,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY app/ ./app/
 
 # Create simulation directory structure (populated at runtime via volume mount)
-RUN mkdir -p ./simulation/models ./simulation/networks ./simulation/vtypes
+RUN mkdir -p ./simulation/models ./simulation/networks ./simulation/vtypes ./simulation/data
 
 # Expose the API port
 EXPOSE 8000
