@@ -76,7 +76,7 @@ export function ModelMap({ networkId, trainedJunctionIds }: ModelMapProps) {
           attributionControl={false}
           style={{ height: '100%', width: '100%' }}
         >
-          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          <TileLayer url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png" />
           <ResizeHandler />
           {metadata.junctions.map((junction) => {
             if (!junction.tl_id) return null;

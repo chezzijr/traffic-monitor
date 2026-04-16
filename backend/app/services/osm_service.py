@@ -1,31 +1,28 @@
-# OpenStreetMap service for fetching and processing map data
+# Map extraction and SUMO conversion service.
+# Uses Overpass API QL (highway-only query) for raw OSM data and
+# traffic_light_clustered.json for TL detection — no OSMnx dependency.
 
 import hashlib
 import logging
 import math
 import os
 import subprocess
-import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 import json
-from app.utils.traffic_light_clustered import cluster_traffic_light_file
+import requests
 
-import osmnx as ox
+from app.utils.traffic_light_clustered import cluster_traffic_light_file
 
 logger = logging.getLogger(__name__)
 
-# In-memory cache for extracted networks
-# Keys: network_id, Values: dict with graph, intersections, metadata
+# In-memory cache: network_id → {osm_path, intersections, road_count, bbox}
 _network_cache: dict[str, dict] = {}
 
 from app.config import settings
 
-# Base directory for SUMO network files
 SIMULATION_NETWORKS_DIR = settings.simulation_networks_dir
 
-
-#cache
 CACHE_DIR = Path(__file__).parent.parent.parent.parent / "cache"
 TRAFFIC_LIGHT_PATH = CACHE_DIR / "all_traffic_light.json"
 TRAFFIC_LIGHT_CLUSTERED_PATH = CACHE_DIR / "traffic_light_clustered.json"
@@ -33,85 +30,23 @@ TRAFFIC_LIGHT_CLUSTERED_PATH = CACHE_DIR / "traffic_light_clustered.json"
 # Distance threshold for OSM-to-SUMO coordinate matching (~100m at equator)
 COORD_MATCH_THRESHOLD_DEG = 0.001
 
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+
+# Highway types that vehicles can drive on (used for intersection detection)
+DRIVEABLE_HIGHWAY_TYPES = {
+    "motorway", "trunk", "primary", "secondary", "tertiary",
+    "unclassified", "residential", "service", "road", "track",
+    "living_street", "busway",
+    "motorway_link", "trunk_link", "primary_link",
+    "secondary_link", "tertiary_link", "motorway_junction",
+}
+
 
 def _generate_network_id(bbox: tuple[float, float, float, float]) -> str:
     """Generate a unique network ID based on bounding box coordinates."""
     bbox_str = f"{bbox[0]:.6f},{bbox[1]:.6f},{bbox[2]:.6f},{bbox[3]:.6f}"
     return hashlib.sha256(bbox_str.encode()).hexdigest()[:16]
 
-
-def _extract_intersection_name(graph, node_id: int) -> str | None:
-    """Try to extract a street name for an intersection from connected edges."""
-    try:
-        edges = list(graph.edges(node_id, data=True))
-        for _, _, data in edges:
-            if "name" in data and data["name"]:
-                name = data["name"]
-                if isinstance(name, list):
-                    return name[0]
-                return name
-    except Exception:
-        pass
-    return None
-
-
-def _extract_traffic_signals(bbox: tuple[float, float, float, float]) -> set[int]:
-    """
-    Extract OSM node IDs with highway=traffic_signals tag.
-
-    Args:
-        bbox: Tuple of (south, west, north, east) coordinates
-
-    Returns:
-        Set of OSM node IDs that have traffic signals
-    """
-    south, west, north, east = bbox
-
-    try:
-        # OSMnx features_from_bbox expects bbox as (west, south, east, north) named parameter
-        gdf = ox.features_from_bbox(
-            bbox=(west, south, east, north),
-            tags={"highway": "traffic_signals"}
-        )
-        # Extract node IDs from the GeoDataFrame index
-        # Index is MultiIndex with (element_type, osm_id)
-        return {osm_id for (elem_type, osm_id) in gdf.index if elem_type == "node"}
-    except Exception as e:
-        # features_from_bbox can fail if no traffic signals exist in the area
-        logger.warning(f"Could not extract traffic signals for bbox {bbox}: {e}")
-        return set()
-
-
-def get_traffic_lights_by_point(lat: float, lon: float, radius: int = 700) -> list[dict]:
-
-    try:
-        gdf = ox.features_from_point(
-            (lat, lon),
-            tags={"highway": "traffic_signals"},
-            dist=radius
-        )
-    except Exception:
-        return []
-
-    results = []
-    node_ids = []
-
-    for (elem_type, osm_id), row in gdf.iterrows():
-        if elem_type != "node":
-            continue
-
-        node_ids.append(osm_id)
-
-        results.append({
-            "osm_id": osm_id,
-            "lat": row.geometry.y,
-            "lon": row.geometry.x,
-        })
-        os.makedirs(os.path.dirname(TRAFFIC_LIGHT_PATH),exist_ok=True)
-        with open(TRAFFIC_LIGHT_PATH, "w", encoding="utf-8") as f:
-            json.dump(results, f, indent=4)
-
-    return results
 
 def _expand_bbox(
     south: float, west: float, north: float, east: float, buffer_meters: float = 300
@@ -123,23 +58,147 @@ def _expand_bbox(
     return (south - lat_buffer, west - lon_buffer, north + lat_buffer, east + lon_buffer)
 
 
-def extract_network(bbox: tuple[float, float, float, float]) -> dict:
+def _load_clustered_tl_ids(bbox: tuple[float, float, float, float]) -> set[int]:
+    """Return OSM node IDs of traffic lights inside bbox from the clustered cache."""
+    south, west, north, east = bbox
+    if not TRAFFIC_LIGHT_CLUSTERED_PATH.exists():
+        logger.warning("traffic_light_clustered.json not found — TL tagging will rely on OSM tags only")
+        return set()
+    try:
+        with open(TRAFFIC_LIGHT_CLUSTERED_PATH, "r", encoding="utf-8") as f:
+            nodes = json.load(f)
+        ids = {
+            int(n["osm_id"])
+            for n in nodes
+            if south <= n["lat"] <= north and west <= n["lon"] <= east
+        }
+        logger.debug(f"Loaded {len(ids)} clustered TL IDs for bbox {bbox}")
+        return ids
+    except Exception as e:
+        logger.warning(f"Could not load clustered TL cache: {e}")
+        return set()
+
+
+def _download_osm_highway(
+    south: float, west: float, north: float, east: float,
+    output_path: Path,
+    timeout: int = 60,
+) -> None:
+    """Download highway-only OSM data for bbox via Overpass QL.
+
+    Uses the Overpass interpreter QL endpoint instead of /api/map so that only
+    road geometry is fetched (no buildings, amenities, water, …).  The result
+    is a valid .osm XML file that netconvert can consume directly.
     """
-    Extract road network from OpenStreetMap for the given bounding box.
+    query = (
+        f"[out:xml][timeout:{timeout}];"
+        f"(way[\"highway\"]({south},{west},{north},{east});>;);"
+        f"out body;"
+    )
+    logger.info(f"Overpass QL query for bbox ({south:.5f},{west:.5f},{north:.5f},{east:.5f})")
+    resp = requests.post(
+        OVERPASS_URL,
+        data={"data": query},
+        timeout=timeout + 15,
+        stream=True,
+    )
+    resp.raise_for_status()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "wb") as fh:
+        for chunk in resp.iter_content(chunk_size=65536):
+            fh.write(chunk)
+    size_kb = output_path.stat().st_size >> 10
+    logger.info(f"Overpass download complete: {size_kb} KB → {output_path}")
+
+
+def _parse_osm_intersections(
+    osm_path: Path,
+    orig_bbox: tuple[float, float, float, float],
+    tl_node_ids: set[int],
+) -> tuple[list[dict], int]:
+    """Parse raw .osm XML to find intersections and road count.
+
+    An intersection is a node referenced by ≥ 2 driveable highway ways.
+    Results are filtered to orig_bbox (not the expanded download area).
+    Returns (intersections, road_count).
+    """
+    tree = ET.parse(str(osm_path))
+    root = tree.getroot()
+
+    # node_id → {lat, lon, tags}
+    nodes: dict[int, dict] = {}
+    for node_el in root.findall("node"):
+        nid = int(node_el.get("id"))
+        lat = float(node_el.get("lat", 0))
+        lon = float(node_el.get("lon", 0))
+        tags = {tag.get("k"): tag.get("v") for tag in node_el.findall("tag")}
+        nodes[nid] = {"lat": lat, "lon": lon, "tags": tags}
+
+    # Count driveable-way references per node; collect first street name
+    node_way_count: dict[int, int] = {}
+    node_way_names: dict[int, str] = {}
+    road_count = 0
+
+    for way_el in root.findall("way"):
+        tags = {tag.get("k"): tag.get("v") for tag in way_el.findall("tag")}
+        hw = tags.get("highway", "")
+        if hw not in DRIVEABLE_HIGHWAY_TYPES:
+            continue
+        road_count += 1
+        name = tags.get("name")
+        for nd in way_el.findall("nd"):
+            ref = int(nd.get("ref"))
+            node_way_count[ref] = node_way_count.get(ref, 0) + 1
+            if name and ref not in node_way_names:
+                node_way_names[ref] = name
+
+    south, west, north, east = orig_bbox
+    intersections: list[dict] = []
+
+    for nid, count in node_way_count.items():
+        if count < 2:
+            continue
+        nd = nodes.get(nid)
+        if nd is None:
+            continue
+        lat, lon = nd["lat"], nd["lon"]
+        # Restrict to original (non-expanded) bbox
+        if not (south <= lat <= north and west <= lon <= east):
+            continue
+
+        has_tl = (
+            nid in tl_node_ids
+            or nd["tags"].get("highway") == "traffic_signals"
+        )
+
+        intersections.append({
+            "id": str(nid),
+            "osm_id": nid,
+            "lat": lat,
+            "lon": lon,
+            "name": node_way_names.get(nid),
+            "num_roads": count,
+            "has_traffic_light": has_tl,
+        })
+
+    return intersections, road_count
+
+
+def extract_network(bbox: tuple[float, float, float, float]) -> dict:
+    """Extract road network for the given bounding box.
+
+    Downloads raw highway OSM data via Overpass QL (no OSMnx), saves it as
+    {network_id}.osm on disk, parses intersections and tags TL nodes using the
+    pre-built traffic_light_clustered.json cache.
 
     Args:
-        bbox: Tuple of (south, west, north, east) coordinates
+        bbox: (south, west, north, east) in WGS-84 degrees
 
     Returns:
-        Dict with network_id, intersections list, road_count, bbox
-
-    Raises:
-        ValueError: If bbox coordinates are invalid
-        RuntimeError: If network extraction fails
+        Dict with network_id, intersections, road_count, bbox
     """
     south, west, north, east = bbox
 
-    # Validate bbox
     if south >= north:
         raise ValueError(f"South ({south}) must be less than north ({north})")
     if west >= east:
@@ -147,9 +206,8 @@ def extract_network(bbox: tuple[float, float, float, float]) -> dict:
 
     network_id = _generate_network_id(bbox)
 
-    # Check cache first
     if network_id in _network_cache:
-        logger.info(f"Returning cached network: {network_id}")
+        logger.info(f"Returning in-memory cached network: {network_id}")
         cached = _network_cache[network_id]
         return {
             "network_id": network_id,
@@ -160,58 +218,52 @@ def extract_network(bbox: tuple[float, float, float, float]) -> dict:
 
     logger.info(f"Extracting network for bbox: {bbox}")
 
-    # Expand bbox to capture complete road approaches at boundaries
+    # Expand bbox by 300 m so boundary roads are fully included
     exp_south, exp_west, exp_north, exp_east = _expand_bbox(south, west, north, east)
-    logger.info(f"Expanded bbox by 300m: ({exp_south:.6f}, {exp_west:.6f}, {exp_north:.6f}, {exp_east:.6f})")
+    logger.info(
+        f"Expanded bbox: ({exp_south:.6f}, {exp_west:.6f}, {exp_north:.6f}, {exp_east:.6f})"
+    )
+
+    SIMULATION_NETWORKS_DIR.mkdir(parents=True, exist_ok=True)
+    osm_path = SIMULATION_NETWORKS_DIR / f"{network_id}.osm"
+
+    if not osm_path.exists():
+        try:
+            _download_osm_highway(exp_south, exp_west, exp_north, exp_east, osm_path)
+        except requests.exceptions.Timeout:
+            raise RuntimeError(
+                "Overpass API timed out. Try a smaller region or retry in a few minutes."
+            )
+        except requests.exceptions.RequestException as e:
+            raise RuntimeError(f"Overpass API download failed: {e}") from e
+    else:
+        logger.info(f"Reusing existing OSM file: {osm_path}")
+
+    tl_node_ids = _load_clustered_tl_ids(bbox)
 
     try:
-        # Download road network from OSM
-        # OSMnx 2.x expects bbox as (left, bottom, right, top) = (west, south, east, north)
-        graph = ox.graph_from_bbox(
-            bbox=(exp_west, exp_south, exp_east, exp_north),
-            network_type="drive",
-            simplify=False,  # Must be False for save_graph_xml() to work
-            truncate_by_edge=True,  # Preserve boundary connectivity
+        intersections, road_count = _parse_osm_intersections(osm_path, bbox, tl_node_ids)
+    except ET.ParseError as e:
+        osm_path.unlink(missing_ok=True)
+        raise RuntimeError(f"Failed to parse downloaded OSM data: {e}") from e
+
+    if road_count == 0:
+        osm_path.unlink(missing_ok=True)
+        raise ValueError(
+            "Selected region contains no driveable road segments. "
+            "Please select a larger area (at least 300–500 m across)."
         )
-    except Exception as e:
-        logger.error(f"Failed to download OSM network: {e}")
-        raise RuntimeError(f"Failed to download OSM network for bbox {bbox}: {e}") from e
 
-    # Extract traffic signal node IDs
-    traffic_signal_nodes = _extract_traffic_signals(bbox)
-    logger.info(f"Found {len(traffic_signal_nodes)} traffic signals in bbox")
-
-    # Identify intersections (nodes with degree > 2)
-    intersections = []
-    for node_id, data in graph.nodes(data=True):
-        degree = graph.degree(node_id)
-        if degree > 2:
-            intersection = {
-                "id": str(node_id),
-                "osm_id": int(node_id),
-                "lat": data.get("y", 0.0),
-                "lon": data.get("x", 0.0),
-                "name": _extract_intersection_name(graph, node_id),
-                "num_roads": degree,
-                "has_traffic_light": node_id in traffic_signal_nodes
-                    or any(n in traffic_signal_nodes for n in graph.neighbors(node_id)),
-            }
-            intersections.append(intersection)
-
-    # Count road segments (edges)
-    road_count = graph.number_of_edges()
-
-    # Cache the network data
     _network_cache[network_id] = {
-        "graph": graph,
+        "osm_path": str(osm_path),
         "intersections": intersections,
         "road_count": road_count,
         "bbox": bbox,
-        "traffic_signal_nodes": traffic_signal_nodes,
     }
 
-    logger.info(f"Extracted network {network_id}: {len(intersections)} intersections, {road_count} roads")
-
+    logger.info(
+        f"Network {network_id}: {len(intersections)} intersections, {road_count} road ways"
+    )
     return {
         "network_id": network_id,
         "intersections": intersections,
@@ -221,21 +273,9 @@ def extract_network(bbox: tuple[float, float, float, float]) -> dict:
 
 
 def get_intersections(network_id: str) -> list[dict]:
-    """
-    Get cached intersections for a given network ID.
-
-    Args:
-        network_id: The unique identifier for the network
-
-    Returns:
-        List of intersection dicts, each with id, lat, lon, name, num_roads
-
-    Raises:
-        KeyError: If network_id is not found in cache
-    """
+    """Get cached intersections for a network ID."""
     if network_id not in _network_cache:
         raise KeyError(f"Network '{network_id}' not found in cache. Extract the network first.")
-
     return _network_cache[network_id]["intersections"]
 
 
@@ -247,31 +287,7 @@ def get_network_bbox(network_id: str) -> tuple | None:
 
 
 def parse_sumo_traffic_lights(net_xml_path: Path) -> dict:
-    """
-    Parse SUMO network XML for traffic light IDs, coordinates, and phases.
-
-    Args:
-        net_xml_path: Path to the SUMO .net.xml file
-
-    Returns:
-        Dict with traffic light data:
-        {
-            "traffic_lights": [
-                {
-                    "id": str,           # SUMO traffic light ID
-                    "x": float,          # X coordinate in SUMO network
-                    "y": float,          # Y coordinate in SUMO network
-                    "type": str,         # Traffic light type (e.g., "actuated")
-                    "phases": [
-                        {
-                            "duration": int,   # Phase duration in seconds
-                            "state": str,      # Phase state string (e.g., "GGrrGGrr")
-                        }
-                    ]
-                }
-            ]
-        }
-    """
+    """Parse SUMO network XML for traffic light IDs, coordinates, and phases."""
     try:
         tree = ET.parse(net_xml_path)
         root = tree.getroot()
@@ -279,47 +295,29 @@ def parse_sumo_traffic_lights(net_xml_path: Path) -> dict:
         logger.error(f"Failed to parse SUMO network XML: {e}")
         return {"traffic_lights": []}
 
-    # Build junction coordinate lookup (junction id -> (x, y))
     junction_coords: dict[str, tuple[float, float]] = {}
     for junction in root.findall(".//junction"):
         jid = junction.get("id")
-        jtype = junction.get("type")
-        # Only include traffic_light junctions
-        if jid and jtype == "traffic_light":
-            x = float(junction.get("x", 0))
-            y = float(junction.get("y", 0))
-            junction_coords[jid] = (x, y)
+        if jid and junction.get("type") == "traffic_light":
+            junction_coords[jid] = (
+                float(junction.get("x", 0)),
+                float(junction.get("y", 0)),
+            )
 
-    # Parse traffic light logic
     traffic_lights = []
     for tl_logic in root.findall(".//tlLogic"):
         tl_id = tl_logic.get("id")
         if tl_id is None:
             continue
         tl_type = tl_logic.get("type", "static")
-
-        # Get coordinates from junction with same ID
-        # GS_* TL IDs (from --tls.guess-signals) map to junctions without the prefix
         canonical_id = tl_id[3:] if tl_id.startswith("GS_") else tl_id
         x, y = junction_coords.get(tl_id) or junction_coords.get(canonical_id, (0.0, 0.0))
 
-        # Parse phases
-        phases = []
-        for phase in tl_logic.findall("phase"):
-            duration = int(phase.get("duration", 0))
-            state = phase.get("state", "")
-            phases.append({
-                "duration": duration,
-                "state": state,
-            })
-
-        traffic_lights.append({
-            "id": tl_id,
-            "x": x,
-            "y": y,
-            "type": tl_type,
-            "phases": phases,
-        })
+        phases = [
+            {"duration": int(p.get("duration", 0)), "state": p.get("state", "")}
+            for p in tl_logic.findall("phase")
+        ]
+        traffic_lights.append({"id": tl_id, "x": x, "y": y, "type": tl_type, "phases": phases})
 
     logger.info(f"Parsed {len(traffic_lights)} traffic lights from SUMO network")
     return {"traffic_lights": traffic_lights}
@@ -330,122 +328,66 @@ def _match_osm_to_sumo_traffic_lights(
     sumo_traffic_lights: list[dict],
     net_xml_path: Path,
 ) -> dict[str, str]:
-    """
-    Create mapping from OSM intersection IDs to SUMO traffic light IDs.
-
-    Uses coordinate matching by converting SUMO coordinates to lat/lon
-    and finding the closest OSM intersection with a traffic light.
-
-    Args:
-        intersections: List of intersection dicts from extract_network()
-        sumo_traffic_lights: List of traffic light dicts from parse_sumo_traffic_lights()
-        net_xml_path: Path to SUMO .net.xml file (for projection info)
-
-    Returns:
-        Dict mapping OSM intersection ID (str) to SUMO traffic light ID (str)
-    """
-    # Parse location info from SUMO network for coordinate projection
+    """Map OSM intersection IDs to SUMO traffic light IDs via coordinate matching."""
     try:
         tree = ET.parse(net_xml_path)
         root = tree.getroot()
         location = root.find(".//location")
         if location is None:
-            logger.warning("No location element found in SUMO network")
+            logger.warning("No location element in SUMO network")
             return {}
 
-        # Get original boundary (lat/lon)
-        orig_boundary_str = location.get("origBoundary", "")
-        if orig_boundary_str:
-            orig_parts = orig_boundary_str.split(",")
-            if len(orig_parts) != 4:
-                logger.warning("Invalid origBoundary format in SUMO network")
-                return {}
-            orig_west = float(orig_parts[0])
-            orig_south = float(orig_parts[1])
-            orig_east = float(orig_parts[2])
-            orig_north = float(orig_parts[3])
-        else:
-            logger.warning("No origBoundary in SUMO network, cannot match coordinates")
+        orig_parts = location.get("origBoundary", "").split(",")
+        conv_parts = location.get("convBoundary", "").split(",")
+        if len(orig_parts) != 4 or len(conv_parts) != 4:
+            logger.warning("Invalid boundary format in SUMO network")
             return {}
 
-        # Get converted boundary
-        conv_boundary_str = location.get("convBoundary", "")
-        if conv_boundary_str:
-            conv_parts = conv_boundary_str.split(",")
-            if len(conv_parts) != 4:
-                logger.warning("Invalid convBoundary format in SUMO network")
-                return {}
-            conv_west = float(conv_parts[0])
-            conv_south = float(conv_parts[1])
-            conv_east = float(conv_parts[2])
-            conv_north = float(conv_parts[3])
-        else:
-            logger.warning("No convBoundary in SUMO network, cannot match coordinates")
-            return {}
-
+        orig_west, orig_south, orig_east, orig_north = map(float, orig_parts)
+        conv_west, conv_south, conv_east, conv_north = map(float, conv_parts)
     except (ET.ParseError, ValueError) as e:
         logger.error(f"Failed to parse SUMO network location: {e}")
         return {}
 
-    # Search all intersections, not just has_traffic_light — OSM signal nodes are often
-    # stop-line nodes (degree ≤ 2) that don't appear in the intersection list
-    tl_intersections = intersections
-
-    # Calculate scale factors for coordinate conversion
     lon_scale = (orig_east - orig_west) / (conv_east - conv_west) if conv_east != conv_west else 1.0
     lat_scale = (orig_north - orig_south) / (conv_north - conv_south) if conv_north != conv_south else 1.0
 
     osm_to_sumo_map: dict[str, str] = {}
 
-    # For each SUMO traffic light, find closest OSM intersection
     for sumo_tl in sumo_traffic_lights:
-        sumo_x = sumo_tl["x"]
-        sumo_y = sumo_tl["y"]
+        approx_lon = orig_west + (sumo_tl["x"] - conv_west) * lon_scale
+        approx_lat = orig_south + (sumo_tl["y"] - conv_south) * lat_scale
 
-        # Convert SUMO coordinates to approximate lat/lon
-        # SUMO uses Cartesian coords, need to reverse the projection
-        approx_lon = orig_west + (sumo_x - conv_west) * lon_scale
-        approx_lat = orig_south + (sumo_y - conv_south) * lat_scale
-
-        # Find closest OSM intersection with traffic light
         best_match = None
-        best_distance = float("inf")
+        best_dist = float("inf")
 
-        for intersection in tl_intersections:
-            # Skip if already matched
-            if intersection["id"] in osm_to_sumo_map:
+        for inter in intersections:
+            if inter["id"] in osm_to_sumo_map:
                 continue
+            dist = math.sqrt(
+                (inter["lat"] - approx_lat) ** 2 + (inter["lon"] - approx_lon) ** 2
+            )
+            if dist < best_dist:
+                best_dist = dist
+                best_match = inter
 
-            int_lat = intersection["lat"]
-            int_lon = intersection["lon"]
-
-            # Calculate approximate distance (Euclidean on lat/lon, good enough for matching)
-            distance = math.sqrt((int_lat - approx_lat) ** 2 + (int_lon - approx_lon) ** 2)
-
-            if distance < best_distance:
-                best_distance = distance
-                best_match = intersection
-
-        # Threshold for matching (approximately 100m in degrees)
-        if best_match and best_distance < COORD_MATCH_THRESHOLD_DEG:
+        if best_match and best_dist < COORD_MATCH_THRESHOLD_DEG:
             osm_to_sumo_map[best_match["id"]] = sumo_tl["id"]
-            logger.debug(f"Matched OSM {best_match['id']} to SUMO {sumo_tl['id']} (dist: {best_distance:.6f})")
+            logger.debug(
+                f"Matched OSM {best_match['id']} → SUMO {sumo_tl['id']} (dist {best_dist:.6f})"
+            )
 
-    # Mark matched intersections as having traffic lights for consistency
     matched_ids = set(osm_to_sumo_map.keys())
-    for intersection in intersections:
-        if intersection["id"] in matched_ids:
-            intersection["has_traffic_light"] = True
+    for inter in intersections:
+        if inter["id"] in matched_ids:
+            inter["has_traffic_light"] = True
 
     logger.info(f"Matched {len(osm_to_sumo_map)} OSM intersections to SUMO traffic lights")
     return osm_to_sumo_map
 
 
 def _remove_disconnected_components(net_path: Path, netconvert_path: str, osm_path: str) -> int:
-    """Remove disconnected network fragments, keeping only the largest component.
-
-    Returns the number of removed edges, or 0 if network is already fully connected.
-    """
+    """Remove disconnected network fragments, keeping only the largest component."""
     import sumolib
     from collections import deque
 
@@ -454,13 +396,11 @@ def _remove_disconnected_components(net_path: Path, netconvert_path: str, osm_pa
     if not edges:
         return 0
 
-    # Build adjacency: node_id → set of edge objects
     node_to_edges: dict[str, set] = {}
     for edge in edges:
         for node in (edge.getFromNode(), edge.getToNode()):
             node_to_edges.setdefault(node.getID(), set()).add(edge)
 
-    # BFS to find connected components (undirected)
     visited_edges: set[str] = set()
     components: list[set[str]] = []
     for edge in edges:
@@ -486,7 +426,6 @@ def _remove_disconnected_components(net_path: Path, netconvert_path: str, osm_pa
         logger.info("Network is fully connected — no fragments to remove")
         return 0
 
-    # Find largest component
     largest = max(components, key=len)
     edges_to_remove = set()
     for comp in components:
@@ -494,22 +433,26 @@ def _remove_disconnected_components(net_path: Path, netconvert_path: str, osm_pa
             edges_to_remove.update(comp)
 
     logger.info(
-        f"Removing {len(edges_to_remove)} edges from {len(components) - 1} "
-        f"disconnected fragments (keeping largest with {len(largest)} edges)"
+        f"Removing {len(edges_to_remove)} edges from {len(components) - 1} fragments "
+        f"(keeping largest: {len(largest)} edges)"
     )
 
-    # Re-run netconvert with --remove-edges.explicit
     cmd = [
         netconvert_path,
         "--osm-files", osm_path,
         "--output-file", str(net_path),
-        "--geometry.remove",
-        "--roundabouts.guess",
-        "--ramps.guess",
-        "--junctions.join",
-        "--tls.guess-signals",
-        "--tls.guess",
-        "--tls.join",
+        "--geometry.remove", "true",
+        "--roundabouts.guess", "true",
+        "--ramps.guess", "true",
+        "--junctions.join", "true",
+        "--tls.guess", "true",
+        "--tls.join", "true",
+        "--edges.join", "true",
+        "--no-turnarounds.tls", "true",
+        "--remove-edges.by-type",
+        "highway.footway,highway.pedestrian,highway.steps,highway.cycleway,highway.path",
+        "--offset.disable-normalization", "true",
+        "--proj.utm", "true",
         "--tls.default-type", "actuated",
         "--remove-edges.explicit", ",".join(edges_to_remove),
     ]
@@ -523,39 +466,26 @@ def _remove_disconnected_components(net_path: Path, netconvert_path: str, osm_pa
 
 
 def convert_to_sumo(network_id: str) -> dict:
-    """
-    Convert cached OSM network to SUMO format using netconvert.
+    """Convert cached OSM network to SUMO format using netconvert.
 
-    Args:
-        network_id: The unique identifier for the network
+    The raw .osm file saved during extract_network() is fed directly to
+    netconvert — no OSMnx graph re-serialization step.
 
     Returns:
-        Dict with:
-        - network_path: Path to the generated SUMO .net.xml file (as string)
-        - traffic_lights: List of traffic light dicts with id, type, phases
-        - osm_to_sumo_tl_map: Dict mapping OSM intersection ID to SUMO traffic light ID
-
-    Raises:
-        KeyError: If network_id is not found in cache
-        RuntimeError: If netconvert fails
+        Dict with network_path, traffic_lights, osm_to_sumo_tl_map
     """
     if network_id not in _network_cache:
         raise KeyError(f"Network '{network_id}' not found in cache. Extract the network first.")
 
-    # Ensure output directory exists
     SIMULATION_NETWORKS_DIR.mkdir(parents=True, exist_ok=True)
-
     output_path = SIMULATION_NETWORKS_DIR / f"{network_id}.net.xml"
     cached = _network_cache[network_id]
 
-    # If already converted, parse existing file and return enriched data
     if output_path.exists():
         logger.info(f"SUMO network already exists: {output_path}")
         tl_data = parse_sumo_traffic_lights(output_path)
         osm_to_sumo_map = _match_osm_to_sumo_traffic_lights(
-            cached["intersections"],
-            tl_data["traffic_lights"],
-            output_path,
+            cached["intersections"], tl_data["traffic_lights"], output_path
         )
         return {
             "network_path": str(output_path),
@@ -563,54 +493,39 @@ def convert_to_sumo(network_id: str) -> dict:
             "osm_to_sumo_tl_map": osm_to_sumo_map,
         }
 
-    graph = cached["graph"]
-
-    # Validate graph has edges (roads) - too small regions may have only nodes
-    if graph.number_of_edges() == 0:
-        raise ValueError(
-            "Selected region is too small - it contains no road segments. "
-            "Please select a larger area (at least 300-500 meters) that includes "
-            "multiple intersections and the roads connecting them."
+    osm_path = cached["osm_path"]
+    if not os.path.exists(osm_path):
+        raise RuntimeError(
+            f"OSM source file missing: {osm_path}. Re-run extract-region to regenerate."
         )
 
-    # Save graph as OSM XML to temporary file
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".osm", delete=False) as osm_file:
-        osm_temp_path = osm_file.name
+    sumo_home = os.environ.get("SUMO_HOME", "/usr/share/sumo")
+    netconvert_path = os.path.join(sumo_home, "bin", "netconvert")
+
+    # Feed raw .osm directly to netconvert (same pipeline as geofabrik)
+    cmd = [
+        netconvert_path,
+        "--osm-files", osm_path,
+        "--output-file", str(output_path),
+        "--geometry.remove", "true",
+        "--roundabouts.guess", "true",
+        "--ramps.guess", "true",
+        "--junctions.join", "true",
+        "--tls.guess", "true",
+        "--tls.join", "true",
+        "--edges.join", "true",
+        "--no-turnarounds.tls", "true",
+        "--remove-edges.by-type",
+        "highway.footway,highway.pedestrian,highway.steps,highway.cycleway,highway.path",
+        "--offset.disable-normalization", "true",
+        "--proj.utm", "true",
+        "--tls.default-type", "actuated",
+    ]
+
+    logger.info(f"Running netconvert: {' '.join(cmd)}")
 
     try:
-        # Export graph to OSM XML format
-        ox.save_graph_xml(graph, filepath=osm_temp_path)
-
-        # Get SUMO_HOME for netconvert location
-        sumo_home = os.environ.get("SUMO_HOME", "/usr/share/sumo")
-        netconvert_path = os.path.join(sumo_home, "bin", "netconvert")
-
-        # Build netconvert command
-        cmd = [
-            netconvert_path,
-            "--osm-files",
-            osm_temp_path,
-            "--output-file",
-            str(output_path),
-            "--geometry.remove",
-            "--roundabouts.guess",
-            "--ramps.guess",
-            "--junctions.join",
-            "--tls.guess-signals",
-            "--tls.guess",
-            "--tls.join",
-            "--tls.default-type",
-            "actuated",
-        ]
-
-        logger.info(f"Running netconvert: {' '.join(cmd)}")
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=300,  # 5 minute timeout
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
         if result.stdout:
             logger.info(f"netconvert output:\n{result.stdout}")
@@ -618,21 +533,17 @@ def convert_to_sumo(network_id: str) -> dict:
             logger.warning(f"netconvert warnings:\n{result.stderr}")
 
         if result.returncode != 0:
-            raise RuntimeError(f"netconvert failed with code {result.returncode}: {result.stderr}")
+            raise RuntimeError(
+                f"netconvert failed with code {result.returncode}: {result.stderr}"
+            )
 
         logger.info(f"SUMO network created: {output_path}")
 
-        # Remove disconnected fragments (keep largest connected component)
-        _remove_disconnected_components(output_path, netconvert_path, osm_temp_path)
+        _remove_disconnected_components(output_path, netconvert_path, osm_path)
 
-        # Parse traffic lights from generated network
         tl_data = parse_sumo_traffic_lights(output_path)
-
-        # Create OSM to SUMO traffic light mapping
         osm_to_sumo_map = _match_osm_to_sumo_traffic_lights(
-            cached["intersections"],
-            tl_data["traffic_lights"],
-            output_path,
+            cached["intersections"], tl_data["traffic_lights"], output_path
         )
 
         return {
@@ -642,17 +553,12 @@ def convert_to_sumo(network_id: str) -> dict:
         }
 
     except subprocess.TimeoutExpired:
-        logger.error("netconvert timed out after 5 minutes")
+        logger.error("netconvert timed out")
         raise RuntimeError("netconvert timed out after 5 minutes")
 
     except FileNotFoundError:
-        logger.error("netconvert not found. Ensure SUMO is installed and in PATH")
+        logger.error("netconvert not found")
         raise RuntimeError("netconvert not found. Ensure SUMO is installed and SUMO_HOME is set")
-
-    finally:
-        # Clean up temporary OSM file
-        if os.path.exists(osm_temp_path):
-            os.unlink(osm_temp_path)
 
 
 def clear_cache() -> None:
@@ -665,17 +571,19 @@ def get_cached_network_ids() -> list[str]:
     """Get list of all cached network IDs."""
     return list(_network_cache.keys())
 
+
 def get_all_traffic_lights() -> list[dict]:
-    if not os.path.exists(TRAFFIC_LIGHT_PATH):
-        data = get_traffic_lights_by_point(lat=10.770487,lon=106.658213, radius=15000)
-    else:
-        with open(TRAFFIC_LIGHT_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            
-    if not os.path.exists(TRAFFIC_LIGHT_CLUSTERED_PATH):
-        cluster_traffic_light_file(TRAFFIC_LIGHT_PATH, TRAFFIC_LIGHT_CLUSTERED_PATH)
-    else:
+    """Return the clustered traffic light list from disk cache."""
+    if TRAFFIC_LIGHT_CLUSTERED_PATH.exists():
         with open(TRAFFIC_LIGHT_CLUSTERED_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            
-    return data
+            return json.load(f)
+
+    if TRAFFIC_LIGHT_PATH.exists():
+        logger.info("Building clustered TL cache from raw TL data…")
+        os.makedirs(str(CACHE_DIR), exist_ok=True)
+        cluster_traffic_light_file(str(TRAFFIC_LIGHT_PATH), str(TRAFFIC_LIGHT_CLUSTERED_PATH))
+        with open(TRAFFIC_LIGHT_CLUSTERED_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    logger.warning("No traffic light cache found — returning empty list")
+    return []
