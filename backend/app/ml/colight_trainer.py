@@ -49,7 +49,7 @@ class CoLightTrainer:
             gamma=0.95,
             epsilon_start=0.8,
             epsilon_min=0.01,
-            epsilon_decay=0.9995,
+            epsilon_decay=0.9999,
             grad_clip=5.0,
             buffer_size=5000,
             batch_size=64,
@@ -92,13 +92,26 @@ class CoLightTrainer:
             done = False
             info: dict = {}
 
+            ep_losses: list[float] = []
+            ep_q_abs: list[float] = []
+            per_tl_reward_sum = np.zeros(len(self.env.tl_ids), dtype=np.float64)
+            obs_min = float("inf")
+            obs_max = float("-inf")
+            action_counts = np.zeros(agent.num_actions, dtype=np.int64)
+
             while not done:
                 actions = agent.select_action(obs)  # [N]
+                for a in actions:
+                    action_counts[int(a)] += 1
+                obs_min = min(obs_min, float(np.min(obs)))
+                obs_max = max(obs_max, float(np.max(obs)))
+
                 next_obs, rewards, done, info = self.env.step(actions)
 
                 agent.remember(obs, actions, rewards, next_obs, float(done))
                 total_decisions += 1
                 episode_reward += float(np.mean(rewards))
+                per_tl_reward_sum += np.asarray(rewards, dtype=np.float64)
                 episode_steps += 1
 
                 loss = None
@@ -106,6 +119,12 @@ class CoLightTrainer:
                     if agent.can_train():
                         loss = agent.update(agent.sample_batch())
                         agent.decay_epsilon()
+                        if loss is not None:
+                            ep_losses.append(float(loss))
+                            with torch.no_grad():
+                                obs_t = torch.as_tensor(obs, dtype=torch.float32, device=agent.device)
+                                q = agent.q_network(obs_t, agent.adj_matrix)
+                                ep_q_abs.append(float(q.abs().mean().item()))
 
                 if total_decisions > learning_start and total_decisions % update_target_rate == 0:
                     agent.update_target_network()
@@ -116,11 +135,19 @@ class CoLightTrainer:
                 obs = next_obs
 
             self._episode_rewards.append(episode_reward)
+            mean_loss = float(np.mean(ep_losses)) if ep_losses else float("nan")
+            mean_q_abs = float(np.mean(ep_q_abs)) if ep_q_abs else float("nan")
+            per_tl_str = ",".join(f"{r:.0f}" for r in per_tl_reward_sum)
+            action_dist = action_counts / max(action_counts.sum(), 1)
+            action_dist_str = ",".join(f"{p:.2f}" for p in action_dist)
             logger.info(
                 f"Episode {episode + 1}/{num_episodes}: reward={episode_reward:.2f}, "
                 f"steps={episode_steps}, decisions={total_decisions}, "
                 f"epsilon={agent.epsilon:.4f}, "
-                f"buffer={len(agent.replay_buffer)}"
+                f"buffer={len(agent.replay_buffer)}, "
+                f"loss_mean={mean_loss:.2f}, q_abs_mean={mean_q_abs:.2f}, "
+                f"obs_range=[{obs_min:.3f},{obs_max:.3f}], "
+                f"action_dist=[{action_dist_str}], per_tl_reward=[{per_tl_str}]"
             )
 
             for cb in (callbacks or []):

@@ -31,7 +31,7 @@ class CoLightEnv:
         max_steps: int = 3600,
         steps_per_action: int = 10,
         yellow_time: int = 2,
-        vehicle_max: float = 1.0,
+        vehicle_max: float = 20.0,
         gui: bool = False,
         routes_path: str | None = None,
         scenario: str = "moderate",
@@ -79,10 +79,14 @@ class CoLightEnv:
     # ------------------------------------------------------------------
 
     def _build_graph(self) -> None:
-        """Build adjacency between selected TLs using sumolib.
+        """Build adjacency between selected TLs.
 
-        Port of LibSignal's build_index_intersection_map_sumo, scoped to
-        the selected tl_ids only.
+        Strategy: k-nearest-neighbors by Euclidean distance between junction
+        coordinates (k=min(4, N-1), bidirectional), UNIONED with any direct
+        SUMO road edges whose endpoints are both selected TLs. Sparse
+        SUMO-edge-only adjacency (the previous approach) left the graph near-
+        empty when selected TLs are separated by unsignalized junctions,
+        which collapsed CoLight's attention to self-loops and blocked learning.
         """
         sumo_home = os.environ.get("SUMO_HOME", "/usr/share/sumo")
         sumo_tools = os.path.join(sumo_home, "tools")
@@ -98,24 +102,74 @@ class CoLightEnv:
         def _strip_gs(node_id: str) -> str:
             return node_id[3:] if node_id.startswith("GS_") else node_id
 
-        sparse_adj: list[list[int]] = []
+        def _resolve_node(tl_id: str):
+            for candidate in (tl_id, f"GS_{tl_id}"):
+                try:
+                    return net.getNode(candidate)
+                except KeyError:
+                    continue
+            return None
+
+        edges: set[tuple[int, int]] = set()
+
+        # Pass 1: direct SUMO edges between selected TLs (preserve true road neighbors)
         for edge in net.getEdges():
             from_id = _strip_gs(edge.getFromNode().getID())
             to_id = _strip_gs(edge.getToNode().getID())
-            if from_id in self.node_id2idx and to_id in self.node_id2idx:
-                sparse_adj.append([self.node_id2idx[from_id], self.node_id2idx[to_id]])
+            if from_id in self.node_id2idx and to_id in self.node_id2idx and from_id != to_id:
+                edges.add((self.node_id2idx[from_id], self.node_id2idx[to_id]))
 
-        if sparse_adj:
-            self.edge_index = np.array(sparse_adj, dtype=np.int64).T
+        # Pass 2: k-NN by Euclidean distance between junction coordinates
+        n = len(self.tl_ids)
+        coords: list[tuple[float, float] | None] = []
+        for tl_id in self.tl_ids:
+            node = _resolve_node(tl_id)
+            coords.append(node.getCoord() if node is not None else None)
+
+        missing = [tl for tl, c in zip(self.tl_ids, coords) if c is None]
+        if missing:
+            logger.warning(
+                f"Could not resolve coordinates for {len(missing)} TL(s): {missing[:5]}. "
+                "k-NN graph will skip these nodes."
+            )
+
+        if n >= 2:
+            # k=2 chosen empirically: k=4 caused over-smoothing on sparse
+            # 8-TL networks (neighbors are physically close but not traffic-
+            # coupled via shared roads), which led to Q-value divergence.
+            k = min(2, n - 1)
+            for i in range(n):
+                ci = coords[i]
+                if ci is None:
+                    continue
+                xi, yi = ci
+                dists: list[tuple[float, int]] = []
+                for j in range(n):
+                    if i == j:
+                        continue
+                    cj = coords[j]
+                    if cj is None:
+                        continue
+                    xj, yj = cj
+                    dx, dy = xi - xj, yi - yj
+                    dists.append((dx * dx + dy * dy, j))
+                dists.sort()
+                for _, j in dists[:k]:
+                    edges.add((i, j))
+                    edges.add((j, i))
+
+        if edges:
+            self.edge_index = np.array(sorted(edges), dtype=np.int64).T
         else:
             self.edge_index = np.empty((2, 0), dtype=np.int64)
             logger.warning(
-                "No edges found between selected TLs — intersections are disconnected. "
+                "No edges built — intersections are disconnected. "
                 "Self-loops will be added by the attention layer."
             )
 
         logger.info(
-            f"Graph built: {len(self.tl_ids)} nodes, {self.edge_index.shape[1]} directed edges"
+            f"Graph built: {len(self.tl_ids)} nodes, {self.edge_index.shape[1]} directed edges "
+            f"(k-NN k={min(4, max(n - 1, 0))} + direct SUMO edges)"
         )
 
     # ------------------------------------------------------------------
@@ -175,6 +229,9 @@ class CoLightEnv:
         traci = _get_traci()
         conn = self._get_conn()
 
+        kept_tl_ids: list[str] = []
+        skipped_single_phase: list[str] = []
+
         for tl_id in self.tl_ids:
             # Deduplicated controlled lanes (same as V1 environment.py:207-214)
             raw_lanes = list(conn.trafficlight.getControlledLanes(tl_id))
@@ -184,7 +241,6 @@ class CoLightEnv:
                 if lane not in seen:
                     seen.add(lane)
                     unique_lanes.append(lane)
-            self._controlled_lanes[tl_id] = unique_lanes
 
             # Extract green phases (same as V1 environment.py:221-227)
             logics = conn.trafficlight.getAllProgramLogics(tl_id)
@@ -192,6 +248,13 @@ class CoLightEnv:
             green_phase_objects = [p for p in phases if "G" in p.state or "g" in p.state]
             if not green_phase_objects:
                 green_phase_objects = list(phases) if phases else []
+
+            # Skip TLs with <= 1 green phase: no decision space, only adds reward noise
+            if len(green_phase_objects) <= 1:
+                skipped_single_phase.append(tl_id)
+                continue
+
+            self._controlled_lanes[tl_id] = unique_lanes
 
             # Create yellows
             full_phases, yellow_dict = self._create_yellows_for_tl(tl_id, green_phase_objects)
@@ -208,6 +271,7 @@ class CoLightEnv:
 
             # Initialize counters
             self._current_green_idx[tl_id] = 0
+            kept_tl_ids.append(tl_id)
 
             logger.info(
                 f"TL {tl_id}: {len(unique_lanes)} lanes, "
@@ -215,6 +279,20 @@ class CoLightEnv:
                 f"{len(yellow_dict)} yellow transitions, "
                 f"{len(full_phases)} total phases"
             )
+
+        if skipped_single_phase:
+            logger.warning(
+                f"Skipped {len(skipped_single_phase)} TL(s) with <=1 green phase "
+                f"(no decision space): {skipped_single_phase}"
+            )
+
+        if not kept_tl_ids:
+            raise RuntimeError(
+                "All selected TLs have <=1 green phase; nothing to train. "
+                "Pick junctions with multi-phase signals."
+            )
+
+        self.tl_ids = kept_tl_ids
 
         # Compute observation / action dimensions
         # LibSignal CoLight observation = lane vehicle counts only (phase=False)
