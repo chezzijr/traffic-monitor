@@ -155,6 +155,7 @@ class MultiAgentTrafficLightEnvV2:
             "--no-step-log", "true",
             "--waiting-time-memory", "1000",
             "--no-warnings", "true",
+            "--ignore-route-errors", "true",
         ]
         if seed is not None:
             sumo_cmd.extend(["--seed", str(seed)])

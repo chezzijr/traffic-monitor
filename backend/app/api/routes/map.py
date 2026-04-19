@@ -131,26 +131,28 @@ def convert_to_sumo(network_id: str) -> ConvertToSumoResponse:
                     continue
                 seen_tl_ids.add(tl_id)
 
-                osm_ids = sumo_to_osm_ids.get(tl_id, [])
-                # Resolve canonical OSM intersection defensively: the mapping
-                # could reference an osm_id not in `intersections` if the
-                # in-memory cache was rebuilt between match and save.
-                canonical = None
-                for oid in osm_ids:
-                    canonical = osm_by_id.get(oid)
-                    if canonical is not None:
-                        break
-
-                if canonical is not None:
-                    lat, lon, junction_id = canonical["lat"], canonical["lon"], canonical["id"]
-                elif boundary is not None:
-                    lon, lat = osm_service.sumo_xy_to_lonlat(
-                        sumo_tl.get("x", 0.0), sumo_tl.get("y", 0.0), boundary
-                    )
+                # Primary: reverse-project SUMO junction x/y — each TL has a
+                # unique SUMO coord, so no two TLs collide at the same dot.
+                # OSM-member canonical coord was previously used, but distinct
+                # SUMO TLs resolving to a shared OSM neighbour caused visual
+                # duplicates on the map (Issue A).
+                x, y = sumo_tl.get("x", 0.0), sumo_tl.get("y", 0.0)
+                if boundary is not None and (x, y) != (0.0, 0.0):
+                    lon, lat = osm_service.sumo_xy_to_lonlat(x, y, boundary)
                     junction_id = tl_id
                 else:
-                    skipped_no_coord.append(tl_id)
-                    continue
+                    # Fallback: first matching OSM member (rare: tlLogics that
+                    # parse_sumo_traffic_lights couldn't resolve to a junction).
+                    canonical = None
+                    for oid in sumo_to_osm_ids.get(tl_id, []):
+                        canonical = osm_by_id.get(oid)
+                        if canonical is not None:
+                            break
+                    if canonical is not None:
+                        lat, lon, junction_id = canonical["lat"], canonical["lon"], canonical["id"]
+                    else:
+                        skipped_no_coord.append(tl_id)
+                        continue
 
                 junctions.append({
                     "id": junction_id,

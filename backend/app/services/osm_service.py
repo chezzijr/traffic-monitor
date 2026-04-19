@@ -34,7 +34,42 @@ COORD_MATCH_THRESHOLD_DEG = 0.002
 
 # Bump this whenever netconvert flags change to invalidate cached .net.xml.
 # Written as sentinel file {network_id}.netconvert_v alongside .net.xml.
-NETCONVERT_CONFIG_VERSION = 2
+NETCONVERT_CONFIG_VERSION = 3
+
+# Netconvert flag set shared by the primary convert and the disconnected-
+# component cleanup re-run. Keeping it in one place prevents drift (seen
+# historically: cleanup re-run rediscovered TLs with default threshold and
+# dropped 25+ TLs that only the tuned threshold detected).
+NETCONVERT_COMMON_FLAGS = [
+    "--geometry.remove", "true",
+    "--roundabouts.guess", "true",
+    "--ramps.guess", "true",
+    "--junctions.join", "true",
+    "--tls.guess", "true",
+    # Default threshold (69.44 m/s combined arm speed) skips HCMC urban
+    # signalized junctions where per-arm speeds are 40-50 km/h. 45 m/s
+    # catches them without phantom-tagging residential intersections.
+    "--tls.guess.threshold", "45",
+    # Honor OSM `highway=traffic_signals` placed on approach edges (common
+    # Vietnamese convention; --tls.guess alone only looks at junction nodes).
+    "--tls.guess-signals", "true",
+    "--tls.guess-signals.dist", "40",
+    "--tls.guess-signals.slack", "1",
+    # Drop pass-through "TLs" that control a single straight flow.
+    "--tls.discard-simple", "true",
+    "--tls.join", "true",
+    # Merge cross-median dual-carriageway TLs (common on HCMC boulevards like
+    # CMT8). Default 20m leaves 25-32m pairs unmerged, causing asymmetric RL
+    # control of the same physical intersection.
+    "--tls.join-dist", "40",
+    "--edges.join", "true",
+    "--no-turnarounds.tls", "true",
+    "--remove-edges.by-type",
+    "highway.footway,highway.pedestrian,highway.steps,highway.cycleway,highway.path",
+    "--offset.disable-normalization", "true",
+    "--proj.utm", "true",
+    "--tls.default-type", "actuated",
+]
 
 # Regex for extracting OSM node IDs embedded in SUMO joined/cluster junction IDs.
 # SUMO patterns: cluster_<id>_<id>_..._#Nmore, joinedS_<id>_<id>, joinedG_<id>_<id>,
@@ -345,10 +380,14 @@ def parse_sumo_traffic_lights(net_xml_path: Path) -> dict:
         logger.error(f"Failed to parse SUMO network XML: {e}")
         return {"traffic_lights": []}
 
+    # Index every junction's coords so tlLogic → junction lookup always
+    # succeeds. With --tls.join, joined TL controllers may reference junctions
+    # whose type isn't literally "traffic_light"; filtering to that type left
+    # such tlLogics at (0,0) and collapsed them onto the SW bbox corner.
     junction_coords: dict[str, tuple[float, float]] = {}
     for junction in root.findall(".//junction"):
         jid = junction.get("id")
-        if jid and junction.get("type") == "traffic_light":
+        if jid:
             junction_coords[jid] = (
                 float(junction.get("x", 0)),
                 float(junction.get("y", 0)),
@@ -360,14 +399,52 @@ def parse_sumo_traffic_lights(net_xml_path: Path) -> dict:
         if tl_id is None:
             continue
         tl_type = tl_logic.get("type", "static")
-        canonical_id = tl_id[3:] if tl_id.startswith("GS_") else tl_id
-        x, y = junction_coords.get(tl_id) or junction_coords.get(canonical_id, (0.0, 0.0))
+
+        # Resolve tlLogic → (x, y). Four tiers:
+        # 1. Direct junction match (plain numeric ids).
+        # 2. `GS_<id>` → strip prefix → match underlying junction.
+        # 3. `joinedS_A_B_..._#Nmore` / `cluster_A_B_...` — synthetic controller
+        #    id with no junction counterpart. Centroid member OSM node coords.
+        # 4. Nested case `joinedS_cluster_A_B_cluster_C_D` — tier 3 extracts
+        #    raw numeric ids that don't match; scan junctions whose id is a
+        #    substring of the tlLogic id (picks up inner `cluster_A_B`).
+        xy = junction_coords.get(tl_id)
+        if xy is None and tl_id.startswith("GS_"):
+            xy = junction_coords.get(tl_id[3:])
+        if xy is None:
+            member_ids = _extract_member_osm_ids(tl_id)
+            member_xys = [junction_coords[m] for m in member_ids if m in junction_coords]
+            if member_xys:
+                xy = (
+                    sum(p[0] for p in member_xys) / len(member_xys),
+                    sum(p[1] for p in member_xys) / len(member_xys),
+                )
+        if xy is None:
+            # Only look at structured compound ids (cluster_X_Y, joinedS_X_Y).
+            # Restricting the scan avoids plain numeric junction ids matching
+            # as incidental substrings of longer numeric sequences (e.g.
+            # junction "1234567" matching tlLogic "joinedS_12345678_...").
+            substring_xys = [
+                junction_coords[jid]
+                for jid in junction_coords
+                if (jid.startswith("cluster_") or jid.startswith("joinedS_"))
+                and jid in tl_id
+                and jid != tl_id
+            ]
+            if substring_xys:
+                xy = (
+                    sum(p[0] for p in substring_xys) / len(substring_xys),
+                    sum(p[1] for p in substring_xys) / len(substring_xys),
+                )
+        if xy is None:
+            logger.warning(f"No junction coord found for tlLogic {tl_id}; coord (0,0)")
+            xy = (0.0, 0.0)
 
         phases = [
             {"duration": int(p.get("duration", 0)), "state": p.get("state", "")}
             for p in tl_logic.findall("phase")
         ]
-        traffic_lights.append({"id": tl_id, "x": x, "y": y, "type": tl_type, "phases": phases})
+        traffic_lights.append({"id": tl_id, "x": xy[0], "y": xy[1], "type": tl_type, "phases": phases})
 
     logger.info(f"Parsed {len(traffic_lights)} traffic lights from SUMO network")
     return {"traffic_lights": traffic_lights}
@@ -571,19 +648,7 @@ def _remove_disconnected_components(net_path: Path, netconvert_path: str, osm_pa
         netconvert_path,
         "--osm-files", osm_path,
         "--output-file", str(net_path),
-        "--geometry.remove", "true",
-        "--roundabouts.guess", "true",
-        "--ramps.guess", "true",
-        "--junctions.join", "true",
-        "--tls.guess", "true",
-        "--tls.join", "true",
-        "--edges.join", "true",
-        "--no-turnarounds.tls", "true",
-        "--remove-edges.by-type",
-        "highway.footway,highway.pedestrian,highway.steps,highway.cycleway,highway.path",
-        "--offset.disable-normalization", "true",
-        "--proj.utm", "true",
-        "--tls.default-type", "actuated",
+        *NETCONVERT_COMMON_FLAGS,
         "--remove-edges.explicit", ",".join(edges_to_remove),
     ]
     # Netconvert overwrites net_path in-place. If it crashes mid-write, the
@@ -713,27 +778,7 @@ def _convert_to_sumo_locked(network_id: str) -> dict:
         netconvert_path,
         "--osm-files", osm_path,
         "--output-file", str(output_path),
-        "--geometry.remove", "true",
-        "--roundabouts.guess", "true",
-        "--ramps.guess", "true",
-        "--junctions.join", "true",
-        "--tls.guess", "true",
-        # Honor OSM `highway=traffic_signals` nodes placed on approach edges
-        # (common Vietnamese OSM convention; otherwise netconvert's --tls.guess
-        # only detects by junction geometry and misses most signalized nodes).
-        "--tls.guess-signals", "true",
-        "--tls.guess-signals.dist", "40",
-        "--tls.guess-signals.slack", "1",
-        # Drop pass-through "TLs" that control a single straight flow.
-        "--tls.discard-simple", "true",
-        "--tls.join", "true",
-        "--edges.join", "true",
-        "--no-turnarounds.tls", "true",
-        "--remove-edges.by-type",
-        "highway.footway,highway.pedestrian,highway.steps,highway.cycleway,highway.path",
-        "--offset.disable-normalization", "true",
-        "--proj.utm", "true",
-        "--tls.default-type", "actuated",
+        *NETCONVERT_COMMON_FLAGS,
     ]
 
     logger.info(f"Running netconvert: {' '.join(cmd)}")
