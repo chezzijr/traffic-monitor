@@ -117,6 +117,21 @@ def _atomic_write_text(path: Path, content: str) -> None:
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
+# Fallback mirrors when the primary endpoint returns 4xx/5xx.
+OVERPASS_MIRRORS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+]
+
+# Overpass' Apache layer returns 406/504 for requests carrying the default
+# `python-requests/x.y.z` User-Agent under load. A descriptive UA + explicit
+# Accept header gets served reliably.
+OVERPASS_HEADERS = {
+    "User-Agent": "traffic-monitor/1.0 (SUMO research; +https://github.com/chezzijr)",
+    "Accept": "application/osm3s+xml, text/xml, */*",
+}
+
 # Highway types that vehicles can drive on (used for intersection detection)
 DRIVEABLE_HIGHWAY_TYPES = {
     "motorway", "trunk", "primary", "secondary", "tertiary",
@@ -181,19 +196,38 @@ def _download_osm_highway(
         f"out body;"
     )
     logger.info(f"Overpass QL query for bbox ({south:.5f},{west:.5f},{north:.5f},{east:.5f})")
-    resp = requests.post(
-        OVERPASS_URL,
-        data={"data": query},
-        timeout=timeout + 15,
-        stream=True,
-    )
-    resp.raise_for_status()
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "wb") as fh:
-        for chunk in resp.iter_content(chunk_size=65536):
-            fh.write(chunk)
-    size_kb = output_path.stat().st_size >> 10
-    logger.info(f"Overpass download complete: {size_kb} KB → {output_path}")
+    import time as _time
+    last_err: Exception | None = None
+    for attempt, url in enumerate(OVERPASS_MIRRORS):
+        try:
+            resp = requests.post(
+                url,
+                data={"data": query},
+                headers=OVERPASS_HEADERS,
+                timeout=timeout + 15,
+                stream=True,
+            )
+            if resp.status_code in (429, 504) or 500 <= resp.status_code < 600:
+                logger.warning(f"Overpass mirror {url} returned {resp.status_code}; trying next")
+                last_err = requests.HTTPError(f"{resp.status_code} from {url}")
+                _time.sleep(2 ** attempt)  # 1s, 2s, 4s backoff
+                continue
+            resp.raise_for_status()
+            with open(output_path, "wb") as fh:
+                for chunk in resp.iter_content(chunk_size=65536):
+                    fh.write(chunk)
+            size_kb = output_path.stat().st_size >> 10
+            logger.info(f"Overpass download complete: {size_kb} KB ← {url}")
+            return
+        except requests.exceptions.RequestException as err:
+            logger.warning(f"Overpass mirror {url} failed: {err}; trying next")
+            last_err = err
+            _time.sleep(2 ** attempt)
+    if last_err is not None:
+        raise last_err
+    raise RuntimeError("All Overpass mirrors exhausted with no specific error")
 
 
 def _parse_osm_intersections(
