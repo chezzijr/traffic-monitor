@@ -103,23 +103,68 @@ def convert_to_sumo(network_id: str) -> ConvertToSumoResponse:
             )
             for tl in result["traffic_lights"]
         ]
-        # Save network metadata with junction data
+        # Save network metadata with junction data (one entry per SUMO TL).
+        # Narrowed to expected failure modes; unexpected errors bubble up so
+        # the client doesn't see 201 Created while metadata silently fails.
         try:
             intersections = osm_service.get_intersections(network_id)
             bbox_tuple = osm_service.get_network_bbox(network_id)
-            osm_sumo_map = result["osm_to_sumo_tl_map"]
+            osm_sumo_map: dict[str, str] = result["osm_to_sumo_tl_map"]
+            sumo_tls = result["traffic_lights"]
+
+            # Invert osm→sumo map to sumo→[osm ids] so each tl_id picks a
+            # canonical representative OSM intersection for its coord.
+            sumo_to_osm_ids: dict[str, list[str]] = {}
+            for osm_id, tl_id in osm_sumo_map.items():
+                sumo_to_osm_ids.setdefault(tl_id, []).append(osm_id)
+            osm_by_id = {inter["id"]: inter for inter in intersections}
+
+            # Reverse-projection boundary for SUMO TLs with no OSM match.
+            boundary = osm_service._parse_sumo_boundary(Path(result["network_path"]))
 
             junctions = []
-            for inter in intersections:
-                if inter.get("has_traffic_light"):
-                    tl_id = osm_sumo_map.get(inter["id"])
-                    if tl_id:
-                        junctions.append({
-                            "id": inter["id"],
-                            "lat": inter["lat"],
-                            "lon": inter["lon"],
-                            "tl_id": tl_id,
-                        })
+            seen_tl_ids: set[str] = set()
+            skipped_no_coord: list[str] = []
+            for sumo_tl in sumo_tls:
+                tl_id = sumo_tl["id"]
+                if tl_id in seen_tl_ids:
+                    continue
+                seen_tl_ids.add(tl_id)
+
+                osm_ids = sumo_to_osm_ids.get(tl_id, [])
+                # Resolve canonical OSM intersection defensively: the mapping
+                # could reference an osm_id not in `intersections` if the
+                # in-memory cache was rebuilt between match and save.
+                canonical = None
+                for oid in osm_ids:
+                    canonical = osm_by_id.get(oid)
+                    if canonical is not None:
+                        break
+
+                if canonical is not None:
+                    lat, lon, junction_id = canonical["lat"], canonical["lon"], canonical["id"]
+                elif boundary is not None:
+                    lon, lat = osm_service.sumo_xy_to_lonlat(
+                        sumo_tl.get("x", 0.0), sumo_tl.get("y", 0.0), boundary
+                    )
+                    junction_id = tl_id
+                else:
+                    skipped_no_coord.append(tl_id)
+                    continue
+
+                junctions.append({
+                    "id": junction_id,
+                    "lat": lat,
+                    "lon": lon,
+                    "tl_id": tl_id,
+                })
+
+            if skipped_no_coord:
+                logger.error(
+                    f"Dropped {len(skipped_no_coord)} SUMO TL(s) from metadata "
+                    f"(no OSM match and boundary unavailable): "
+                    f"{skipped_no_coord[:10]}{'…' if len(skipped_no_coord) > 10 else ''}"
+                )
 
             if bbox_tuple:
                 s, w, n, e = bbox_tuple
@@ -131,8 +176,8 @@ def convert_to_sumo(network_id: str) -> ConvertToSumoResponse:
                     junctions=junctions,
                     road_count=len(intersections),
                 )
-        except Exception as e:
-            logger.warning(f"Failed to save network metadata: {e}")
+        except (KeyError, OSError) as e:
+            logger.warning(f"Failed to save network metadata for {network_id}: {e}", exc_info=True)
 
         return ConvertToSumoResponse(
             sumo_network_path=result["network_path"],

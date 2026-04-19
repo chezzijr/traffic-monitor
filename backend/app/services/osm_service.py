@@ -27,8 +27,58 @@ CACHE_DIR = Path(__file__).parent.parent.parent.parent / "cache"
 TRAFFIC_LIGHT_PATH = CACHE_DIR / "all_traffic_light.json"
 TRAFFIC_LIGHT_CLUSTERED_PATH = CACHE_DIR / "traffic_light_clustered.json"
 
-# Distance threshold for OSM-to-SUMO coordinate matching (~100m at equator)
-COORD_MATCH_THRESHOLD_DEG = 0.001
+# Distance threshold for OSM-to-SUMO coordinate matching (~200m at equator).
+# Joined junction centroids can sit 40-80m from any component OSM node; bump to
+# tolerate that drift when coord fallback is needed.
+COORD_MATCH_THRESHOLD_DEG = 0.002
+
+# Bump this whenever netconvert flags change to invalidate cached .net.xml.
+# Written as sentinel file {network_id}.netconvert_v alongside .net.xml.
+NETCONVERT_CONFIG_VERSION = 2
+
+# Regex for extracting OSM node IDs embedded in SUMO joined/cluster junction IDs.
+# SUMO patterns: cluster_<id>_<id>_..._#Nmore, joinedS_<id>_<id>, joinedG_<id>_<id>,
+# GS_<id> (guessed signal). Bare numeric ids are also valid.
+import re as _re
+import fcntl as _fcntl
+from contextlib import contextmanager as _contextmanager
+_SUMO_ID_DIGITS_RE = _re.compile(r"\d+")
+
+
+@_contextmanager
+def _convert_network_lock(network_id: str):
+    """Cross-process exclusive lock on a per-network sidecar file.
+
+    FastAPI uvicorn workers and the Celery worker process share
+    simulation/networks/ via a Docker volume. threading.Lock only protects one
+    process; fcntl.flock on a sentinel file serializes across them.
+    """
+    SIMULATION_NETWORKS_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = SIMULATION_NETWORKS_DIR / f"{network_id}.convert.lock"
+    fh = open(lock_path, "w")
+    try:
+        _fcntl.flock(fh.fileno(), _fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            _fcntl.flock(fh.fileno(), _fcntl.LOCK_UN)
+        finally:
+            fh.close()
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Write `content` to `path` via temp-file + os.replace so readers never see
+    a partial write. Cleans the temp file on any failure so `.tmp` does not leak."""
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp_path.write_text(content)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
@@ -323,66 +373,146 @@ def parse_sumo_traffic_lights(net_xml_path: Path) -> dict:
     return {"traffic_lights": traffic_lights}
 
 
-def _match_osm_to_sumo_traffic_lights(
-    intersections: list[dict],
-    sumo_traffic_lights: list[dict],
-    net_xml_path: Path,
-) -> dict[str, str]:
-    """Map OSM intersection IDs to SUMO traffic light IDs via coordinate matching."""
+def _parse_sumo_boundary(net_xml_path: Path) -> tuple[float, float, float, float, float, float] | None:
+    """Return (orig_west, orig_south, conv_west, conv_south, lon_scale, lat_scale) or None.
+
+    Tuple layout is used by `sumo_xy_to_lonlat` and `_match_osm_to_sumo_traffic_lights`
+    — do not reorder without updating both callers.
+    """
     try:
         tree = ET.parse(net_xml_path)
         root = tree.getroot()
         location = root.find(".//location")
         if location is None:
             logger.warning("No location element in SUMO network")
-            return {}
+            return None
 
         orig_parts = location.get("origBoundary", "").split(",")
         conv_parts = location.get("convBoundary", "").split(",")
         if len(orig_parts) != 4 or len(conv_parts) != 4:
             logger.warning("Invalid boundary format in SUMO network")
-            return {}
+            return None
 
         orig_west, orig_south, orig_east, orig_north = map(float, orig_parts)
         conv_west, conv_south, conv_east, conv_north = map(float, conv_parts)
     except (ET.ParseError, ValueError) as e:
         logger.error(f"Failed to parse SUMO network location: {e}")
-        return {}
+        return None
 
     lon_scale = (orig_east - orig_west) / (conv_east - conv_west) if conv_east != conv_west else 1.0
     lat_scale = (orig_north - orig_south) / (conv_north - conv_south) if conv_north != conv_south else 1.0
+    # Stash conv origin in orig-tuple via closure: callers need both.
+    return (orig_west, orig_south, conv_west, conv_south, lon_scale, lat_scale)
+
+
+def sumo_xy_to_lonlat(x: float, y: float, boundary: tuple) -> tuple[float, float]:
+    """Reverse-project SUMO UTM-ish x/y back to (lon, lat) via boundary scaling."""
+    orig_west, orig_south, conv_west, conv_south, lon_scale, lat_scale = boundary
+    lon = orig_west + (x - conv_west) * lon_scale
+    lat = orig_south + (y - conv_south) * lat_scale
+    return lon, lat
+
+
+def _extract_member_osm_ids(sumo_id: str) -> list[str]:
+    """Extract member OSM node IDs embedded in a SUMO junction/tlLogic ID.
+
+    Filters tokens shorter than 5 digits (e.g. the `7` in `_#7more` cluster
+    suffix) since real OSM node IDs are always ≥ 5 digits.
+
+    Examples:
+      '411918637'                                → ['411918637']
+      'cluster_11804018784_2393618251_#7more'    → ['11804018784', '2393618251']
+      'joinedS_12923547870_411926052'            → ['12923547870', '411926052']
+      'GS_411918637'                             → ['411918637']
+    """
+    return [d for d in _SUMO_ID_DIGITS_RE.findall(sumo_id) if len(d) >= 5]
+
+
+def _match_osm_to_sumo_traffic_lights(
+    intersections: list[dict],
+    sumo_traffic_lights: list[dict],
+    net_xml_path: Path,
+) -> dict[str, str]:
+    """Map OSM intersection IDs → SUMO traffic light IDs.
+
+    Strategy (in order of preference):
+    1. **ID-based parse**: SUMO preserves OSM node IDs inside joined/cluster names.
+       Extract every numeric token from the SUMO ID; any token present in
+       `intersections` → many-to-one mapping (multiple OSM nodes back one SUMO TL).
+    2. **Coord-based fallback** (only for SUMO TLs with zero ID matches, e.g.
+       pure guessed signals): nearest OSM intersection within COORD_MATCH_THRESHOLD_DEG.
+       No first-come-first-serve gate — each OSM intersection can back multiple
+       SUMO TLs (valid for complex junctions).
+
+    The returned map is osm_id → sumo_tl_id. Flips `has_traffic_light=True` on
+    every matched intersection in place.
+    """
+    osm_id_set = {inter["id"] for inter in intersections}
 
     osm_to_sumo_map: dict[str, str] = {}
+    id_matched_sumo_tls: set[str] = set()
 
+    # Phase 1: ID-based parsing
     for sumo_tl in sumo_traffic_lights:
-        approx_lon = orig_west + (sumo_tl["x"] - conv_west) * lon_scale
-        approx_lat = orig_south + (sumo_tl["y"] - conv_south) * lat_scale
+        tl_id = sumo_tl["id"]
+        members = _extract_member_osm_ids(tl_id)
+        hits = [m for m in members if m in osm_id_set]
+        if hits:
+            id_matched_sumo_tls.add(tl_id)
+            for osm_id in hits:
+                # First SUMO TL wins; later TLs overwrite only if this osm_id
+                # not yet claimed. Avoids silent drops — still logs all hits.
+                osm_to_sumo_map.setdefault(osm_id, tl_id)
+            logger.debug(f"ID-match SUMO {tl_id} ← OSM {hits}")
 
-        best_match = None
-        best_dist = float("inf")
+    # Phase 2: Coord fallback for SUMO TLs that failed ID parse (guessed, etc.)
+    unmatched = [tl for tl in sumo_traffic_lights if tl["id"] not in id_matched_sumo_tls]
+    if unmatched:
+        boundary = _parse_sumo_boundary(net_xml_path)
+        if boundary is not None:
+            orig_west, orig_south, conv_west, conv_south, lon_scale, lat_scale = boundary
+            for sumo_tl in unmatched:
+                approx_lon = orig_west + (sumo_tl["x"] - conv_west) * lon_scale
+                approx_lat = orig_south + (sumo_tl["y"] - conv_south) * lat_scale
 
-        for inter in intersections:
-            if inter["id"] in osm_to_sumo_map:
-                continue
-            dist = math.sqrt(
-                (inter["lat"] - approx_lat) ** 2 + (inter["lon"] - approx_lon) ** 2
-            )
-            if dist < best_dist:
-                best_dist = dist
-                best_match = inter
+                best_match = None
+                best_dist = float("inf")
+                for inter in intersections:
+                    dist = math.sqrt(
+                        (inter["lat"] - approx_lat) ** 2
+                        + (inter["lon"] - approx_lon) ** 2
+                    )
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_match = inter
 
-        if best_match and best_dist < COORD_MATCH_THRESHOLD_DEG:
-            osm_to_sumo_map[best_match["id"]] = sumo_tl["id"]
-            logger.debug(
-                f"Matched OSM {best_match['id']} → SUMO {sumo_tl['id']} (dist {best_dist:.6f})"
-            )
+                if best_match and best_dist < COORD_MATCH_THRESHOLD_DEG:
+                    osm_to_sumo_map.setdefault(best_match["id"], sumo_tl["id"])
+                    logger.debug(
+                        f"Coord-match SUMO {sumo_tl['id']} ← OSM {best_match['id']} "
+                        f"(dist {best_dist:.6f})"
+                    )
 
-    matched_ids = set(osm_to_sumo_map.keys())
+    # Flip has_traffic_light on matched intersections
     for inter in intersections:
-        if inter["id"] in matched_ids:
+        if inter["id"] in osm_to_sumo_map:
             inter["has_traffic_light"] = True
 
-    logger.info(f"Matched {len(osm_to_sumo_map)} OSM intersections to SUMO traffic lights")
+    matched_sumo_ids = set(osm_to_sumo_map.values())
+    matched_sumo_count = len(matched_sumo_ids)
+    total_sumo = len(sumo_traffic_lights)
+    logger.info(
+        f"Matched {len(osm_to_sumo_map)} OSM intersections to "
+        f"{matched_sumo_count}/{total_sumo} SUMO traffic lights "
+        f"(id-phase {len(id_matched_sumo_tls)}, coord-phase {matched_sumo_count - len(id_matched_sumo_tls)})"
+    )
+    if matched_sumo_count < total_sumo:
+        dropped = [tl["id"] for tl in sumo_traffic_lights if tl["id"] not in matched_sumo_ids]
+        logger.warning(
+            f"{len(dropped)} SUMO TL(s) unmapped to OSM nodes "
+            f"(will still appear in junction list via coord reverse-projection): "
+            f"{dropped[:10]}{'…' if len(dropped) > 10 else ''}"
+        )
     return osm_to_sumo_map
 
 
@@ -456,20 +586,50 @@ def _remove_disconnected_components(net_path: Path, netconvert_path: str, osm_pa
         "--tls.default-type", "actuated",
         "--remove-edges.explicit", ",".join(edges_to_remove),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-    if result.returncode != 0:
-        logger.warning(f"netconvert re-run failed: {result.stderr}")
-    else:
-        logger.info(f"Network cleaned: removed {len(edges_to_remove)} disconnected edges")
+    # Netconvert overwrites net_path in-place. If it crashes mid-write, the
+    # multi-component original is gone and we're left with a truncated file.
+    # Back it up so we can restore the already-valid multi-component network.
+    backup_path = net_path.with_suffix(net_path.suffix + ".bak")
+    try:
+        import shutil
+        shutil.copy2(net_path, backup_path)
+    except OSError as err:
+        logger.warning(f"Could not back up {net_path} before cleanup: {err}")
+        backup_path = None  # type: ignore[assignment]
 
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except (subprocess.TimeoutExpired, OSError) as err:
+        logger.error(f"netconvert disconnected-cleanup crashed: {err}")
+        if backup_path and backup_path.exists():
+            os.replace(backup_path, net_path)
+            logger.info(f"Restored {net_path} from backup")
+        return -1
+
+    if result.returncode != 0:
+        logger.error(f"netconvert disconnected-cleanup failed: {result.stderr}")
+        if backup_path and backup_path.exists():
+            os.replace(backup_path, net_path)
+            logger.info(f"Restored {net_path} from backup")
+        return -1
+
+    # Success: drop backup.
+    if backup_path and backup_path.exists():
+        try:
+            backup_path.unlink()
+        except OSError:
+            pass
+    logger.info(f"Network cleaned: removed {len(edges_to_remove)} disconnected edges")
     return len(edges_to_remove)
 
 
 def convert_to_sumo(network_id: str) -> dict:
     """Convert cached OSM network to SUMO format using netconvert.
 
-    The raw .osm file saved during extract_network() is fed directly to
-    netconvert — no OSMnx graph re-serialization step.
+    Serializes concurrent callers per network_id so netconvert never writes the
+    same .net.xml twice in parallel. The raw .osm file saved during
+    extract_network() is fed directly to netconvert — no OSMnx graph
+    re-serialization step.
 
     Returns:
         Dict with network_path, traffic_lights, osm_to_sumo_tl_map
@@ -477,21 +637,67 @@ def convert_to_sumo(network_id: str) -> dict:
     if network_id not in _network_cache:
         raise KeyError(f"Network '{network_id}' not found in cache. Extract the network first.")
 
+    with _convert_network_lock(network_id):
+        return _convert_to_sumo_locked(network_id)
+
+
+def _convert_to_sumo_locked(network_id: str) -> dict:
     SIMULATION_NETWORKS_DIR.mkdir(parents=True, exist_ok=True)
     output_path = SIMULATION_NETWORKS_DIR / f"{network_id}.net.xml"
+    version_path = SIMULATION_NETWORKS_DIR / f"{network_id}.netconvert_v"
     cached = _network_cache[network_id]
 
+    def _cached_version_matches() -> bool:
+        if not version_path.exists():
+            return False
+        try:
+            return version_path.read_text().strip() == str(NETCONVERT_CONFIG_VERSION)
+        except OSError as err:
+            logger.warning(f"Unreadable netconvert version sentinel {version_path}: {err}")
+            return False
+
+    if output_path.exists() and _cached_version_matches():
+        logger.info(f"SUMO network already exists (v{NETCONVERT_CONFIG_VERSION}): {output_path}")
+        try:
+            tl_data = parse_sumo_traffic_lights(output_path)
+        except (ET.ParseError, OSError) as err:
+            logger.warning(f"Cached .net.xml unreadable ({err}); falling through to rebuild")
+        else:
+            osm_to_sumo_map = _match_osm_to_sumo_traffic_lights(
+                cached["intersections"], tl_data["traffic_lights"], output_path
+            )
+            return {
+                "network_path": str(output_path),
+                "traffic_lights": tl_data["traffic_lights"],
+                "osm_to_sumo_tl_map": osm_to_sumo_map,
+            }
+
     if output_path.exists():
-        logger.info(f"SUMO network already exists: {output_path}")
-        tl_data = parse_sumo_traffic_lights(output_path)
-        osm_to_sumo_map = _match_osm_to_sumo_traffic_lights(
-            cached["intersections"], tl_data["traffic_lights"], output_path
+        logger.info(
+            f"Rebuilding .net.xml for {network_id}: netconvert config version "
+            f"changed (on-disk → {NETCONVERT_CONFIG_VERSION})"
         )
-        return {
-            "network_path": str(output_path),
-            "traffic_lights": tl_data["traffic_lights"],
-            "osm_to_sumo_tl_map": osm_to_sumo_map,
-        }
+        # Route files reference edges from the previous .net.xml; edge IDs can
+        # change when netconvert flags change, which makes cached routes stale
+        # (SUMO errors "edge 'X' is not known"). Drop them so route_service
+        # regenerates on next training run.
+        # Glob is anchored with an explicit separator to avoid matching a
+        # different network whose id happens to share the 16-hex prefix.
+        stale_routes = (
+            list(SIMULATION_NETWORKS_DIR.glob(f"{network_id}_*.rou.xml"))
+            + list(SIMULATION_NETWORKS_DIR.glob(f"{network_id}.rou.xml"))
+            + list(SIMULATION_NETWORKS_DIR.glob(f"{network_id}_*.rou.alt.xml"))
+            + list(SIMULATION_NETWORKS_DIR.glob(f"{network_id}.rou.alt.xml"))
+            + list(SIMULATION_NETWORKS_DIR.glob(f"{network_id}_*.trips.xml"))
+            + list(SIMULATION_NETWORKS_DIR.glob(f"{network_id}.trips.xml"))
+        )
+        for p in stale_routes:
+            try:
+                p.unlink()
+            except OSError as err:
+                logger.warning(f"Failed to remove stale route file {p}: {err}")
+        if stale_routes:
+            logger.info(f"Dropped {len(stale_routes)} stale route/trips files for {network_id}")
 
     osm_path = cached["osm_path"]
     if not os.path.exists(osm_path):
@@ -512,6 +718,14 @@ def convert_to_sumo(network_id: str) -> dict:
         "--ramps.guess", "true",
         "--junctions.join", "true",
         "--tls.guess", "true",
+        # Honor OSM `highway=traffic_signals` nodes placed on approach edges
+        # (common Vietnamese OSM convention; otherwise netconvert's --tls.guess
+        # only detects by junction geometry and misses most signalized nodes).
+        "--tls.guess-signals", "true",
+        "--tls.guess-signals.dist", "40",
+        "--tls.guess-signals.slack", "1",
+        # Drop pass-through "TLs" that control a single straight flow.
+        "--tls.discard-simple", "true",
         "--tls.join", "true",
         "--edges.join", "true",
         "--no-turnarounds.tls", "true",
@@ -533,18 +747,35 @@ def convert_to_sumo(network_id: str) -> dict:
             logger.warning(f"netconvert warnings:\n{result.stderr}")
 
         if result.returncode != 0:
+            # Drop any partial output so the next call rebuilds fresh.
+            output_path.unlink(missing_ok=True)
             raise RuntimeError(
                 f"netconvert failed with code {result.returncode}: {result.stderr}"
             )
 
         logger.info(f"SUMO network created: {output_path}")
 
-        _remove_disconnected_components(output_path, netconvert_path, osm_path)
+        cleanup_result = _remove_disconnected_components(output_path, netconvert_path, osm_path)
 
+        # Parse + match first; only stamp the sentinel once we've confirmed the
+        # new network is actually usable. A crash between netconvert success
+        # and sentinel write would otherwise leave a stale .net.xml that the
+        # next call treats as fresh.
         tl_data = parse_sumo_traffic_lights(output_path)
         osm_to_sumo_map = _match_osm_to_sumo_traffic_lights(
             cached["intersections"], tl_data["traffic_lights"], output_path
         )
+
+        if cleanup_result >= 0:
+            try:
+                _atomic_write_text(version_path, str(NETCONVERT_CONFIG_VERSION))
+            except OSError as err:
+                logger.warning(f"Failed to write netconvert version sentinel: {err}")
+        else:
+            logger.warning(
+                "Skipping netconvert version sentinel; disconnected-cleanup failed — "
+                "next call will rebuild."
+            )
 
         return {
             "network_path": str(output_path),
@@ -554,10 +785,14 @@ def convert_to_sumo(network_id: str) -> dict:
 
     except subprocess.TimeoutExpired:
         logger.error("netconvert timed out")
+        # Netconvert may have left a truncated .net.xml. Remove it so the next
+        # call rebuilds from scratch instead of serving corrupted output.
+        output_path.unlink(missing_ok=True)
         raise RuntimeError("netconvert timed out after 5 minutes")
 
     except FileNotFoundError:
         logger.error("netconvert not found")
+        output_path.unlink(missing_ok=True)
         raise RuntimeError("netconvert not found. Ensure SUMO is installed and SUMO_HOME is set")
 
 
