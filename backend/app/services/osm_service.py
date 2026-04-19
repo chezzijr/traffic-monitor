@@ -29,6 +29,10 @@ TRAFFIC_LIGHT_CLUSTERED_PATH = CACHE_DIR / "traffic_light_clustered.json"
 
 # Distance threshold for OSM-to-SUMO coordinate matching (~100m at equator)
 COORD_MATCH_THRESHOLD_DEG = 0.001
+# Nearest OSM intersection enrichment for SUMO-first junctions (~220m at equator)
+ENRICH_MATCH_THRESHOLD_DEG = 0.002
+# Merge SUMO TL markers within this distance (m) into one map pin per physical junction
+TL_CLUSTER_RADIUS_M = 50.0
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
@@ -286,6 +290,13 @@ def get_network_bbox(network_id: str) -> tuple | None:
     return None
 
 
+def get_road_count(network_id: str) -> int | None:
+    """Road-way count from the original OSM extract (unchanged after SUMO conversion)."""
+    if network_id not in _network_cache:
+        return None
+    return _network_cache[network_id].get("road_count", 0)
+
+
 def parse_sumo_traffic_lights(net_xml_path: Path) -> dict:
     """Parse SUMO network XML for traffic light IDs, coordinates, and phases."""
     try:
@@ -386,6 +397,189 @@ def _match_osm_to_sumo_traffic_lights(
     return osm_to_sumo_map
 
 
+def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance between two WGS-84 points in meters."""
+    rlat1, rlon1 = math.radians(lat1), math.radians(lon1)
+    rlat2, rlon2 = math.radians(lat2), math.radians(lon2)
+    dlat = rlat2 - rlat1
+    dlon = rlon2 - rlon1
+    a = math.sin(dlat / 2) ** 2 + math.cos(rlat1) * math.cos(rlat2) * math.sin(dlon / 2) ** 2
+    c = 2 * math.asin(min(1.0, math.sqrt(a)))
+    return 6371000.0 * c
+
+
+class _UnionFind:
+    def __init__(self, n: int) -> None:
+        self._p = list(range(n))
+
+    def find(self, x: int) -> int:
+        while self._p[x] != x:
+            self._p[x] = self._p[self._p[x]]
+            x = self._p[x]
+        return x
+
+    def union(self, a: int, b: int) -> None:
+        ra, rb = self.find(a), self.find(b)
+        if ra != rb:
+            self._p[rb] = ra
+
+
+def _cluster_sumo_junctions_spatial(
+    junctions: list[dict],
+    radius_m: float = TL_CLUSTER_RADIUS_M,
+) -> tuple[list[dict], dict[str, str]]:
+    """Merge nearby SUMO TL junctions so the map shows one pin per physical intersection.
+
+    Returns merged junction dicts and a map from every original sumo_tl_id to the canonical
+    (representative) tl_id used for that cluster.
+    """
+    if not junctions:
+        return [], {}
+
+    n = len(junctions)
+    if n == 1:
+        tid = junctions[0]["sumo_tl_id"]
+        out = [{**junctions[0], "clustered_tl_ids": None}]
+        return out, {tid: tid}
+
+    uf = _UnionFind(n)
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            a, b = junctions[i], junctions[j]
+            d = _haversine_m(a["lat"], a["lon"], b["lat"], b["lon"])
+            if d <= radius_m:
+                uf.union(i, j)
+
+    groups: dict[int, list[int]] = {}
+    for i in range(n):
+        r = uf.find(i)
+        groups.setdefault(r, []).append(i)
+
+    merged: list[dict] = []
+    tl_redirect: dict[str, str] = {}
+
+    for _root, idxs in groups.items():
+        members = [junctions[i] for i in idxs]
+        clat = sum(m["lat"] for m in members) / len(members)
+        clon = sum(m["lon"] for m in members) / len(members)
+
+        canonical_m = min(
+            members,
+            key=lambda m: _haversine_m(m["lat"], m["lon"], clat, clon),
+        )
+        canonical_tl = canonical_m["sumo_tl_id"]
+        for m in members:
+            tl_redirect[m["sumo_tl_id"]] = canonical_tl
+
+        all_tl_ids = sorted({m["sumo_tl_id"] for m in members})
+        num_roads = max(m["num_roads"] for m in members)
+
+        cluster_id = (
+            f"sumo_cluster_{hashlib.sha256('|'.join(all_tl_ids).encode()).hexdigest()[:14]}"
+        )
+
+        merged.append({
+            "id": cluster_id,
+            "osm_id": canonical_m.get("osm_id"),
+            "lat": clat,
+            "lon": clon,
+            "name": canonical_m.get("name"),
+            "num_roads": num_roads,
+            "has_traffic_light": True,
+            "sumo_tl_id": canonical_tl,
+            "clustered_tl_ids": all_tl_ids if len(all_tl_ids) > 1 else None,
+        })
+
+    return merged, tl_redirect
+
+
+def _build_sumo_tl_junctions(
+    net_xml_path: Path,
+    sumo_traffic_lights: list[dict],
+    osm_intersections: list[dict],
+) -> tuple[list[dict], dict[str, str]]:
+    """Build junction list from SUMO traffic lights (source of truth) with accurate lon/lat.
+
+    Uses sumolib.convertXY2LonLat for projection-correct coordinates. Optionally enriches
+    with nearest OSM intersection name/osm_id when within ENRICH_MATCH_THRESHOLD_DEG
+    (one OSM node matched at most once).
+    """
+    import sumolib
+
+    try:
+        net = sumolib.net.readNet(str(net_xml_path))
+    except Exception as e:
+        logger.error(f"Failed to read SUMO network with sumolib: {e}")
+        return [], {}
+
+    sumo_junctions: list[dict] = []
+    osm_to_sumo_map: dict[str, str] = {}
+    used_osm_intersection_ids: set[str] = set()
+
+    for sumo_tl in sumo_traffic_lights:
+        tl_id = sumo_tl["id"]
+        x, y = sumo_tl["x"], sumo_tl["y"]
+        try:
+            lon, lat = net.convertXY2LonLat(x, y)
+        except Exception as e:
+            logger.warning(f"convertXY2LonLat failed for TL {tl_id}: {e}")
+            continue
+
+        node = None
+        if net.hasNode(tl_id):
+            node = net.getNode(tl_id)
+        else:
+            cand = tl_id[3:] if tl_id.startswith("GS_") else tl_id
+            if net.hasNode(cand):
+                node = net.getNode(cand)
+
+        if node is not None:
+            num_roads = max(len(node.getIncoming()) + len(node.getOutgoing()), 1)
+        else:
+            num_roads = 2
+
+        best_inter = None
+        best_dist = float("inf")
+        for inter in osm_intersections:
+            if inter["id"] in used_osm_intersection_ids:
+                continue
+            dist = math.sqrt((inter["lat"] - lat) ** 2 + (inter["lon"] - lon) ** 2)
+            if dist < best_dist:
+                best_dist = dist
+                best_inter = inter
+
+        osm_id: int | None = None
+        name: str | None = None
+        if best_inter is not None and best_dist < ENRICH_MATCH_THRESHOLD_DEG:
+            used_osm_intersection_ids.add(best_inter["id"])
+            osm_id = best_inter.get("osm_id")
+            name = best_inter.get("name")
+            osm_to_sumo_map[best_inter["id"]] = tl_id
+
+        junction_id = f"sumo_{tl_id}"
+        sumo_junctions.append({
+            "id": junction_id,
+            "osm_id": osm_id,
+            "lat": lat,
+            "lon": lon,
+            "name": name,
+            "num_roads": num_roads,
+            "has_traffic_light": True,
+            "sumo_tl_id": tl_id,
+        })
+
+    clustered, tl_redirect = _cluster_sumo_junctions_spatial(sumo_junctions, TL_CLUSTER_RADIUS_M)
+    osm_to_sumo_map = {k: tl_redirect.get(v, v) for k, v in osm_to_sumo_map.items()}
+
+    logger.info(
+        f"Built {len(sumo_junctions)} SUMO TL junctions -> {len(clustered)} after "
+        f"clustering (radius {TL_CLUSTER_RADIUS_M}m); "
+        f"{len(osm_to_sumo_map)} OSM intersections enriched"
+    )
+    return clustered, osm_to_sumo_map
+
+
 def _remove_disconnected_components(net_path: Path, netconvert_path: str, osm_path: str) -> int:
     """Remove disconnected network fragments, keeping only the largest component."""
     import sumolib
@@ -472,7 +666,7 @@ def convert_to_sumo(network_id: str) -> dict:
     netconvert — no OSMnx graph re-serialization step.
 
     Returns:
-        Dict with network_path, traffic_lights, osm_to_sumo_tl_map
+        Dict with network_path, traffic_lights, osm_to_sumo_tl_map, sumo_junctions
     """
     if network_id not in _network_cache:
         raise KeyError(f"Network '{network_id}' not found in cache. Extract the network first.")
@@ -480,17 +674,20 @@ def convert_to_sumo(network_id: str) -> dict:
     SIMULATION_NETWORKS_DIR.mkdir(parents=True, exist_ok=True)
     output_path = SIMULATION_NETWORKS_DIR / f"{network_id}.net.xml"
     cached = _network_cache[network_id]
+    osm_intersections = list(cached["intersections"])
 
     if output_path.exists():
         logger.info(f"SUMO network already exists: {output_path}")
         tl_data = parse_sumo_traffic_lights(output_path)
-        osm_to_sumo_map = _match_osm_to_sumo_traffic_lights(
-            cached["intersections"], tl_data["traffic_lights"], output_path
+        sumo_junctions, osm_to_sumo_map = _build_sumo_tl_junctions(
+            output_path, tl_data["traffic_lights"], osm_intersections
         )
+        _network_cache[network_id]["intersections"] = sumo_junctions
         return {
             "network_path": str(output_path),
             "traffic_lights": tl_data["traffic_lights"],
             "osm_to_sumo_tl_map": osm_to_sumo_map,
+            "sumo_junctions": sumo_junctions,
         }
 
     osm_path = cached["osm_path"]
@@ -542,14 +739,16 @@ def convert_to_sumo(network_id: str) -> dict:
         _remove_disconnected_components(output_path, netconvert_path, osm_path)
 
         tl_data = parse_sumo_traffic_lights(output_path)
-        osm_to_sumo_map = _match_osm_to_sumo_traffic_lights(
-            cached["intersections"], tl_data["traffic_lights"], output_path
+        sumo_junctions, osm_to_sumo_map = _build_sumo_tl_junctions(
+            output_path, tl_data["traffic_lights"], osm_intersections
         )
+        _network_cache[network_id]["intersections"] = sumo_junctions
 
         return {
             "network_path": str(output_path),
             "traffic_lights": tl_data["traffic_lights"],
             "osm_to_sumo_tl_map": osm_to_sumo_map,
+            "sumo_junctions": sumo_junctions,
         }
 
     except subprocess.TimeoutExpired:

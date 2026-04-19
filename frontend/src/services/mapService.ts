@@ -21,12 +21,14 @@ export const mapService = {
     network_id: string;
     traffic_lights: SUMOTrafficLight[];
     osm_sumo_mapping: Record<string, string>;
+    sumo_junctions: Intersection[];
   }> {
     const response = await api.post<{
       sumo_network_path: string;
       network_id: string;
       traffic_lights: SUMOTrafficLight[];
       osm_sumo_mapping: Record<string, string>;
+      sumo_junctions: Intersection[];
     }>(`/map/convert-to-sumo/${networkId}`);
     return response.data;
   },

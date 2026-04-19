@@ -17,13 +17,15 @@ export interface BoundingBox {
 // Matches backend Intersection
 export interface Intersection {
   id: string;
-  osm_id: number;
+  osm_id?: number;
   lat: number;
   lon: number;
   name?: string;
   num_roads: number;
   has_traffic_light: boolean;
   sumo_tl_id?: string;
+  /** When backend merged nearby SUMO TLs, all controller IDs in this cluster */
+  clustered_tl_ids?: string[];
   roads?: string[];
   trafficLight?: TrafficLight;
 }

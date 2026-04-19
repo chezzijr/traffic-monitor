@@ -18,6 +18,7 @@ export function SelectableIntersectionMarkers({ deployedJunctionIds = [] }: Sele
         const hasTL = intersection.has_traffic_light && sumoTlId;
 
         if (!hasTL) {
+          // return null;
           return (
             <Marker
               key={intersection.id}
@@ -46,6 +47,11 @@ export function SelectableIntersectionMarkers({ deployedJunctionIds = [] }: Sele
                   {intersection.name || `Junction ${sumoTlId}`}
                 </p>
                 <p className="text-xs text-gray-600">SUMO TL: {sumoTlId}</p>
+                {intersection.clustered_tl_ids && intersection.clustered_tl_ids.length > 1 && (
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Merged TLs: {intersection.clustered_tl_ids.join(', ')}
+                  </p>
+                )}
                 <p className="text-xs text-gray-500">
                   {intersection.lat.toFixed(6)}, {intersection.lon.toFixed(6)}
                 </p>

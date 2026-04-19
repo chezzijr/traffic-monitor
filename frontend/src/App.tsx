@@ -73,15 +73,8 @@ export default function App() {
         setSumoTrafficLights(sumoResult.traffic_lights);
         setOsmSumoMapping(sumoResult.osm_sumo_mapping);
 
-        // Update intersections with SUMO TL mapping
-        const updatedIntersections = result.intersections.map((inter) => {
-          const sumoTlId = sumoResult.osm_sumo_mapping[String(inter.osm_id)];
-          if (sumoTlId) {
-            return { ...inter, sumo_tl_id: sumoTlId, has_traffic_light: true };
-          }
-          return inter;
-        });
-        setIntersections(updatedIntersections);
+        // SUMO traffic lights are the source of truth for map markers after conversion
+        setIntersections(sumoResult.sumo_junctions);
 
         toast.success(`SUMO network ready: ${sumoResult.traffic_lights.length} traffic lights`);
       } catch (err) {

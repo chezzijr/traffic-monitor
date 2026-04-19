@@ -103,33 +103,32 @@ def convert_to_sumo(network_id: str) -> ConvertToSumoResponse:
             )
             for tl in result["traffic_lights"]
         ]
-        # Save network metadata with junction data
+        # Save network metadata with junction data (SUMO-first junctions)
         try:
-            intersections = osm_service.get_intersections(network_id)
+            sumo_junctions_raw = result["sumo_junctions"]
             bbox_tuple = osm_service.get_network_bbox(network_id)
-            osm_sumo_map = result["osm_to_sumo_tl_map"]
+            road_cnt = osm_service.get_road_count(network_id) or 0
 
             junctions = []
-            for inter in intersections:
-                if inter.get("has_traffic_light"):
-                    tl_id = osm_sumo_map.get(inter["id"])
-                    if tl_id:
-                        junctions.append({
-                            "id": inter["id"],
-                            "lat": inter["lat"],
-                            "lon": inter["lon"],
-                            "tl_id": tl_id,
-                        })
+            for j in sumo_junctions_raw:
+                tid = j.get("sumo_tl_id")
+                if tid:
+                    junctions.append({
+                        "id": j["id"],
+                        "lat": j["lat"],
+                        "lon": j["lon"],
+                        "tl_id": tid,
+                    })
 
             if bbox_tuple:
                 s, w, n, e = bbox_tuple
                 network_service.save_metadata(
                     network_id=network_id,
                     bbox={"south": s, "west": w, "north": n, "east": e},
-                    intersection_count=len(intersections),
+                    intersection_count=len(sumo_junctions_raw),
                     traffic_light_count=len(junctions),
                     junctions=junctions,
-                    road_count=len(intersections),
+                    road_count=road_cnt,
                 )
         except Exception as e:
             logger.warning(f"Failed to save network metadata: {e}")
@@ -139,6 +138,7 @@ def convert_to_sumo(network_id: str) -> ConvertToSumoResponse:
             network_id=network_id,
             traffic_lights=traffic_lights,
             osm_sumo_mapping=result["osm_to_sumo_tl_map"],
+            sumo_junctions=[Intersection(**j) for j in result["sumo_junctions"]],
         )
     except KeyError as e:
         raise HTTPException(

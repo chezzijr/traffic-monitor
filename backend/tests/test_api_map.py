@@ -115,6 +115,18 @@ def test_convert_to_sumo_success_mocked(client: TestClient, tmp_path):
             }
         ],
         "osm_to_sumo_tl_map": {"123456": "tl_1"},
+        "sumo_junctions": [
+            {
+                "id": "sumo_tl_1",
+                "osm_id": 123456,
+                "lat": 21.025,
+                "lon": 105.82,
+                "name": None,
+                "num_roads": 4,
+                "has_traffic_light": True,
+                "sumo_tl_id": "tl_1",
+            }
+        ],
     }
 
     with patch("app.services.osm_service.convert_to_sumo") as mock_convert:
@@ -134,3 +146,5 @@ def test_convert_to_sumo_success_mocked(client: TestClient, tmp_path):
         assert data["traffic_lights"][0]["type"] == "actuated"
         assert data["traffic_lights"][0]["program_id"] == "0"
         assert data["traffic_lights"][0]["num_phases"] == 1
+        assert len(data["sumo_junctions"]) == 1
+        assert data["sumo_junctions"][0]["sumo_tl_id"] == "tl_1"

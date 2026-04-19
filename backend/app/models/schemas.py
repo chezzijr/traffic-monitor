@@ -24,12 +24,16 @@ class Intersection(BaseModel):
 
     id: str = Field(..., description="Unique intersection identifier")
     lat: float = Field(..., ge=-90, le=90, description="Latitude coordinate")
-    osm_id: int = Field(..., description="OSM node ID")
+    osm_id: int | None = Field(None, description="OSM node ID when matched to OSM; None for SUMO-only junctions")
     lon: float = Field(..., ge=-180, le=180, description="Longitude coordinate")
     name: str | None = Field(None, description="Street name at intersection (if available)")
     num_roads: int = Field(..., ge=1, description="Number of roads meeting at this intersection")
     has_traffic_light: bool = Field(default=False, description="Whether this intersection has a traffic light")
     sumo_tl_id: str | None = Field(None, description="SUMO traffic light ID (if converted and mapped)")
+    clustered_tl_ids: list[str] | None = Field(
+        None,
+        description="When clustered, all SUMO tlLogic IDs merged into this map pin",
+    )
     roads: list[str] | None = Field(None, description="Names of roads meeting at this intersection (up to 2)")
 
 
@@ -120,6 +124,10 @@ class ConvertToSumoResponse(BaseModel):
     )
     osm_sumo_mapping: dict[str, str] = Field(
         default_factory=dict, description="Mapping from OSM intersection ID to SUMO traffic light ID"
+    )
+    sumo_junctions: list[Intersection] = Field(
+        default_factory=list,
+        description="Junction markers derived from SUMO traffic lights (authoritative after conversion)",
     )
 
 
