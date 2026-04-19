@@ -528,13 +528,14 @@ class CoLightEnv:
                 ]))
                 sub_step_halting[tl_id].append(mean_halting)
 
-        # Phase 5: Compute per-TL rewards = -mean_substeps(mean_lanes(halting)) * 12
-        # (LibSignal unified reward; matches environment.py and rewards.py single-agent path)
+        # Phase 5: Compute per-TL rewards = -mean_substeps(mean_lanes(halting))
+        # LibSignal × 12 multiplier removed for 49-TL multi-agent case — outlier
+        # TLs previously dominated MSE gradient. Reward now bounded ~[-30, 0].
         rewards = np.zeros(n, dtype=np.float32)
         for i, tl_id in enumerate(self.tl_ids):
             counts = sub_step_halting[tl_id]
             if counts:
-                rewards[i] = -float(np.mean(counts)) * 12.0
+                rewards[i] = -float(np.mean(counts))
             else:
                 rewards[i] = 0.0
 

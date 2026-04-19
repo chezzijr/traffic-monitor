@@ -104,9 +104,10 @@ class MultiHeadGraphAttention(nn.Module):
         #    e[h, i, j] = sum_d(h_target[h, i, d] * h_source[h, j, d])
         e = torch.einsum("hid,hjd->hij", h_target, h_source)
 
-        # 4. Mask out non-adjacent pairs with -inf
+        # 4. Mask out non-adjacent pairs with large finite negative
+        # (using -inf can produce NaN from softmax if a row is fully masked)
         adj_expanded = adj.unsqueeze(0).expand(self.nv, -1, -1)  # [nv, N, N]
-        e = e.masked_fill(adj_expanded == 0, float("-inf"))
+        e = e.masked_fill(adj_expanded == 0, -1e9)
 
         # 5. Stable softmax along source dimension (j)
         alpha = F.softmax(e, dim=-1)  # [nv, N, N]
@@ -298,7 +299,7 @@ class CoLightAgent:
         self.optimizer = optim.RMSprop(
             self.q_network.parameters(), lr=lr, alpha=0.9, centered=False, eps=1e-7
         )
-        self.loss_fn = nn.MSELoss(reduction="mean")
+        self.loss_fn = nn.SmoothL1Loss(reduction="mean", beta=1.0)
 
         self.replay_buffer: deque[tuple] = deque(maxlen=buffer_size)
 
