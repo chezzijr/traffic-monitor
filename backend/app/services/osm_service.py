@@ -34,7 +34,7 @@ COORD_MATCH_THRESHOLD_DEG = 0.002
 
 # Bump this whenever netconvert flags change to invalidate cached .net.xml.
 # Written as sentinel file {network_id}.netconvert_v alongside .net.xml.
-NETCONVERT_CONFIG_VERSION = 3
+NETCONVERT_CONFIG_VERSION = 4
 
 # Netconvert flag set shared by the primary convert and the disconnected-
 # component cleanup re-run. Keeping it in one place prevents drift (seen
@@ -46,10 +46,12 @@ NETCONVERT_COMMON_FLAGS = [
     "--ramps.guess", "true",
     "--junctions.join", "true",
     "--tls.guess", "true",
-    # Default threshold (69.44 m/s combined arm speed) skips HCMC urban
-    # signalized junctions where per-arm speeds are 40-50 km/h. 45 m/s
-    # catches them without phantom-tagging residential intersections.
-    "--tls.guess.threshold", "45",
+    # Speed threshold for geometry-based TL guessing. Default 69.44 m/s skips
+    # most HCMC urban signalized junctions. Lower unlocks coverage but also
+    # phantom-tags residential alleys (4-arm residential @ 50 km/h = 55.6 m/s).
+    # Empirical audit on three HCMC networks: 45 gives 9/5/5 phantoms; 60
+    # gives zero on every network while retaining 60-66 real TLs per bbox.
+    "--tls.guess.threshold", "60",
     # Honor OSM `highway=traffic_signals` placed on approach edges (common
     # Vietnamese convention; --tls.guess alone only looks at junction nodes).
     "--tls.guess-signals", "true",
@@ -546,63 +548,79 @@ def _match_osm_to_sumo_traffic_lights(
 ) -> dict[str, str]:
     """Map OSM intersection IDs → SUMO traffic light IDs.
 
-    Strategy (in order of preference):
-    1. **ID-based parse**: SUMO preserves OSM node IDs inside joined/cluster names.
-       Extract every numeric token from the SUMO ID; any token present in
-       `intersections` → many-to-one mapping (multiple OSM nodes back one SUMO TL).
+    Strategy:
+    1. **ID-based parse**: SUMO preserves OSM node IDs inside joined/cluster
+       names. Pick ONE canonical member per SUMO TL — the OSM intersection
+       closest to the SUMO TL's own (x, y). Non-canonical members stay
+       unflipped so they render as plain intersections rather than redundant
+       green markers at the same physical junction.
     2. **Coord-based fallback** (only for SUMO TLs with zero ID matches, e.g.
-       pure guessed signals): nearest OSM intersection within COORD_MATCH_THRESHOLD_DEG.
-       No first-come-first-serve gate — each OSM intersection can back multiple
-       SUMO TLs (valid for complex junctions).
+       pure `GS_*` guessed signals): nearest OSM intersection within
+       COORD_MATCH_THRESHOLD_DEG.
 
-    The returned map is osm_id → sumo_tl_id. Flips `has_traffic_light=True` on
-    every matched intersection in place.
+    Returns osm_id → sumo_tl_id (one-to-one on the SUMO side).
     """
-    osm_id_set = {inter["id"] for inter in intersections}
+    osm_by_id = {inter["id"]: inter for inter in intersections}
+    boundary = _parse_sumo_boundary(net_xml_path)
 
     osm_to_sumo_map: dict[str, str] = {}
     id_matched_sumo_tls: set[str] = set()
 
-    # Phase 1: ID-based parsing
+    def _sumo_lonlat(tl: dict) -> tuple[float, float] | None:
+        if boundary is None:
+            return None
+        x, y = tl.get("x", 0.0), tl.get("y", 0.0)
+        if (x, y) == (0.0, 0.0):
+            return None
+        lon, lat = sumo_xy_to_lonlat(x, y, boundary)
+        return lon, lat
+
+    # Phase 1: ID-based, pick best member per SUMO TL (closest to SUMO centroid)
     for sumo_tl in sumo_traffic_lights:
         tl_id = sumo_tl["id"]
         members = _extract_member_osm_ids(tl_id)
-        hits = [m for m in members if m in osm_id_set]
-        if hits:
-            id_matched_sumo_tls.add(tl_id)
-            for osm_id in hits:
-                # First SUMO TL wins; later TLs overwrite only if this osm_id
-                # not yet claimed. Avoids silent drops — still logs all hits.
-                osm_to_sumo_map.setdefault(osm_id, tl_id)
-            logger.debug(f"ID-match SUMO {tl_id} ← OSM {hits}")
+        hits = [osm_by_id[m] for m in members if m in osm_by_id]
+        if not hits:
+            continue
+        id_matched_sumo_tls.add(tl_id)
+        sumo_ll = _sumo_lonlat(sumo_tl)
+        if sumo_ll is not None and len(hits) > 1:
+            sumo_lon, sumo_lat = sumo_ll
+            best = min(
+                hits,
+                key=lambda h: (h["lat"] - sumo_lat) ** 2 + (h["lon"] - sumo_lon) ** 2,
+            )
+        else:
+            best = hits[0]
+        osm_to_sumo_map.setdefault(best["id"], tl_id)
+        logger.debug(
+            f"ID-match SUMO {tl_id} ← OSM {best['id']} "
+            f"(chose 1 of {len(hits)} member(s))"
+        )
 
-    # Phase 2: Coord fallback for SUMO TLs that failed ID parse (guessed, etc.)
+    # Phase 2: Coord fallback for SUMO TLs that failed ID parse.
     unmatched = [tl for tl in sumo_traffic_lights if tl["id"] not in id_matched_sumo_tls]
-    if unmatched:
-        boundary = _parse_sumo_boundary(net_xml_path)
-        if boundary is not None:
-            orig_west, orig_south, conv_west, conv_south, lon_scale, lat_scale = boundary
-            for sumo_tl in unmatched:
-                approx_lon = orig_west + (sumo_tl["x"] - conv_west) * lon_scale
-                approx_lat = orig_south + (sumo_tl["y"] - conv_south) * lat_scale
-
-                best_match = None
-                best_dist = float("inf")
-                for inter in intersections:
-                    dist = math.sqrt(
-                        (inter["lat"] - approx_lat) ** 2
-                        + (inter["lon"] - approx_lon) ** 2
-                    )
-                    if dist < best_dist:
-                        best_dist = dist
-                        best_match = inter
-
-                if best_match and best_dist < COORD_MATCH_THRESHOLD_DEG:
-                    osm_to_sumo_map.setdefault(best_match["id"], sumo_tl["id"])
-                    logger.debug(
-                        f"Coord-match SUMO {sumo_tl['id']} ← OSM {best_match['id']} "
-                        f"(dist {best_dist:.6f})"
-                    )
+    if unmatched and boundary is not None:
+        orig_west, orig_south, conv_west, conv_south, lon_scale, lat_scale = boundary
+        for sumo_tl in unmatched:
+            approx_lon = orig_west + (sumo_tl["x"] - conv_west) * lon_scale
+            approx_lat = orig_south + (sumo_tl["y"] - conv_south) * lat_scale
+            best_match = None
+            best_dist = float("inf")
+            for inter in intersections:
+                dist = math.sqrt(
+                    (inter["lat"] - approx_lat) ** 2
+                    + (inter["lon"] - approx_lon) ** 2
+                )
+                if dist < best_dist:
+                    best_dist = dist
+                    best_match = inter
+            if best_match and best_dist < COORD_MATCH_THRESHOLD_DEG:
+                osm_to_sumo_map.setdefault(best_match["id"], sumo_tl["id"])
+                logger.debug(
+                    f"Coord-match SUMO {sumo_tl['id']} ← OSM {best_match['id']} "
+                    f"(dist {best_dist:.6f})"
+                )
 
     # Flip has_traffic_light on matched intersections
     for inter in intersections:
