@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { BoundingBox, Intersection, TrafficSignal, SUMOTrafficLight } from '../types';
+import { mapService, type TlCluster } from '../services/mapService';
 
 interface MapState {
   // State
@@ -13,6 +14,7 @@ interface MapState {
   selectedJunctionIds: string[];
   sumoTrafficLights: SUMOTrafficLight[];
   osmSumoMapping: Record<string, string>;
+  tlClusters: TlCluster[];
 
   // Actions
   setIntersections: (intersections: Intersection[]) => void;
@@ -27,6 +29,8 @@ interface MapState {
   clearJunctionSelection: () => void;
   setSumoTrafficLights: (lights: SUMOTrafficLight[]) => void;
   setOsmSumoMapping: (mapping: Record<string, string>) => void;
+  loadTlClusters: (networkId: string) => Promise<void>;
+  selectCluster: (clusterId: string) => void;
   reset: () => void;
 }
 
@@ -41,6 +45,7 @@ const initialState = {
   selectedJunctionIds: [] as string[],
   sumoTrafficLights: [] as SUMOTrafficLight[],
   osmSumoMapping: {} as Record<string, string>,
+  tlClusters: [] as TlCluster[],
 };
 
 export const useMapStore = create<MapState>((set) => ({
@@ -51,7 +56,10 @@ export const useMapStore = create<MapState>((set) => ({
   setIntersections: (intersections) => set({ intersections }),
   setTrafficSignals: (signals) => set({ trafficSignals: signals }),
   setSelectedRegion: (bbox) => set({ selectedRegion: bbox }),
-  setCurrentNetworkId: (id) => set({ currentNetworkId: id }),
+  setCurrentNetworkId: (id) => set((state) => ({
+    currentNetworkId: id,
+    tlClusters: state.currentNetworkId !== id ? [] : state.tlClusters,
+  })),
   setSelectionMode: (mode) => set({ selectionMode: mode }),
   setLoading: (loading) => set({ isLoading: loading }),
   setError: (error) => set({ error }),
@@ -88,5 +96,19 @@ export const useMapStore = create<MapState>((set) => ({
   clearJunctionSelection: () => set({ selectedJunctionIds: [] }),
   setSumoTrafficLights: (lights) => set({ sumoTrafficLights: lights }),
   setOsmSumoMapping: (mapping) => set({ osmSumoMapping: mapping }),
+  loadTlClusters: async (networkId) => {
+    try {
+      const clusters = await mapService.getTlClusters(networkId);
+      set({ tlClusters: clusters });
+    } catch (err) {
+      console.error('Failed to load TL clusters', err);
+      set({ tlClusters: [] });
+    }
+  },
+  selectCluster: (clusterId) =>
+    set((state) => {
+      const cluster = state.tlClusters.find((c) => c.cluster_id === clusterId);
+      return cluster ? { selectedJunctionIds: [...cluster.tl_ids] } : {};
+    }),
   reset: () => set(initialState),
 }));

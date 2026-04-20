@@ -1,6 +1,12 @@
 import { api } from './api';
 import type { BoundingBox, NetworkInfo, Intersection, SUMOTrafficLight } from '../types';
 
+export interface TlCluster {
+  cluster_id: string;
+  size: number;
+  tl_ids: string[];
+}
+
 export const mapService = {
   // Extract network from OSM for a given bounding box
   async extractRegion(bbox: BoundingBox): Promise<NetworkInfo> {
@@ -34,6 +40,12 @@ export const mapService = {
   // Get list of cached network IDs
   async getNetworks(): Promise<string[]> {
     const response = await api.get<string[]>('/map/networks');
+    return response.data;
+  },
+
+  // Get connected components of the TL-to-TL graph for a network
+  async getTlClusters(networkId: string): Promise<TlCluster[]> {
+    const response = await api.get<TlCluster[]>(`/networks/${networkId}/tl-clusters`);
     return response.data;
   },
 };

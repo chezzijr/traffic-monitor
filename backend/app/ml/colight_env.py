@@ -29,8 +29,9 @@ class CoLightEnv:
         network_id: str,
         tl_ids: list[str],
         max_steps: int = 3600,
-        steps_per_action: int = 10,
+        steps_per_action: int = 15,
         yellow_time: int = 2,
+        min_green: int = 15,
         vehicle_max: float = 20.0,
         gui: bool = False,
         routes_path: str | None = None,
@@ -41,6 +42,7 @@ class CoLightEnv:
         self.tl_ids = tl_ids
         self.max_steps = max_steps
         self.steps_per_action = steps_per_action
+        self.min_green = min_green
         self.gui = gui
         self.routes_path = routes_path
         self.scenario = scenario
@@ -55,6 +57,7 @@ class CoLightEnv:
         self._yellow_dicts: dict[str, dict[str, int]] = {}
         self._full_phases: dict[str, list] = {}
         self._current_green_idx: dict[str, int] = {}
+        self._elapsed_in_green: dict[str, int] = {}
 
         # Graph data (populated by _initialize -> _build_graph)
         self.edge_index: np.ndarray = np.empty((2, 0), dtype=np.int64)
@@ -445,6 +448,7 @@ class CoLightEnv:
                 conn.trafficlight.setProgram(tl_id, f"{tl_id}_rl")
             conn.trafficlight.setPhase(tl_id, 0)
             self._current_green_idx[tl_id] = 0
+            self._elapsed_in_green[tl_id] = 0
 
         self._current_step = 0
         self._cumulative_throughput = 0
@@ -474,8 +478,10 @@ class CoLightEnv:
         desired_green: dict[str, int] = {}
         needs_yellow: dict[str, bool] = {}
 
-        # Phase 1: Determine desired green index per TL
-        # LibSignal CoLight lets the agent freely switch phases (no min/max green).
+        # Phase 1: Determine desired green index per TL.
+        # Enforce min_green: if agent wants to switch but current phase has
+        # been held < min_green sim-seconds, keep current phase to prevent
+        # thrashing (49-TL coordination requires cycles matching fixed-time).
         for i, tl_id in enumerate(self.tl_ids):
             action = int(actions[i])
             # Clamp action to valid range for this TL
@@ -483,8 +489,13 @@ class CoLightEnv:
             action = action % num_green
 
             current_idx = self._current_green_idx[tl_id]
-            desired_green[tl_id] = action
-            needs_yellow[tl_id] = action != current_idx
+            wants_switch = action != current_idx
+            if wants_switch and self._elapsed_in_green[tl_id] < self.min_green:
+                desired_green[tl_id] = current_idx
+                needs_yellow[tl_id] = False
+            else:
+                desired_green[tl_id] = action
+                needs_yellow[tl_id] = wants_switch
 
         # Phase 2: Yellow transitions (shared simulation, all TLs advance together)
         any_yellow = any(needs_yellow.values())
@@ -505,15 +516,21 @@ class CoLightEnv:
                 self._current_step += 1
                 self._cumulative_throughput += conn.simulation.getArrivedNumber()
 
-        # Phase 3: Set green phases for all TLs
+        # Phase 3: Set green phases for all TLs + reset/advance elapsed tracker
         for tl_id in self.tl_ids:
-            sumo_phase_idx = self._green_phases[tl_id][desired_green[tl_id]]
+            new_idx = desired_green[tl_id]
+            sumo_phase_idx = self._green_phases[tl_id][new_idx]
             conn.trafficlight.setPhase(tl_id, sumo_phase_idx)
-            self._current_green_idx[tl_id] = desired_green[tl_id]
+            if needs_yellow[tl_id]:
+                # Switched this step — reset elapsed (yellow_time + upcoming
+                # steps_per_action count as fresh green, minus yellow_time)
+                self._elapsed_in_green[tl_id] = 0
+            self._current_green_idx[tl_id] = new_idx
 
         # Phase 4: Advance simulation for steps_per_action, collecting per-substep
-        # MEAN halting across lanes per TL (LibSignal LaneVehicleGenerator average='all').
+        # MEAN halting and MEAN per-vehicle wait-time across lanes per TL.
         sub_step_halting: dict[str, list[float]] = {tl_id: [] for tl_id in self.tl_ids}
+        sub_step_waiting: dict[str, list[float]] = {tl_id: [] for tl_id in self.tl_ids}
         for _ in range(self.steps_per_action):
             conn.simulationStep()
             self._current_step += 1
@@ -522,20 +539,35 @@ class CoLightEnv:
                 lanes = self._controlled_lanes[tl_id]
                 if not lanes:
                     sub_step_halting[tl_id].append(0.0)
+                    sub_step_waiting[tl_id].append(0.0)
                     continue
                 mean_halting = float(np.mean([
                     conn.lane.getLastStepHaltingNumber(lane) for lane in lanes
                 ]))
+                vids: list[str] = []
+                for lane in lanes:
+                    vids.extend(conn.lane.getLastStepVehicleIDs(lane))
+                mean_waiting = (
+                    sum(conn.vehicle.getWaitingTime(v) for v in vids)
+                    / max(len(vids), 1)
+                    / 10.0  # normalize sec→reward scale comparable to halting count
+                )
                 sub_step_halting[tl_id].append(mean_halting)
+                sub_step_waiting[tl_id].append(mean_waiting)
 
-        # Phase 5: Compute per-TL rewards = -mean_substeps(mean_lanes(halting))
-        # LibSignal × 12 multiplier removed for 49-TL multi-agent case — outlier
-        # TLs previously dominated MSE gradient. Reward now bounded ~[-30, 0].
+        # Advance elapsed tracker by steps_per_action for all TLs that held
+        # their current green (switchers got reset above; also advance them).
+        for tl_id in self.tl_ids:
+            self._elapsed_in_green[tl_id] += self.steps_per_action
+
+        # Phase 5: Halting-only reward (LibSignal CoLight style).
+        # Dual reward w/ wait_time caused Q-value divergence at rush_hour
+        # (per-TL reward spread 18×). Halting-only is narrower and stabler.
         rewards = np.zeros(n, dtype=np.float32)
         for i, tl_id in enumerate(self.tl_ids):
-            counts = sub_step_halting[tl_id]
-            if counts:
-                rewards[i] = -float(np.mean(counts))
+            h = sub_step_halting[tl_id]
+            if h:
+                rewards[i] = -float(np.mean(h))
             else:
                 rewards[i] = 0.0
 

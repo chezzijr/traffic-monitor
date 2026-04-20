@@ -1,4 +1,5 @@
-import { CheckSquare, Square } from 'lucide-react';
+import { useEffect } from 'react';
+import { CheckSquare, Square, Network } from 'lucide-react';
 import { useMapStore } from '../../store/mapStore';
 
 export function JunctionSelector() {
@@ -7,11 +8,23 @@ export function JunctionSelector() {
   const toggleJunctionSelection = useMapStore((s) => s.toggleJunctionSelection);
   const selectAllJunctions = useMapStore((s) => s.selectAllJunctions);
   const clearJunctionSelection = useMapStore((s) => s.clearJunctionSelection);
+  const tlClusters = useMapStore((s) => s.tlClusters);
+  const loadTlClusters = useMapStore((s) => s.loadTlClusters);
+  const selectCluster = useMapStore((s) => s.selectCluster);
+  const currentNetworkId = useMapStore((s) => s.currentNetworkId);
 
   const totalCount = sumoTrafficLights.length;
   const selectedCount = selectedJunctionIds.length;
 
+  useEffect(() => {
+    if (currentNetworkId && sumoTrafficLights.length > 0 && tlClusters.length === 0) {
+      loadTlClusters(currentNetworkId);
+    }
+  }, [currentNetworkId, sumoTrafficLights.length, tlClusters.length, loadTlClusters]);
+
   if (totalCount === 0) return null;
+
+  const multiTlClusters = tlClusters.filter((c) => c.size >= 2);
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 p-3">
@@ -36,6 +49,32 @@ export function JunctionSelector() {
           Clear
         </button>
       </div>
+
+      {multiTlClusters.length > 0 && (
+        <div className="mb-3 border-t pt-2">
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <Network size={12} className="text-purple-600" />
+            <h4 className="text-xs font-semibold text-gray-600">
+              Connected Clusters
+            </h4>
+            <span className="text-[10px] text-gray-400">
+              — recommended for CoLight training
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {multiTlClusters.map((c) => (
+              <button
+                key={c.cluster_id}
+                onClick={() => selectCluster(c.cluster_id)}
+                className="text-xs px-2 py-1 rounded bg-purple-50 text-purple-700 hover:bg-purple-100 transition-colors font-mono"
+                title={c.tl_ids.join(', ')}
+              >
+                {c.cluster_id} — {c.size} TLs
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="max-h-48 overflow-y-auto space-y-1">
         {sumoTrafficLights.map((tl) => {

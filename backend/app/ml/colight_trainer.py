@@ -33,6 +33,7 @@ class CoLightTrainer:
         self.env = env
         self._seed = seed
         self._episode_rewards: list[float] = []
+        self._baseline: dict[str, float] | None = None
 
         # Trigger lazy initialization so env dimensions are available
         self.env.reset(seed=seed)
@@ -140,12 +141,30 @@ class CoLightTrainer:
             per_tl_str = ",".join(f"{r:.0f}" for r in per_tl_reward_sum)
             action_dist = action_counts / max(action_counts.sum(), 1)
             action_dist_str = ",".join(f"{p:.2f}" for p in action_dist)
+            wait = float(info.get("avg_waiting_time", 0.0))
+            queue = float(info.get("avg_queue_length", 0.0))
+            throughput = int(info.get("throughput", 0))
+            if self._baseline is not None:
+                bw = self._baseline.get("avg_waiting_time", 0.0) or 1e-9
+                bq = self._baseline.get("avg_queue_length", 0.0) or 1e-9
+                bt = self._baseline.get("throughput", 0) or 1
+                dw = (wait - bw) / bw * 100.0
+                dq = (queue - bq) / bq * 100.0
+                dt = (throughput - bt) / bt * 100.0
+                metric_str = (
+                    f"wait={wait:.2f}s({dw:+.1f}%), "
+                    f"queue={queue:.2f}({dq:+.1f}%), "
+                    f"throughput={throughput}({dt:+.1f}%)"
+                )
+            else:
+                metric_str = f"wait={wait:.2f}s, queue={queue:.2f}, throughput={throughput}"
             logger.info(
                 f"Episode {episode + 1}/{num_episodes}: reward={episode_reward:.2f}, "
                 f"steps={episode_steps}, decisions={total_decisions}, "
                 f"epsilon={agent.epsilon:.4f}, "
                 f"buffer={len(agent.replay_buffer)}, "
                 f"loss_mean={mean_loss:.2f}, q_abs_mean={mean_q_abs:.2f}, "
+                f"{metric_str}, "
                 f"obs_range=[{obs_min:.3f},{obs_max:.3f}], "
                 f"action_dist=[{action_dist_str}], per_tl_reward=[{per_tl_str}]"
             )
@@ -252,4 +271,5 @@ class CoLightTrainer:
             "throughput": total_throughput // max(num_episodes, 1),
         }
         logger.info(f"Baseline metrics: {baseline}")
+        self._baseline = baseline
         return baseline
