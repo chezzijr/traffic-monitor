@@ -106,6 +106,8 @@ export interface SUMOTrafficLight {
   type: string;
   program_id: string;
   num_phases: number;
+  lat?: number | null;
+  lon?: number | null;
 }
 
 // Training requests

@@ -108,6 +108,8 @@ class SUMOTrafficLight(BaseModel):
     type: str = Field(..., description="Traffic light type (e.g., 'static', 'actuated')")
     program_id: str = Field(..., description="Traffic light program ID")
     num_phases: int = Field(..., ge=0, description="Number of phases in the traffic light program")
+    lat: float | None = Field(default=None, description="Latitude from SUMO boundary reverse-projection")
+    lon: float | None = Field(default=None, description="Longitude from SUMO boundary reverse-projection")
 
 
 class ConvertToSumoResponse(BaseModel):

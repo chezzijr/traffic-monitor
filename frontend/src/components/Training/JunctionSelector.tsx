@@ -4,6 +4,7 @@ import { useMapStore } from '../../store/mapStore';
 
 export function JunctionSelector() {
   const sumoTrafficLights = useMapStore((s) => s.sumoTrafficLights);
+  const selectedRegion = useMapStore((s) => s.selectedRegion);
   const selectedJunctionIds = useMapStore((s) => s.selectedJunctionIds);
   const toggleJunctionSelection = useMapStore((s) => s.toggleJunctionSelection);
   const selectAllJunctions = useMapStore((s) => s.selectAllJunctions);
@@ -13,7 +14,20 @@ export function JunctionSelector() {
   const selectCluster = useMapStore((s) => s.selectCluster);
   const currentNetworkId = useMapStore((s) => s.currentNetworkId);
 
-  const totalCount = sumoTrafficLights.length;
+  // Restrict the list to TLs inside the user's bbox with a renderable coord.
+  // netconvert's buffer leaks tlLogics beyond the drawn rectangle; listing
+  // them here would confuse selection since they don't highlight on the map.
+  const visibleTls = sumoTrafficLights.filter(
+    (tl) =>
+      tl.lat != null &&
+      tl.lon != null &&
+      (!selectedRegion ||
+        (tl.lat >= selectedRegion.south &&
+          tl.lat <= selectedRegion.north &&
+          tl.lon >= selectedRegion.west &&
+          tl.lon <= selectedRegion.east)),
+  );
+  const totalCount = visibleTls.length;
   const selectedCount = selectedJunctionIds.length;
 
   useEffect(() => {
@@ -77,7 +91,7 @@ export function JunctionSelector() {
       )}
 
       <div className="max-h-48 overflow-y-auto space-y-1">
-        {sumoTrafficLights.map((tl) => {
+        {visibleTls.map((tl) => {
           const isSelected = selectedJunctionIds.includes(tl.id);
           return (
             <button

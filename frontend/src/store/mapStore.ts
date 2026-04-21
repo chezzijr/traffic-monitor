@@ -72,26 +72,19 @@ export const useMapStore = create<MapState>((set) => ({
   selectAllJunctions: () =>
     set((state) => {
       const bbox = state.selectedRegion;
-      if (!bbox) {
-        return { selectedJunctionIds: state.sumoTrafficLights.map((tl) => tl.id) };
-      }
-      const insideTlIds = new Set(
-        state.intersections
-          .filter(
-            (i) =>
-              i.sumo_tl_id &&
-              i.lat >= bbox.south &&
-              i.lat <= bbox.north &&
-              i.lon >= bbox.west &&
-              i.lon <= bbox.east,
-          )
-          .map((i) => i.sumo_tl_id as string),
+      // TLs with a boundary-reverse-projected coordinate within the user's bbox.
+      // Covers both OSM-matched and unmatched SUMO TLs.
+      const inside = state.sumoTrafficLights.filter(
+        (tl) =>
+          tl.lat != null &&
+          tl.lon != null &&
+          (!bbox ||
+            (tl.lat >= bbox.south &&
+              tl.lat <= bbox.north &&
+              tl.lon >= bbox.west &&
+              tl.lon <= bbox.east)),
       );
-      return {
-        selectedJunctionIds: state.sumoTrafficLights
-          .map((tl) => tl.id)
-          .filter((id) => insideTlIds.has(id)),
-      };
+      return { selectedJunctionIds: inside.map((tl) => tl.id) };
     }),
   clearJunctionSelection: () => set({ selectedJunctionIds: [] }),
   setSumoTrafficLights: (lights) => set({ sumoTrafficLights: lights }),
@@ -99,7 +92,34 @@ export const useMapStore = create<MapState>((set) => ({
   loadTlClusters: async (networkId) => {
     try {
       const clusters = await mapService.getTlClusters(networkId);
-      set({ tlClusters: clusters });
+      // Clip clusters to TLs whose boundary-reverse-projected coordinate falls
+      // inside the user's drawn bbox. SUMO .net.xml contains tlLogics beyond
+      // the bbox (netconvert emits a buffered network); those shouldn't show
+      // up as cluster options because selecting them highlights nothing
+      // within the visible rectangle.
+      const state = useMapStore.getState();
+      const bbox = state.selectedRegion;
+      const inBboxTlIds = new Set(
+        state.sumoTrafficLights
+          .filter(
+            (tl) =>
+              tl.lat != null &&
+              tl.lon != null &&
+              (!bbox ||
+                (tl.lat >= bbox.south &&
+                  tl.lat <= bbox.north &&
+                  tl.lon >= bbox.west &&
+                  tl.lon <= bbox.east)),
+          )
+          .map((tl) => tl.id),
+      );
+      const filtered = clusters
+        .map((c) => {
+          const tlIds = c.tl_ids.filter((id) => inBboxTlIds.has(id));
+          return { ...c, tl_ids: tlIds, size: tlIds.length };
+        })
+        .filter((c) => c.size >= 1);
+      set({ tlClusters: filtered });
     } catch (err) {
       console.error('Failed to load TL clusters', err);
       set({ tlClusters: [] });

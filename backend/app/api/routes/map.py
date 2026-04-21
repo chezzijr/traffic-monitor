@@ -93,16 +93,26 @@ def convert_to_sumo(network_id: str) -> ConvertToSumoResponse:
     """
     try:
         result = osm_service.convert_to_sumo(network_id)
-        # Convert traffic light dicts to SUMOTrafficLight models
-        traffic_lights = [
-            SUMOTrafficLight(
-                id=tl["id"],
-                type=tl["type"],
-                program_id=tl.get("program_id", "0"),
-                num_phases=len(tl.get("phases", [])),
+        # Reverse-project SUMO X/Y to lat/lon so every TL has a map-renderable
+        # coordinate, not just the ~45% that got OSM matches.
+        boundary = osm_service._parse_sumo_boundary(Path(result["network_path"]))
+        traffic_lights = []
+        for tl in result["traffic_lights"]:
+            x, y = tl.get("x", 0.0), tl.get("y", 0.0)
+            lat_ll: float | None = None
+            lon_ll: float | None = None
+            if boundary is not None and (x, y) != (0.0, 0.0):
+                lon_ll, lat_ll = osm_service.sumo_xy_to_lonlat(x, y, boundary)
+            traffic_lights.append(
+                SUMOTrafficLight(
+                    id=tl["id"],
+                    type=tl["type"],
+                    program_id=tl.get("program_id", "0"),
+                    num_phases=len(tl.get("phases", [])),
+                    lat=lat_ll,
+                    lon=lon_ll,
+                )
             )
-            for tl in result["traffic_lights"]
-        ]
         # Save network metadata with junction data (one entry per SUMO TL).
         # Narrowed to expected failure modes; unexpected errors bubble up so
         # the client doesn't see 201 Created while metadata silently fails.
