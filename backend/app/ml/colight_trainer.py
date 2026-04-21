@@ -50,9 +50,9 @@ class CoLightTrainer:
             gamma=0.95,
             epsilon_start=0.5,
             epsilon_min=0.05,
-            epsilon_decay=0.9995,
+            epsilon_decay=0.9997,
             grad_clip=5.0,
-            buffer_size=5000,
+            buffer_size=20000,
             batch_size=64,
             device=device,
             n_layers=1,
@@ -81,7 +81,7 @@ class CoLightTrainer:
 
         agent = self.agent
         num_episodes = max(total_timesteps // 360, 10)
-        learning_start = 1000
+        learning_start = 3600
         update_model_rate = 1
         update_target_rate = 10
         total_decisions = 0

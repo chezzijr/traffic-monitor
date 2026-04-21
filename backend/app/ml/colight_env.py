@@ -84,12 +84,15 @@ class CoLightEnv:
     def _build_graph(self) -> None:
         """Build adjacency between selected TLs.
 
-        Strategy: k-nearest-neighbors by Euclidean distance between junction
-        coordinates (k=min(4, N-1), bidirectional), UNIONED with any direct
-        SUMO road edges whose endpoints are both selected TLs. Sparse
-        SUMO-edge-only adjacency (the previous approach) left the graph near-
-        empty when selected TLs are separated by unsignalized junctions,
-        which collapsed CoLight's attention to self-loops and blocked learning.
+        Primary: multi-hop traversal via non-TL junctions (grey-dot SUMO nodes
+        between signaled intersections). This recovers the *logical* adjacency
+        a human sees on the map — the same algorithm as graph_service uses for
+        cluster detection. Subset the full-network TL graph down to just the
+        TLs the user selected.
+
+        Fallback: if the primary pass leaves the graph sparse (< N edges for N
+        nodes), pad with k-NN by Euclidean distance so CoLight's attention has
+        real neighbors instead of collapsing to self-loops.
         """
         sumo_home = os.environ.get("SUMO_HOME", "/usr/share/sumo")
         sumo_tools = os.path.join(sumo_home, "tools")
@@ -97,33 +100,41 @@ class CoLightEnv:
             sys.path.append(sumo_tools)
         import sumolib
 
+        from app.services.sumo_graph_utils import (
+            parse_network,
+            strip_gs,
+            tl_neighbors_by_hop,
+        )
+
+        # Build node_id2idx for selected TLs only (in user-provided order)
+        self.node_id2idx = {tl_id: idx for idx, tl_id in enumerate(self.tl_ids)}
+        selected: set[str] = set(self.tl_ids)
+        n = len(self.tl_ids)
+
+        # Pass 1: hop-traversal adjacency, restricted to selected TLs
+        tl_ids_all, junction_adj, _ = parse_network(self.network_path)
+        edges: set[tuple[int, int]] = set()
+        for tl_id in self.tl_ids:
+            nbrs = tl_neighbors_by_hop(tl_id, tl_ids_all, junction_adj, max_hops=2)
+            for nb in nbrs:
+                if nb in selected and nb != tl_id:
+                    i = self.node_id2idx[tl_id]
+                    j = self.node_id2idx[nb]
+                    edges.add((i, j))
+                    edges.add((j, i))
+
+        # Resolve coordinates via sumolib (stripped id first — geometric junction)
         net = sumolib.net.readNet(self.network_path)
 
-        # Build node_id2idx for selected TLs only
-        self.node_id2idx = {tl_id: idx for idx, tl_id in enumerate(self.tl_ids)}
-
-        def _strip_gs(node_id: str) -> str:
-            return node_id[3:] if node_id.startswith("GS_") else node_id
-
         def _resolve_node(tl_id: str):
-            for candidate in (tl_id, f"GS_{tl_id}"):
+            stripped = strip_gs(tl_id)
+            for candidate in (stripped, tl_id, f"GS_{stripped}"):
                 try:
                     return net.getNode(candidate)
                 except KeyError:
                     continue
             return None
 
-        edges: set[tuple[int, int]] = set()
-
-        # Pass 1: direct SUMO edges between selected TLs (preserve true road neighbors)
-        for edge in net.getEdges():
-            from_id = _strip_gs(edge.getFromNode().getID())
-            to_id = _strip_gs(edge.getToNode().getID())
-            if from_id in self.node_id2idx and to_id in self.node_id2idx and from_id != to_id:
-                edges.add((self.node_id2idx[from_id], self.node_id2idx[to_id]))
-
-        # Pass 2: k-NN by Euclidean distance between junction coordinates
-        n = len(self.tl_ids)
         coords: list[tuple[float, float] | None] = []
         for tl_id in self.tl_ids:
             node = _resolve_node(tl_id)
@@ -131,21 +142,20 @@ class CoLightEnv:
 
         missing = [tl for tl, c in zip(self.tl_ids, coords) if c is None]
         if missing:
-            logger.warning(
-                f"Could not resolve coordinates for {len(missing)} TL(s): {missing[:5]}. "
-                "k-NN graph will skip these nodes."
+            logger.error(
+                f"Could not resolve coordinates for {len(missing)}/{n} TL(s): {missing[:5]}. "
+                "k-NN fallback will skip these — check .net.xml integrity."
             )
 
+        # Pass 2: k-NN fallback, adaptive on N
+        # k=2 for tiny (<=4), k=3 for small (5-7), k=4 for larger — empirically
+        # balances over-smoothing (too many neighbors) vs. self-loop collapse.
+        k = max(2, min(4, (n - 1) // 2)) if n >= 2 else 0
         if n >= 2:
-            # k=2 chosen empirically: k=4 caused over-smoothing on sparse
-            # 8-TL networks (neighbors are physically close but not traffic-
-            # coupled via shared roads), which led to Q-value divergence.
-            k = min(2, n - 1)
             for i in range(n):
                 ci = coords[i]
                 if ci is None:
                     continue
-                xi, yi = ci
                 dists: list[tuple[float, int]] = []
                 for j in range(n):
                     if i == j:
@@ -153,8 +163,7 @@ class CoLightEnv:
                     cj = coords[j]
                     if cj is None:
                         continue
-                    xj, yj = cj
-                    dx, dy = xi - xj, yi - yj
+                    dx, dy = ci[0] - cj[0], ci[1] - cj[1]
                     dists.append((dx * dx + dy * dy, j))
                 dists.sort()
                 for _, j in dists[:k]:
@@ -165,15 +174,17 @@ class CoLightEnv:
             self.edge_index = np.array(sorted(edges), dtype=np.int64).T
         else:
             self.edge_index = np.empty((2, 0), dtype=np.int64)
-            logger.warning(
-                "No edges built — intersections are disconnected. "
-                "Self-loops will be added by the attention layer."
-            )
 
+        n_edges = self.edge_index.shape[1]
         logger.info(
-            f"Graph built: {len(self.tl_ids)} nodes, {self.edge_index.shape[1]} directed edges "
-            f"(k-NN k={min(4, max(n - 1, 0))} + direct SUMO edges)"
+            f"Graph built: {n} nodes, {n_edges} directed edges "
+            f"(hop-traversal + k-NN k={k})"
         )
+        if n_edges < n and n >= 2:
+            logger.error(
+                f"Graph density too low: {n_edges} edges for {n} nodes. "
+                "CoLight attention will degenerate to self-loops."
+            )
 
     # ------------------------------------------------------------------
     # Yellow phase creation
@@ -297,16 +308,17 @@ class CoLightEnv:
 
         self.tl_ids = kept_tl_ids
 
-        # Compute observation / action dimensions
-        # LibSignal CoLight observation = lane vehicle counts only (phase=False)
-        self.ob_length = max(
-            len(self._controlled_lanes[tl]) for tl in self.tl_ids
-        )
+        # Compute observation / action dimensions.
+        # Observation = [lane vehicle counts padded to max_lanes, phase one-hot padded to num_actions].
+        # LibSignal ships phase=False as default but enables phase via one_hot=True; including phase
+        # lets the agent distinguish "just switched" from "been green for N steps" without hidden state.
+        self._max_lanes = max(len(self._controlled_lanes[tl]) for tl in self.tl_ids)
         self.phase_lengths = [
             len(self._green_phases[tl])
             for tl in self.tl_ids  # ordered by node_id2idx (same order as tl_ids)
         ]
         self.num_actions = max(self.phase_lengths)
+        self.ob_length = self._max_lanes + self.num_actions
 
         # Build graph adjacency
         self._build_graph()
@@ -395,30 +407,29 @@ class CoLightEnv:
     # ------------------------------------------------------------------
 
     def _get_observation(self, tl_id: str) -> np.ndarray:
-        """CoLight observation: normalized lane vehicle counts, padded to ob_length.
+        """CoLight observation: [normalized lane vehicle counts, phase one-hot].
 
-        Matches LibSignal colight.yml (phase=False, vehicle_max normalized).
+        - Lane vehicle counts padded with zeros to self._max_lanes.
+        - Phase one-hot over self.num_actions using current green index.
+        - Total dim = self.ob_length = max_lanes + num_actions.
         """
         conn = self._get_conn()
 
-        vehicle_counts: list[float] = []
-        for lane_id in self._controlled_lanes[tl_id]:
+        lanes = self._controlled_lanes[tl_id]
+        vehicle_counts = np.zeros(self._max_lanes, dtype=np.float32)
+        for i, lane_id in enumerate(lanes):
             try:
-                count = conn.lane.getLastStepVehicleNumber(lane_id)
-                vehicle_counts.append(float(count))
+                vehicle_counts[i] = float(conn.lane.getLastStepVehicleNumber(lane_id))
             except Exception:
-                vehicle_counts.append(0.0)
+                pass
+        vehicle_counts /= self._vehicle_max
 
-        raw_obs = np.array(vehicle_counts, dtype=np.float32) / self._vehicle_max
+        phase_oh = np.zeros(self.num_actions, dtype=np.float32)
+        cur_green = self._current_green_idx.get(tl_id, 0)
+        if 0 <= cur_green < self.num_actions:
+            phase_oh[cur_green] = 1.0
 
-        # Pad to ob_length
-        if len(raw_obs) < self.ob_length:
-            raw_obs = np.concatenate([
-                raw_obs,
-                np.zeros(self.ob_length - len(raw_obs), dtype=np.float32),
-            ])
-
-        return raw_obs
+        return np.concatenate([vehicle_counts, phase_oh], axis=0)
 
     def _get_all_observations(self) -> np.ndarray:
         """Stack per-TL observations in node index order -> [N, ob_length]."""
@@ -560,16 +571,18 @@ class CoLightEnv:
         for tl_id in self.tl_ids:
             self._elapsed_in_green[tl_id] += self.steps_per_action
 
-        # Phase 5: Halting-only reward (LibSignal CoLight style).
-        # Dual reward w/ wait_time caused Q-value divergence at rush_hour
-        # (per-TL reward spread 18×). Halting-only is narrower and stabler.
+        # Phase 5: Halting-only reward, normalized per-TL so big/busy intersections
+        # don't dominate the shared-parameter Q-net gradient. Raw -mean(halting) is
+        # already averaged over lanes, but a TL with 6 wide lanes still sees an order
+        # of magnitude more halting than a 3-lane TL under the same congestion level.
+        # Dividing by sqrt(num_lanes) rescales to roughly per-lane-utilization.
         rewards = np.zeros(n, dtype=np.float32)
         for i, tl_id in enumerate(self.tl_ids):
             h = sub_step_halting[tl_id]
-            if h:
-                rewards[i] = -float(np.mean(h))
-            else:
-                rewards[i] = 0.0
+            if not h:
+                continue
+            num_lanes = max(len(self._controlled_lanes[tl_id]), 1)
+            rewards[i] = -float(np.mean(h)) / float(np.sqrt(num_lanes))
 
         # Phase 6: Observations
         observations = self._get_all_observations()
