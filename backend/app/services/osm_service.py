@@ -11,6 +11,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 import json
 import requests
+import time as _time
 
 from app.utils.traffic_light_clustered import cluster_traffic_light_file
 
@@ -77,8 +78,20 @@ NETCONVERT_COMMON_FLAGS = [
 # SUMO patterns: cluster_<id>_<id>_..._#Nmore, joinedS_<id>_<id>, joinedG_<id>_<id>,
 # GS_<id> (guessed signal). Bare numeric ids are also valid.
 import re as _re
-import fcntl as _fcntl
 from contextlib import contextmanager as _contextmanager
+try:
+    import fcntl as _fcntl
+except ModuleNotFoundError:  # Windows
+    _fcntl = None
+
+if _fcntl is None:
+    try:
+        import msvcrt as _msvcrt
+    except ModuleNotFoundError:
+        _msvcrt = None
+else:
+    _msvcrt = None
+
 _SUMO_ID_DIGITS_RE = _re.compile(r"\d+")
 
 
@@ -92,13 +105,33 @@ def _convert_network_lock(network_id: str):
     """
     SIMULATION_NETWORKS_DIR.mkdir(parents=True, exist_ok=True)
     lock_path = SIMULATION_NETWORKS_DIR / f"{network_id}.convert.lock"
-    fh = open(lock_path, "w")
+    # POSIX: use flock. Windows: fallback to msvcrt byte-range lock.
+    fh = open(lock_path, "w+b" if _fcntl is None else "w")
     try:
-        _fcntl.flock(fh.fileno(), _fcntl.LOCK_EX)
+        if _fcntl is not None:
+            _fcntl.flock(fh.fileno(), _fcntl.LOCK_EX)
+        elif _msvcrt is not None:
+            # Ensure lock file has at least one byte to lock.
+            fh.seek(0)
+            fh.write(b"\0")
+            fh.flush()
+            fh.seek(0)
+            while True:
+                try:
+                    _msvcrt.locking(fh.fileno(), _msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    _time.sleep(0.1)
+        else:
+            logger.warning("No file-lock backend available; proceeding without inter-process lock")
         yield
     finally:
         try:
-            _fcntl.flock(fh.fileno(), _fcntl.LOCK_UN)
+            if _fcntl is not None:
+                _fcntl.flock(fh.fileno(), _fcntl.LOCK_UN)
+            elif _msvcrt is not None:
+                fh.seek(0)
+                _msvcrt.locking(fh.fileno(), _msvcrt.LK_UNLCK, 1)
         finally:
             fh.close()
 
