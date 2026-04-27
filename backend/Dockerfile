@@ -13,6 +13,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     sumo \
     sumo-tools \
+    osmium-tool \
     libgl1 \
     libglib2.0-0 \
     libsm6 \
@@ -28,14 +29,16 @@ WORKDIR /app
 # Copy dependency files first for better layer caching
 COPY pyproject.toml uv.lock ./
 
-# Install dependencies using uv
-RUN uv sync --frozen --no-dev --no-install-project
+# Install dependencies using uv (cache mount = resumable downloads)
+ENV UV_HTTP_TIMEOUT=600
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project
 
 # Copy application code
 COPY app/ ./app/
 
 # Create simulation directory structure (populated at runtime via volume mount)
-RUN mkdir -p ./simulation/models ./simulation/networks ./simulation/vtypes
+RUN mkdir -p ./simulation/models ./simulation/networks ./simulation/vtypes ./simulation/data
 
 # Expose the API port
 EXPOSE 8000

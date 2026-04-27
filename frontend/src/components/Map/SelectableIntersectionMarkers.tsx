@@ -1,34 +1,6 @@
 import { Marker, Popup } from 'react-leaflet';
-import L from 'leaflet';
 import { useMapStore } from '../../store/mapStore';
-
-const grayIcon = L.divIcon({
-  className: 'selectable-intersection-marker',
-  html: '<div style="width:8px;height:8px;background:#9ca3af;border-radius:50%;border:1px solid white;"></div>',
-  iconSize: [8, 8],
-  iconAnchor: [4, 4],
-});
-
-const greenIcon = L.divIcon({
-  className: 'selectable-intersection-marker',
-  html: '<div style="width:18px;height:18px;background:#22c55e;border-radius:50%;border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.3);cursor:pointer;"></div>',
-  iconSize: [18, 18],
-  iconAnchor: [9, 9],
-});
-
-const amberIcon = L.divIcon({
-  className: 'selectable-intersection-marker',
-  html: '<div style="width:20px;height:20px;background:#f59e0b;border-radius:50%;border:2px solid white;box-shadow:0 0 8px rgba(245,158,11,0.6);cursor:pointer;animation:pulse 2s infinite;"></div>',
-  iconSize: [20, 20],
-  iconAnchor: [10, 10],
-});
-
-const purpleIcon = L.divIcon({
-  className: 'selectable-intersection-marker',
-  html: '<div style="width:20px;height:20px;background:#a855f7;border-radius:50%;border:2px solid white;box-shadow:0 0 8px rgba(168,85,247,0.6);cursor:pointer;"></div>',
-  iconSize: [20, 20],
-  iconAnchor: [10, 10],
-});
+import { grayIcon, greenIcon, amberIcon, purpleIcon } from './markerIcons';
 
 interface SelectableIntersectionMarkersProps {
   deployedJunctionIds?: string[];
@@ -36,8 +8,28 @@ interface SelectableIntersectionMarkersProps {
 
 export function SelectableIntersectionMarkers({ deployedJunctionIds = [] }: SelectableIntersectionMarkersProps) {
   const intersections = useMapStore((s) => s.intersections);
+  const sumoTrafficLights = useMapStore((s) => s.sumoTrafficLights);
+  const selectedRegion = useMapStore((s) => s.selectedRegion);
   const selectedJunctionIds = useMapStore((s) => s.selectedJunctionIds);
   const toggleJunctionSelection = useMapStore((s) => s.toggleJunctionSelection);
+
+  // SUMO TLs without OSM matches still get rendered from their boundary-
+  // reverse-projected lat/lon — scoped to the user's bbox so tlLogics leaked
+  // by netconvert's buffer don't clutter the map.
+  const osmMatchedTlIds = new Set(
+    intersections.map((i) => i.sumo_tl_id).filter(Boolean) as string[],
+  );
+  const unmatchedSumoTls = sumoTrafficLights.filter(
+    (tl) =>
+      tl.lat != null &&
+      tl.lon != null &&
+      !osmMatchedTlIds.has(tl.id) &&
+      (!selectedRegion ||
+        (tl.lat >= selectedRegion.south &&
+          tl.lat <= selectedRegion.north &&
+          tl.lon >= selectedRegion.west &&
+          tl.lon <= selectedRegion.east)),
+  );
 
   return (
     <>
@@ -82,6 +74,32 @@ export function SelectableIntersectionMarkers({ deployedJunctionIds = [] }: Sele
                 )}
                 {isDeployed && (
                   <p className="text-xs text-purple-600 font-medium mt-1">AI Model Deployed</p>
+                )}
+              </div>
+            </Popup>
+          </Marker>
+        );
+      })}
+      {unmatchedSumoTls.map((tl) => {
+        const isDeployed = deployedJunctionIds.includes(tl.id);
+        const isSelected = selectedJunctionIds.includes(tl.id);
+        const icon = isDeployed ? purpleIcon : isSelected ? amberIcon : greenIcon;
+        return (
+          <Marker
+            key={`sumo-${tl.id}`}
+            position={[tl.lat as number, tl.lon as number]}
+            icon={icon}
+            eventHandlers={{
+              click: () => toggleJunctionSelection(tl.id),
+            }}
+          >
+            <Popup>
+              <div className="text-sm">
+                <p className="font-semibold">Junction {tl.id}</p>
+                <p className="text-xs text-gray-600">SUMO TL: {tl.id}</p>
+                <p className="text-xs text-gray-400 italic">No OSM match</p>
+                {isSelected && (
+                  <p className="text-xs text-amber-600 font-medium mt-1">Selected for training</p>
                 )}
               </div>
             </Popup>

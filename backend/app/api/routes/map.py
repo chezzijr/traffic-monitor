@@ -3,7 +3,7 @@
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, status
 
 from app.models.schemas import (
     BoundingBox,
@@ -13,10 +13,8 @@ from app.models.schemas import (
     RouteGenerationRequest,
     RouteGenerationResponse,
     SUMOTrafficLight,
-    TrafficLight,
-    TrafficSignal,
 )
-from app.services import osm_service
+from app.services import network_service, osm_service
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -95,16 +93,104 @@ def convert_to_sumo(network_id: str) -> ConvertToSumoResponse:
     """
     try:
         result = osm_service.convert_to_sumo(network_id)
-        # Convert traffic light dicts to SUMOTrafficLight models
-        traffic_lights = [
-            SUMOTrafficLight(
-                id=tl["id"],
-                type=tl["type"],
-                program_id=tl.get("program_id", "0"),
-                num_phases=len(tl.get("phases", [])),
+        # Reverse-project SUMO X/Y to lat/lon so every TL has a map-renderable
+        # coordinate, not just the ~45% that got OSM matches.
+        boundary = osm_service._parse_sumo_boundary(Path(result["network_path"]))
+        traffic_lights = []
+        for tl in result["traffic_lights"]:
+            x, y = tl.get("x", 0.0), tl.get("y", 0.0)
+            lat_ll: float | None = None
+            lon_ll: float | None = None
+            if boundary is not None and (x, y) != (0.0, 0.0):
+                lon_ll, lat_ll = osm_service.sumo_xy_to_lonlat(x, y, boundary)
+            traffic_lights.append(
+                SUMOTrafficLight(
+                    id=tl["id"],
+                    type=tl["type"],
+                    program_id=tl.get("program_id", "0"),
+                    num_phases=len(tl.get("phases", [])),
+                    lat=lat_ll,
+                    lon=lon_ll,
+                )
             )
-            for tl in result["traffic_lights"]
-        ]
+        # Save network metadata with junction data (one entry per SUMO TL).
+        # Narrowed to expected failure modes; unexpected errors bubble up so
+        # the client doesn't see 201 Created while metadata silently fails.
+        try:
+            intersections = osm_service.get_intersections(network_id)
+            bbox_tuple = osm_service.get_network_bbox(network_id)
+            osm_sumo_map: dict[str, str] = result["osm_to_sumo_tl_map"]
+            sumo_tls = result["traffic_lights"]
+
+            # Invert osm→sumo map to sumo→[osm ids] so each tl_id picks a
+            # canonical representative OSM intersection for its coord.
+            sumo_to_osm_ids: dict[str, list[str]] = {}
+            for osm_id, tl_id in osm_sumo_map.items():
+                sumo_to_osm_ids.setdefault(tl_id, []).append(osm_id)
+            osm_by_id = {inter["id"]: inter for inter in intersections}
+
+            # Reverse-projection boundary for SUMO TLs with no OSM match.
+            boundary = osm_service._parse_sumo_boundary(Path(result["network_path"]))
+
+            junctions = []
+            seen_tl_ids: set[str] = set()
+            skipped_no_coord: list[str] = []
+            for sumo_tl in sumo_tls:
+                tl_id = sumo_tl["id"]
+                if tl_id in seen_tl_ids:
+                    continue
+                seen_tl_ids.add(tl_id)
+
+                # Primary: reverse-project SUMO junction x/y — each TL has a
+                # unique SUMO coord, so no two TLs collide at the same dot.
+                # OSM-member canonical coord was previously used, but distinct
+                # SUMO TLs resolving to a shared OSM neighbour caused visual
+                # duplicates on the map (Issue A).
+                x, y = sumo_tl.get("x", 0.0), sumo_tl.get("y", 0.0)
+                if boundary is not None and (x, y) != (0.0, 0.0):
+                    lon, lat = osm_service.sumo_xy_to_lonlat(x, y, boundary)
+                    junction_id = tl_id
+                else:
+                    # Fallback: first matching OSM member (rare: tlLogics that
+                    # parse_sumo_traffic_lights couldn't resolve to a junction).
+                    canonical = None
+                    for oid in sumo_to_osm_ids.get(tl_id, []):
+                        canonical = osm_by_id.get(oid)
+                        if canonical is not None:
+                            break
+                    if canonical is not None:
+                        lat, lon, junction_id = canonical["lat"], canonical["lon"], canonical["id"]
+                    else:
+                        skipped_no_coord.append(tl_id)
+                        continue
+
+                junctions.append({
+                    "id": junction_id,
+                    "lat": lat,
+                    "lon": lon,
+                    "tl_id": tl_id,
+                })
+
+            if skipped_no_coord:
+                logger.error(
+                    f"Dropped {len(skipped_no_coord)} SUMO TL(s) from metadata "
+                    f"(no OSM match and boundary unavailable): "
+                    f"{skipped_no_coord[:10]}{'…' if len(skipped_no_coord) > 10 else ''}"
+                )
+
+            if bbox_tuple:
+                s, w, n, e = bbox_tuple
+                network_service.save_metadata(
+                    network_id=network_id,
+                    bbox={"south": s, "west": w, "north": n, "east": e},
+                    intersection_count=len(intersections),
+                    traffic_light_count=len(junctions),
+                    junctions=junctions,
+                    road_count=len(intersections),
+                )
+        except (KeyError, OSError) as e:
+            logger.warning(f"Failed to save network metadata for {network_id}: {e}", exc_info=True)
+
         return ConvertToSumoResponse(
             sumo_network_path=result["network_path"],
             network_id=network_id,
@@ -179,30 +265,3 @@ def generate_routes(network_id: str, request: RouteGenerationRequest) -> RouteGe
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get(
-    "/traffic-lights",
-    response_model=list[TrafficLight],
-    status_code=status.HTTP_200_OK,
-    summary="Get traffic lights around a point",
-    description="Retrieve OSM traffic lights within a radius of a lat/lng point.",
-)
-def get_traffic_lights(
-    lat: float = Query(..., ge=-90, le=90, description="Latitude"),
-    lng: float = Query(..., ge=-180, le=180, description="Longitude"),
-    radius: int = Query(500, ge=1, le=50000, description="Search radius in meters"),
-) -> list[TrafficLight]:
-    """Get traffic lights from OSM around a given point."""
-    lights = osm_service.get_traffic_lights_by_point(lat=lat, lon=lng, radius=radius)
-    return [TrafficLight(**l) for l in lights]
-
-@router.get(
-    "/all-traffic-lights",
-    response_model=list[TrafficLight],
-    status_code=status.HTTP_200_OK,
-    summary="Get all traffic lights in cache",
-    description="Access cache and get all traffic lights if its exits"
-)
-def get_all_traffic_lights()-> list[TrafficLight]:
-    """Get all traffic lights in cache"""
-    lights = osm_service.get_all_traffic_lights()
-    return [TrafficLight(**l) for l in lights]

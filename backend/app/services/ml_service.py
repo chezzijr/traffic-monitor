@@ -2,6 +2,7 @@
 
 Training is handled by Celery tasks (see tasks/training_task.py).
 This service manages model loading, inference, and listing.
+Supports both legacy SB3 .zip models and new PyTorch .pt models.
 """
 
 import json
@@ -12,10 +13,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from stable_baselines3 import DQN, PPO
-from stable_baselines3.common.base_class import BaseAlgorithm
+import torch
 
 from app.config import settings
+from app.ml.networks.dqn_network import DQNAgent
+from app.ml.networks.ppo_network import PPOAgent
 from app.ml.trainer import Algorithm
 
 logger = logging.getLogger(__name__)
@@ -28,11 +30,13 @@ class _ModelState:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._loaded_model: BaseAlgorithm | None = None
+        self._loaded_model: Any = None  # DQNAgent, PPOAgent, or legacy SB3 model
         self._loaded_model_path: str | None = None
+        self._model_format: str | None = None  # "pytorch" or "sb3"
+        self._algorithm: str | None = None
 
     @property
-    def model(self) -> BaseAlgorithm | None:
+    def model(self) -> Any:
         with self._lock:
             return self._loaded_model
 
@@ -52,8 +56,8 @@ def list_models() -> list[dict[str, Any]]:
     if not MODELS_DIR.exists():
         return models
 
-    # Single-agent models: *.zip files
-    for model_file in MODELS_DIR.glob("*.zip"):
+    # Single-agent models: *.zip (legacy SB3) and *.pt (PyTorch) files
+    for model_file in list(MODELS_DIR.glob("*.zip")) + list(MODELS_DIR.glob("*.pt")):
         stem = model_file.stem
         parts = stem.rsplit("_", 3)
 
@@ -72,6 +76,16 @@ def list_models() -> list[dict[str, Any]]:
             except Exception:
                 pass
 
+        # Try to load results
+        results_path = Path(str(model_file) + ".results.json")
+        results = None
+        if results_path.exists():
+            try:
+                with open(results_path) as f:
+                    results = json.load(f)
+            except Exception:
+                pass
+
         stat = model_file.stat()
         models.append({
             "model_id": model_file.stem,
@@ -85,6 +99,7 @@ def list_models() -> list[dict[str, Any]]:
             "size_bytes": stat.st_size,
             "created_at": metadata.get("created_at", datetime.fromtimestamp(stat.st_ctime).isoformat()),
             "type": "single",
+            "results": results,
         })
 
     # Multi-agent models: directories with metadata.json
@@ -95,6 +110,16 @@ def list_models() -> list[dict[str, Any]]:
                 metadata = json.load(f)
         except Exception:
             continue
+
+        # Try to load results
+        results_path = model_dir / "results.json"
+        results = None
+        if results_path.exists():
+            try:
+                with open(results_path) as f:
+                    results = json.load(f)
+            except Exception:
+                pass
 
         # Count agent .zip files
         agent_zips = list(model_dir.glob("*.zip"))
@@ -111,6 +136,7 @@ def list_models() -> list[dict[str, Any]]:
             "num_agents": len(agent_zips),
             "created_at": metadata.get("created_at", "unknown"),
             "type": "multi",
+            "results": results,
         })
 
     models.sort(key=lambda m: m.get("created_at", ""), reverse=True)
@@ -118,54 +144,131 @@ def list_models() -> list[dict[str, Any]]:
 
 
 def load_model(model_path: str) -> dict[str, Any]:
-    """Load a trained model for inference."""
+    """Load a trained model for inference. Supports .pt (PyTorch) and .zip (legacy SB3)."""
     path = Path(model_path)
     if not path.exists():
         raise FileNotFoundError(f"Model file not found: {model_path}")
 
     stem = path.stem
-    if "_dqn_" in stem.lower():
+    suffix = path.suffix.lower()
+
+    # Determine algorithm from filename
+    if "_colight_" in stem.lower():
+        algorithm = Algorithm.COLIGHT
+    elif "_dqn_" in stem.lower():
         algorithm = Algorithm.DQN
     elif "_ppo_" in stem.lower():
         algorithm = Algorithm.PPO
     else:
-        try:
-            model = DQN.load(str(path))
+        algorithm = Algorithm.DQN  # Default
+
+    if suffix == ".pt":
+        # PyTorch model (new format)
+        checkpoint = torch.load(str(path), map_location="cpu", weights_only=False)
+        algo_str = checkpoint.get("algorithm", algorithm.value)
+        ob_length = checkpoint["ob_length"]
+        num_actions = checkpoint["num_actions"]
+
+        if algo_str == "colight":
+            from app.ml.networks.colight_network import CoLightAgent
+
+            agent = CoLightAgent(
+                ob_length=ob_length,
+                num_actions=num_actions,
+                num_intersections=checkpoint["num_intersections"],
+                phase_lengths=checkpoint["phase_lengths"],
+                edge_index=checkpoint["edge_index"],
+                **checkpoint.get("network_params", {}),
+            )
+            agent.q_network.load_state_dict(checkpoint["model_state"])
+            if "target_state" in checkpoint:
+                agent.target_network.load_state_dict(checkpoint["target_state"])
+            agent.q_network.eval()
+            algorithm = Algorithm.COLIGHT
+        elif algo_str == "dqn":
+            agent = DQNAgent(ob_length=ob_length, num_actions=num_actions)
+            agent.q_network.load_state_dict(checkpoint["model_state"])
+            if "target_state" in checkpoint:
+                agent.target_network.load_state_dict(checkpoint["target_state"])
+            agent.q_network.eval()
             algorithm = Algorithm.DQN
-        except Exception:
-            try:
-                model = PPO.load(str(path))
-                algorithm = Algorithm.PPO
-            except Exception as e:
-                raise ValueError(f"Could not load model: {e}")
+        else:
+            agent = PPOAgent(ob_length=ob_length, num_actions=num_actions)
+            agent.network.load_state_dict(checkpoint["model_state"])
+            agent.network.eval()
+            algorithm = Algorithm.PPO
 
-    if algorithm == Algorithm.DQN:
-        model = DQN.load(str(path))
+        with _state._lock:
+            _state._loaded_model = agent
+            _state._loaded_model_path = str(path)
+            _state._model_format = "pytorch"
+            _state._algorithm = algorithm.value
     else:
-        model = PPO.load(str(path))
+        # Legacy SB3 .zip model
+        try:
+            from stable_baselines3 import DQN, PPO
+            if algorithm == Algorithm.DQN:
+                model = DQN.load(str(path))
+            else:
+                model = PPO.load(str(path))
+        except Exception as e:
+            raise ValueError(f"Could not load SB3 model: {e}")
 
-    with _state._lock:
-        _state._loaded_model = model
-        _state._loaded_model_path = str(path)
+        with _state._lock:
+            _state._loaded_model = model
+            _state._loaded_model_path = str(path)
+            _state._model_format = "sb3"
+            _state._algorithm = algorithm.value
 
-    logger.info(f"Loaded model from {path} ({algorithm.value})")
+    logger.info(f"Loaded model from {path} ({algorithm.value}, format={_state._model_format})")
     return {"status": "loaded", "path": str(path), "algorithm": algorithm.value}
 
 
 def predict(observation: list[float] | np.ndarray, deterministic: bool = True) -> dict[str, Any]:
-    """Run inference with the loaded model."""
+    """Run inference with the loaded model. Supports PyTorch and SB3 models."""
     with _state._lock:
         model = _state._loaded_model
+        model_format = _state._model_format
+        algorithm = _state._algorithm
         if model is None:
             raise RuntimeError("No model loaded")
 
     if not isinstance(observation, np.ndarray):
         observation = np.array(observation, dtype=np.float32)
-    if len(observation.shape) == 1:
-        observation = observation.reshape(1, -1)
 
-    action, _ = model.predict(observation, deterministic=deterministic)
-    return {"action": int(action[0]) if hasattr(action, "__len__") else int(action)}
+    if model_format == "pytorch":
+        from app.ml.networks.colight_network import CoLightAgent as _CoLightAgent
+
+        if isinstance(model, _CoLightAgent):
+            # CoLight expects [N, ob_length] observation
+            if len(observation.shape) == 1:
+                n = model.num_intersections
+                observation = observation.reshape(n, -1)
+            actions = model.select_action(observation, deterministic=deterministic)
+            return {"actions": actions.tolist()}
+        elif isinstance(model, DQNAgent):
+            if len(observation.shape) > 1:
+                observation = observation.flatten()
+            action = model.select_action(observation, deterministic=deterministic)
+        elif isinstance(model, PPOAgent):
+            if len(observation.shape) > 1:
+                observation = observation.flatten()
+            if deterministic:
+                with torch.no_grad():
+                    obs_t = torch.FloatTensor(observation).unsqueeze(0).to(model.device)
+                    action_probs, _ = model.network(obs_t)
+                    action = int(action_probs.argmax(dim=1).item())
+            else:
+                action, _, _ = model.select_action(observation)
+        else:
+            raise RuntimeError(f"Unknown PyTorch model type: {type(model)}")
+        return {"action": int(action)}
+    else:
+        # Legacy SB3 model
+        if len(observation.shape) == 1:
+            observation = observation.reshape(1, -1)
+        action, _ = model.predict(observation, deterministic=deterministic)
+        return {"action": int(action[0]) if hasattr(action, "__len__") else int(action)}
 
 
 def get_loaded_model_info() -> dict[str, Any] | None:
@@ -173,12 +276,10 @@ def get_loaded_model_info() -> dict[str, Any] | None:
     with _state._lock:
         if _state._loaded_model is None:
             return None
-        model = _state._loaded_model
         return {
             "path": _state._loaded_model_path,
-            "algorithm": type(model).__name__.lower(),
-            "observation_space": str(model.observation_space),
-            "action_space": str(model.action_space),
+            "algorithm": _state._algorithm or "unknown",
+            "format": _state._model_format or "unknown",
         }
 
 
@@ -190,6 +291,8 @@ def unload_model() -> dict[str, Any]:
         path = _state._loaded_model_path
         _state._loaded_model = None
         _state._loaded_model_path = None
+        _state._model_format = None
+        _state._algorithm = None
     return {"status": "unloaded", "path": path}
 
 
@@ -208,10 +311,11 @@ def delete_model(model_path: str) -> dict[str, Any]:
         shutil.rmtree(path)
     else:
         path.unlink()
-        # Also delete metadata file if exists
-        meta_path = Path(str(path) + ".metadata.json")
-        if meta_path.exists():
-            meta_path.unlink()
+        # Delete associated metadata and results files
+        for suffix in [".metadata.json", ".results.json"]:
+            p = Path(str(path) + suffix)
+            if p.exists():
+                p.unlink()
 
     return {"status": "deleted", "path": str(path)}
 

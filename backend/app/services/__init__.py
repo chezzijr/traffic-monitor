@@ -8,7 +8,6 @@ from app.services import (
     osm_service,
     sumo_service,
     task_service,
-    traffic_light_service,
     validation_service,
     waiting_count_service,
 )
@@ -21,7 +20,6 @@ __all__ = [
     "osm_service",
     "sumo_service",
     "task_service",
-    "traffic_light_service",
     "validation_service",
     "waiting_count_service",
 ]

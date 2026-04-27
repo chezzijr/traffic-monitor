@@ -93,7 +93,7 @@ export interface IntersectionFrames {
 }
 
 // Algorithm enum
-export type Algorithm = 'dqn' | 'ppo';
+export type Algorithm = 'dqn' | 'ppo' | 'colight';
 
 // Traffic scenarios
 export type TrafficScenario = 'light' | 'moderate' | 'heavy' | 'rush_hour';
@@ -107,6 +107,8 @@ export interface SUMOTrafficLight {
   type: string;
   program_id: string;
   num_phases: number;
+  lat?: number | null;
+  lon?: number | null;
 }
 
 // Training requests
@@ -170,6 +172,37 @@ export interface TrainingCompletionEvent {
   baseline_throughput?: number;
 }
 
+// Model results from .results.json
+export interface ModelBaselineMetrics {
+  avg_waiting_time: number;
+  avg_queue_length: number;
+  throughput: number;
+}
+
+export interface ModelTrainedMetrics extends ModelBaselineMetrics {
+  mean_reward: number;
+}
+
+export interface ModelTrainingConfig {
+  algorithm: Algorithm;
+  total_timesteps: number;
+  scenario: TrafficScenario;
+}
+
+export interface ModelProgressPoint {
+  timestep: number;
+  avg_waiting_time: number;
+  throughput: number;
+  mean_reward: number;
+}
+
+export interface ModelResults {
+  baseline: ModelBaselineMetrics;
+  trained: ModelTrainedMetrics;
+  training_config: ModelTrainingConfig;
+  progress_history: ModelProgressPoint[];
+}
+
 // Task info
 export interface TaskInfo {
   task_id: string;
@@ -191,8 +224,11 @@ export interface TrainedModel {
   algorithm: Algorithm;
   network_id: string;
   tl_id: string;
+  tl_ids?: string[];
+  type?: 'single' | 'multi';
   model_path: string;
   created_at?: string;
+  results?: ModelResults | null;
 }
 
 // Deployment
@@ -205,12 +241,21 @@ export interface Deployment {
 }
 
 // Network metadata
+export interface NetworkJunction {
+  id: string;
+  lat: number;
+  lon: number;
+  tl_id?: string;
+}
+
 export interface NetworkMetadata {
   network_id: string;
   bbox: BoundingBox;
   intersection_count: number;
   traffic_light_count: number;
   created_at?: string;
+  junctions: NetworkJunction[];
+  road_count: number;
 }
 
 // Traffic light simulation state

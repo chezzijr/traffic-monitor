@@ -1,5 +1,4 @@
 export { api } from './api';
-export { cameraService } from './cameraService';
 export { mapService } from './mapService';
 export { trainingService } from './trainingService';
 export { taskService } from './taskService';

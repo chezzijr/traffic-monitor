@@ -1,11 +1,17 @@
 """DQN neural network and standalone agent for traffic light control."""
 
 import copy
+import logging
+import random
+from collections import deque
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.nn.utils import clip_grad_norm_
+
+logger = logging.getLogger(__name__)
 
 
 class DQNNetwork(nn.Module):
@@ -38,25 +44,34 @@ class DQNAgent:
         num_actions: int,
         lr: float = 1e-3,
         gamma: float = 0.95,
-        tau: float = 0.005,
-        epsilon_start: float = 0.5,
-        epsilon_end: float = 0.01,
+        epsilon_start: float = 0.1,
+        epsilon_min: float = 0.01,
+        epsilon_decay: float = 0.995,
+        grad_clip: float = 5.0,
+        buffer_size: int = 5000,
+        batch_size: int = 64,
         device: str = "cpu",
     ):
         self.num_actions = num_actions
         self.gamma = gamma
-        self.tau = tau
         self.epsilon = epsilon_start
         self.epsilon_start = epsilon_start
-        self.epsilon_end = epsilon_end
+        self.epsilon_min = epsilon_min
+        self.epsilon_decay = epsilon_decay
+        self.grad_clip = grad_clip
         self.device = torch.device(device)
 
         self.q_network = DQNNetwork(ob_length, num_actions).to(self.device)
         self.target_network = copy.deepcopy(self.q_network).to(self.device)
         self.target_network.eval()
 
-        self.optimizer = optim.RMSprop(self.q_network.parameters(), lr=lr)
+        self.optimizer = optim.RMSprop(
+            self.q_network.parameters(), lr=lr, alpha=0.9, centered=False, eps=1e-7
+        )
         self.loss_fn = nn.MSELoss()
+
+        self.replay_buffer = deque(maxlen=buffer_size)
+        self.batch_size = batch_size
 
     def select_action(self, obs: np.ndarray, deterministic: bool = False) -> int:
         """Epsilon-greedy action selection."""
@@ -95,19 +110,40 @@ class DQNAgent:
 
         self.optimizer.zero_grad()
         loss.backward()
+        clip_grad_norm_(self.q_network.parameters(), self.grad_clip)
         self.optimizer.step()
+
+        logger.debug("DQN update loss: %.6f", loss.item())
 
         return loss.item()
 
-    def update_target(self):
-        """Polyak averaging update of target network."""
-        for param, target_param in zip(
-            self.q_network.parameters(), self.target_network.parameters()
-        ):
-            target_param.data.copy_(
-                self.tau * param.data + (1 - self.tau) * target_param.data
-            )
+    def update_target_network(self):
+        """Hard copy of weights to target network (LibSignal pattern)."""
+        self.target_network.load_state_dict(self.q_network.state_dict())
+        logger.debug("Target network updated (hard copy)")
 
-    def update_epsilon(self, progress_remaining: float):
-        """Linear epsilon decay based on training progress."""
-        self.epsilon = self.epsilon_end + (self.epsilon_start - self.epsilon_end) * progress_remaining
+    def decay_epsilon(self):
+        """Multiplicative epsilon decay (LibSignal pattern)."""
+        if self.epsilon > self.epsilon_min:
+            self.epsilon *= self.epsilon_decay
+        logger.debug("Epsilon decayed to %.6f", self.epsilon)
+
+    def remember(self, obs, action, reward, next_obs, done):
+        """Store transition in replay buffer."""
+        self.replay_buffer.append((obs, action, reward, next_obs, done))
+
+    def can_train(self) -> bool:
+        """Check if enough samples in buffer for training."""
+        return len(self.replay_buffer) >= self.batch_size
+
+    def sample_batch(self) -> dict[str, np.ndarray]:
+        """Sample a random batch from replay buffer."""
+        batch = random.sample(self.replay_buffer, self.batch_size)
+        obs, actions, rewards, next_obs, dones = zip(*batch)
+        return {
+            "obs": np.array(obs, dtype=np.float32),
+            "actions": np.array(actions, dtype=np.int64),
+            "rewards": np.array(rewards, dtype=np.float32),
+            "next_obs": np.array(next_obs, dtype=np.float32),
+            "dones": np.array(dones, dtype=np.float32),
+        }

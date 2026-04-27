@@ -4,11 +4,13 @@ import { API_BASE_URL } from './api';
 type ProgressHandler = (data: TrainingProgressEvent) => void;
 type CompleteHandler = (data: TrainingCompletionEvent) => void;
 type ErrorHandler = (error: { task_id: string; error: string }) => void;
+type CancelHandler = (data: { task_id: string }) => void;
 
 interface SSEHandlers {
   onProgress?: ProgressHandler;
   onComplete?: CompleteHandler;
   onError?: ErrorHandler;
+  onCancelled?: CancelHandler;
 }
 
 export class TrainingSSE {
@@ -16,11 +18,13 @@ export class TrainingSSE {
   private onProgress: ProgressHandler | null = null;
   private onComplete: CompleteHandler | null = null;
   private onError: ErrorHandler | null = null;
+  private onCancelled: CancelHandler | null = null;
 
   setHandlers(handlers: SSEHandlers): void {
     this.onProgress = handlers.onProgress ?? null;
     this.onComplete = handlers.onComplete ?? null;
     this.onError = handlers.onError ?? null;
+    this.onCancelled = handlers.onCancelled ?? null;
   }
 
   connect(taskId: string): void {
@@ -58,6 +62,18 @@ export class TrainingSSE {
           this.onError(data);
         } catch {
           console.error('Failed to parse SSE error data:', e.data);
+        }
+      }
+      this.disconnect();
+    });
+
+    this.eventSource.addEventListener('cancelled', (e: MessageEvent) => {
+      if (this.onCancelled) {
+        try {
+          const data = JSON.parse(e.data) as { task_id: string };
+          this.onCancelled(data);
+        } catch {
+          console.error('Failed to parse SSE cancelled data:', e.data);
         }
       }
       this.disconnect();

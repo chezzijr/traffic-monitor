@@ -2,23 +2,20 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import toast, { Toaster } from 'react-hot-toast';
 import {
   MapContainer,
-  IntersectionMarkers,
-  TrafficLightMarkers,
-  LocationSelector,
   RegionSelector,
   MapLegend,
   SelectableIntersectionMarkers,
 } from './components/Map';
 import { Sidebar, Header, BottomDrawer, RightPanel } from './components/Layout';
-import { CameraPanel, CameraModal, TrafficLightSearch } from './components/Control';
 import { JunctionSelector, TrainingConfigPanel, ActiveTasksPanel, TrainingProgressPanel } from './components/Training';
 import { ModelsPanel, DeploymentsPanel } from './components/Models';
 import { useMapStore } from './store/mapStore';
 import { useTrainingStore } from './store/trainingStore';
 import { useModelStore } from './store/modelStore';
 import { mapService } from './services/mapService';
+import { modelService } from './services/modelService';
 import { TrainingSSE } from './services/sseService';
-import type { Intersection, TrafficLight, TrainingProgressEvent, TrainingCompletionEvent, Algorithm } from './types';
+import type { TrainingProgressEvent, TrainingCompletionEvent } from './types';
 
 export default function App() {
   // Map store — individual selectors to avoid unnecessary re-renders
@@ -31,23 +28,18 @@ export default function App() {
   const setLoading = useMapStore((s) => s.setLoading);
   const setSumoTrafficLights = useMapStore((s) => s.setSumoTrafficLights);
   const setOsmSumoMapping = useMapStore((s) => s.setOsmSumoMapping);
-  const setTrafficLights = useMapStore((s) => s.setTrafficLights);
-
   // Training store
   const activeTaskId = useTrainingStore((s) => s.activeTaskId);
   const setActiveTaskId = useTrainingStore((s) => s.setActiveTaskId);
   const updateProgress = useTrainingStore((s) => s.updateProgress);
   const completeTask = useTrainingStore((s) => s.completeTask);
+  const cancelTask = useTrainingStore((s) => s.cancelTask);
 
   // Model store
   const isPanelOpen = useModelStore((s) => s.isPanelOpen);
   const togglePanel = useModelStore((s) => s.togglePanel);
-  const addModel = useModelStore((s) => s.addModel);
+  const setModels = useModelStore((s) => s.setModels);
   const deployments = useModelStore((s) => s.deployments);
-
-  // Camera modal state
-  const [selectedIntersection, setSelectedIntersection] = useState<Intersection | null>(null);
-  const [cameraModalOpen, setCameraModalOpen] = useState(false);
 
   // Training progress
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -61,42 +53,6 @@ export default function App() {
 
   // Whether SUMO conversion is done (show selectable markers instead of regular ones)
   const hasSumoData = sumoTrafficLights.length > 0;
-
-  // Handle marker click
-  const handleMarkerClick = useCallback((intersection: Intersection) => {
-    setSelectedIntersection(intersection);
-    setCameraModalOpen(true);
-  }, []);
-
-  // Handle traffic light marker click
-  const handleTrafficLightClick = useCallback((light: TrafficLight) => {
-    const intersection: Intersection = {
-      id: `osm_${light.osm_id}`,
-      osm_id: light.osm_id,
-      lat: light.lat,
-      lon: light.lon,
-      name: `OSM Traffic Light ${light.osm_id}`,
-      num_roads: 0,
-      has_traffic_light: true,
-      sumo_tl_id: undefined,
-      trafficLight: light,
-    };
-    setSelectedIntersection(intersection);
-    setCameraModalOpen(true);
-  }, []);
-
-  // Load all traffic lights in HCM City
-  useEffect(() => {
-    async function loadAllTrafficLights() {
-      try {
-        const lights = await mapService.getAllTrafficLights();
-        setTrafficLights(lights);
-      } catch (err) {
-        console.error('failed to load all traffic lights', err);
-      }
-    }
-    loadAllTrafficLights();
-  }, [setTrafficLights]);
 
   // Extract region when selected, then auto-convert to SUMO
   useEffect(() => {
@@ -162,26 +118,27 @@ export default function App() {
       onComplete: (data: TrainingCompletionEvent) => {
         completeTask(data.task_id, data);
 
-        if (data.model_path) {
-          addModel({
-            model_id: `${data.task_id}_model`,
-            algorithm: data.algorithm as Algorithm,
-            network_id: data.network_id,
-            tl_id: data.tl_id || (data.tl_ids ? data.tl_ids[0] : ''),
-            model_path: data.model_path,
-            created_at: new Date().toISOString(),
+        // Re-fetch models from API to get full data including results
+        // Delay to allow .results.json to flush to disk (especially in Docker volumes)
+        setTimeout(() => {
+          modelService.listModels().then(setModels).catch((err) => {
+            console.error('Failed to refresh models after training:', err);
           });
-        }
+        }, 500);
 
         toast.success(`Training complete for task ${data.task_id.slice(0, 8)}`);
       },
       onError: (data) => {
         toast.error(`Training failed: ${data.error}`);
       },
+      onCancelled: (data) => {
+        cancelTask(data.task_id);
+        toast.success('Training cancelled');
+      },
     });
 
     sse.connect(taskId);
-  }, [updateProgress, setActiveTaskId, addModel, completeTask]);
+  }, [updateProgress, setActiveTaskId, setModels, completeTask, cancelTask]);
 
   // Handle training started from config panel
   const handleTrainingStarted = useCallback((taskId: string) => {
@@ -215,21 +172,14 @@ export default function App() {
               <ActiveTasksPanel onTaskSelect={handleTaskSelect} />
             </>
           ) : (
-            <>
-              <TrafficLightSearch />
-              <CameraPanel />
-            </>
+            <div className="text-center py-8 text-sm text-gray-400">
+              <p>Select a region on the map to get started.</p>
+            </div>
           )}
         </Sidebar>
         <main className="flex-1 relative">
           <MapContainer>
-            {hasSumoData ? (
-              <SelectableIntersectionMarkers deployedJunctionIds={deployedJunctionIds} />
-            ) : (
-              <IntersectionMarkers onMarkerClick={handleMarkerClick} />
-            )}
-            <TrafficLightMarkers onMarkerClick={handleTrafficLightClick} />
-            <LocationSelector />
+            {hasSumoData && <SelectableIntersectionMarkers deployedJunctionIds={deployedJunctionIds} />}
             <RegionSelector />
           </MapContainer>
           <MapLegend className="absolute bottom-4 left-4 z-[1000]" />
@@ -251,13 +201,6 @@ export default function App() {
           )}
         </main>
       </div>
-
-      {/* Camera modal */}
-      <CameraModal
-        intersection={selectedIntersection}
-        isOpen={cameraModalOpen}
-        onClose={() => setCameraModalOpen(false)}
-      />
 
       {/* Right panel for models & deployments */}
       <RightPanel isOpen={isPanelOpen} onClose={togglePanel}>

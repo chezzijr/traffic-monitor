@@ -5,8 +5,8 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.34.0",
-    "osmnx>=2.0.0",
-    "networkx>=3.4.0",
+    "requests>=2.32.0",
+    "torch>=2.0.0",
     "celery>=5.4.0",
     "redis>=5.2.0",
     "python-multipart>=0.0.20",
@@ -22,3 +22,10 @@ dependencies = [
 dev = [
     "pytest>=8.3.0",
 ]
+
+# [tool.uv.sources]
+# torch = { index = "pytorch-cpu" }
+# [[tool.uv.index]]
+# name = "pytorch-cpu"
+# url = "https://download.pytorch.org/whl/cpu"
+# explicit = true

@@ -108,6 +108,8 @@ class SUMOTrafficLight(BaseModel):
     type: str = Field(..., description="Traffic light type (e.g., 'static', 'actuated')")
     program_id: str = Field(..., description="Traffic light program ID")
     num_phases: int = Field(..., ge=0, description="Number of phases in the traffic light program")
+    lat: float | None = Field(default=None, description="Latitude from SUMO boundary reverse-projection")
+    lon: float | None = Field(default=None, description="Longitude from SUMO boundary reverse-projection")
 
 
 class ConvertToSumoResponse(BaseModel):
@@ -144,7 +146,7 @@ class TrainingRequest(BaseModel):
 
     network_id: str = Field(..., description="Network to train on")
     tl_id: str = Field(..., description="Traffic light ID to optimize")
-    algorithm: str = Field(default="dqn", description="RL algorithm (dqn or ppo)")
+    algorithm: str = Field(default="dqn", description="RL algorithm (dqn, ppo, or colight)")
     total_timesteps: int = Field(default=10000, ge=1000, le=1000000, description="Training timesteps")
     scenario: TrafficScenario = Field(default=TrafficScenario.MODERATE, description="Traffic scenario")
 
@@ -153,8 +155,11 @@ class MultiJunctionTrainingRequest(BaseModel):
     """Request to start multi-junction training."""
 
     network_id: str = Field(..., description="Network to train on")
-    tl_ids: list[str] = Field(..., min_length=1, max_length=10, description="Traffic light IDs (max 10)")
-    algorithm: str = Field(default="dqn", description="RL algorithm (dqn or ppo)")
+    tl_ids: list[str] = Field(
+        ..., min_length=1, max_length=100,
+        description="Traffic light IDs (max 10 for dqn/ppo, max 100 for colight)"
+    )
+    algorithm: str = Field(default="dqn", description="RL algorithm (dqn, ppo, or colight)")
     total_timesteps: int = Field(default=10000, ge=1000, le=1000000, description="Training timesteps")
     scenario: TrafficScenario = Field(default=TrafficScenario.MODERATE, description="Traffic scenario")
 
@@ -182,6 +187,36 @@ class TrainingProgressPayload(BaseModel):
     baseline_avg_waiting_time: float | None = None
     baseline_avg_queue_length: float | None = None
     baseline_throughput: int | None = None
+
+
+class TrafficMetrics(BaseModel):
+    avg_waiting_time: float = 0.0
+    avg_queue_length: float = 0.0
+    throughput: int = 0
+
+
+class TrainedMetrics(TrafficMetrics):
+    mean_reward: float = 0.0
+
+
+class TrainingConfig(BaseModel):
+    algorithm: str
+    total_timesteps: int
+    scenario: str
+
+
+class ProgressSnapshot(BaseModel):
+    timestep: int
+    avg_waiting_time: float = 0.0
+    throughput: int = 0
+    mean_reward: float = 0.0
+
+
+class TrainingResults(BaseModel):
+    baseline: TrafficMetrics
+    trained: TrainedMetrics
+    training_config: TrainingConfig
+    progress_history: list[ProgressSnapshot] = Field(default_factory=list)
 
 
 class TaskInfo(BaseModel):
@@ -230,6 +265,13 @@ class ToggleAIControlRequest(BaseModel):
     enabled: bool = Field(..., description="Whether to enable AI control")
 
 
+class NetworkJunction(BaseModel):
+    id: str
+    lat: float
+    lon: float
+    tl_id: str | None = None
+
+
 class NetworkMetadata(BaseModel):
     """Metadata for a persisted network."""
 
@@ -238,6 +280,8 @@ class NetworkMetadata(BaseModel):
     intersection_count: int = 0
     traffic_light_count: int = 0
     created_at: datetime | None = None
+    junctions: list[NetworkJunction] = Field(default_factory=list)
+    road_count: int = 0
 
 
 class DirectionFrame(BaseModel):

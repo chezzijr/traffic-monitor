@@ -77,6 +77,8 @@ def get_task_status(task_id: str) -> dict:
         status = "completed"
     elif progress.get("status") == "failed":
         status = "failed"
+    elif progress.get("status") == "cancelled":
+        status = "cancelled"
     elif progress.get("status") == "running":
         status = "running"
 
@@ -146,7 +148,10 @@ async def stream_task_updates(task_id: str):
                     if status == "completed":
                         event_name = "complete"
                         terminal = True
-                    elif status in ("failed", "cancelled"):
+                    elif status == "cancelled":
+                        event_name = "cancelled"
+                        terminal = True
+                    elif status == "failed":
                         event_name = "error"
                         terminal = True
                     elif status == "running":

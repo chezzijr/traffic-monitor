@@ -1,5 +1,11 @@
 import { api } from './api';
-import type { BoundingBox, NetworkInfo, Intersection, TrafficLight, SUMOTrafficLight } from '../types';
+import type { BoundingBox, NetworkInfo, Intersection, SUMOTrafficLight } from '../types';
+
+export interface TlCluster {
+  cluster_id: string;
+  size: number;
+  tl_ids: string[];
+}
 
 export const mapService = {
   // Extract network from OSM for a given bounding box
@@ -37,15 +43,9 @@ export const mapService = {
     return response.data;
   },
 
-  // Get OSM traffic lights around a point
-  async getTrafficLights(params: { lat: number; lng: number; radius: number }): Promise<TrafficLight[]> {
-    const response = await api.get<TrafficLight[]>('/map/traffic-lights', { params });
-    return response.data;
-  },
-
-  // Get all traffic lights in Ho Chi Minh City
-  async getAllTrafficLights(): Promise<TrafficLight[]> {
-    const response = await api.get<TrafficLight[]>('/map/all-traffic-lights');
+  // Get connected components of the TL-to-TL graph for a network
+  async getTlClusters(networkId: string): Promise<TlCluster[]> {
+    const response = await api.get<TlCluster[]>(`/networks/${networkId}/tl-clusters`);
     return response.data;
   },
 };

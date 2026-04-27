@@ -32,7 +32,8 @@ export function TrainingConfigPanel({ onTrainingStarted }: TrainingConfigPanelPr
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const junctionCount = selectedJunctionIds.length;
-  const canStart = junctionCount > 0 && currentNetworkId && !isSubmitting;
+  const isColightTooFew = algorithm === 'colight' && junctionCount < 2;
+  const canStart = junctionCount > 0 && currentNetworkId && !isSubmitting && !isColightTooFew;
 
   const handleStartTraining = async () => {
     if (!canStart || !currentNetworkId) return;
@@ -86,20 +87,23 @@ export function TrainingConfigPanel({ onTrainingStarted }: TrainingConfigPanelPr
       <div>
         <label className="text-xs text-gray-500 mb-1 block">Algorithm</label>
         <div className="flex rounded-lg border border-gray-200 overflow-hidden">
-          {(['dqn', 'ppo'] as Algorithm[]).map((alg) => (
+          {(['dqn', 'ppo', 'colight'] as Algorithm[]).map((alg) => (
             <button
               key={alg}
               onClick={() => setAlgorithm(alg)}
               className={`flex-1 py-1.5 text-xs font-medium transition-colors ${
                 algorithm === alg
-                  ? 'bg-blue-500 text-white'
+                  ? alg === 'colight' ? 'bg-amber-500 text-white' : 'bg-blue-500 text-white'
                   : 'bg-white text-gray-600 hover:bg-gray-50'
               }`}
             >
-              {alg.toUpperCase()}
+              {alg === 'colight' ? 'CoLight' : alg.toUpperCase()}
             </button>
           ))}
         </div>
+        {isColightTooFew && (
+          <p className="text-xs text-red-600 mt-1">CoLight requires ≥2 junctions</p>
+        )}
       </div>
 
       {/* Timesteps slider */}
@@ -111,7 +115,7 @@ export function TrainingConfigPanel({ onTrainingStarted }: TrainingConfigPanelPr
         <input
           type="range"
           min={1000}
-          max={100000}
+          max={500000}
           step={1000}
           value={totalTimesteps}
           onChange={(e) => setTotalTimesteps(Number(e.target.value))}
@@ -119,7 +123,7 @@ export function TrainingConfigPanel({ onTrainingStarted }: TrainingConfigPanelPr
         />
         <div className="flex justify-between text-[10px] text-gray-400">
           <span>1K</span>
-          <span>100K</span>
+          <span>500K</span>
         </div>
       </div>
 

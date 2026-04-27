@@ -11,8 +11,9 @@ import numpy as np
 import torch
 from stable_baselines3 import DQN, PPO
 from stable_baselines3.common.buffers import ReplayBuffer
+from stable_baselines3.common.logger import configure as configure_sb3_logger
 
-from app.ml.multi_agent_env import MultiAgentTrafficLightEnv, SingleAgentEnvAdapter
+from app.ml.multi_agent_env_v2 import MultiAgentTrafficLightEnvV2 as MultiAgentTrafficLightEnv, SingleAgentEnvAdapter
 from app.ml.trainer import Algorithm
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,24 @@ class MultiAgentTrainer:
     Maximum 10 junctions per task.
     """
 
+    # SUMO-RL aligned DQN params (source: github.com/LucasAlegre/sumo-rl)
     DEFAULT_DQN_PARAMS: dict[str, Any] = {
+        "learning_rate": 1e-3,
+        "buffer_size": 100_000,
+        "learning_starts": 0,
+        "batch_size": 64,
+        "tau": 1.0,
+        "gamma": 0.95,
+        "train_freq": 1,
+        "target_update_interval": 500,
+        "exploration_fraction": 0.5,
+        "exploration_initial_eps": 1.0,
+        "exploration_final_eps": 0.01,
+        "policy_kwargs": {"net_arch": [20, 20]},
+    }
+
+    # Original DQN params (pre-SUMO-RL alignment)
+    LEGACY_DQN_PARAMS: dict[str, Any] = {
         "learning_rate": 1e-3,
         "buffer_size": 100_000,
         "learning_starts": 1000,
@@ -107,6 +125,10 @@ class MultiAgentTrainer:
             params.update(model_params)
         self._params = params
 
+        # Ensure env is initialized (observation/action spaces populated)
+        if not env._is_initialized:
+            env.reset(seed=seed)
+
         # Create per-agent SB3 models
         self.models: dict[str, DQN | PPO] = {}
         for tl_id in env.tl_ids:
@@ -129,6 +151,10 @@ class MultiAgentTrainer:
                     device=self.device,
                     **params,
                 )
+
+        # Initialize loggers (needed because we bypass .learn() which calls _setup_learn)
+        for model in self.models.values():
+            model.set_logger(configure_sb3_logger())
 
         logger.info(
             f"MultiAgentTrainer: {len(env.tl_ids)} agents, "
@@ -181,12 +207,23 @@ class MultiAgentTrainer:
             actions = {}
             for tl_id in self.env.tl_ids:
                 model = self.models[tl_id]
-                # Update exploration rate
+                # Update exploration rate (honor exploration_fraction)
+                fraction = self._params.get("exploration_fraction", 0.5)
+                progress_through_fraction = min(1.0, (1.0 - progress_remaining) / fraction)
                 model.exploration_rate = model.exploration_initial_eps + (
                     model.exploration_final_eps - model.exploration_initial_eps
-                ) * (1 - progress_remaining)
+                ) * progress_through_fraction
                 action, _ = model.predict(observations[tl_id], deterministic=False)
                 actions[tl_id] = int(action)
+
+            # Periodic training diagnostics
+            if step % 500 == 0:
+                first_tl = self.env.tl_ids[0]
+                eps = self.models[first_tl].exploration_rate
+                logger.info(
+                    f"[TRAIN] step={step}/{total_timesteps}, epsilon={eps:.3f}, "
+                    f"actions={actions}"
+                )
 
             # Joint step
             next_observations, rewards, terminateds, truncateds, infos = (
@@ -212,6 +249,7 @@ class MultiAgentTrainer:
                     if buffers[tl_id].size() >= batch_size:
                         model = self.models[tl_id]
                         model.replay_buffer = buffers[tl_id]
+                        model._current_progress_remaining = progress_remaining
                         model.train(gradient_steps=1, batch_size=batch_size)
 
             # Target network update
@@ -489,40 +527,45 @@ class MultiAgentTrainer:
         return base_dir
 
     def run_baseline(self, num_episodes: int = 3) -> dict[str, float]:
-        """Run baseline episodes with SUMO's default timing."""
+        """Run baseline with SUMO's default fixed-time program (no RL control)."""
         logger.info(f"Running {num_episodes} baseline episodes (multi-agent)")
         total_waiting = 0.0
         total_queue = 0.0
         total_throughput = 0
 
-        for ep in range(num_episodes):
-            observations = self.env.reset()
-            done = False
+        for _ in range(num_episodes):
+            self.env.reset()
+            conn = self.env._get_conn()
+
+            # Restore SUMO's default program (reset overrides it by setting green phase)
+            for tl_id in self.env.tl_ids:
+                conn.trafficlight.setProgram(tl_id, "0")
+
             ep_waiting = 0.0
             ep_queue = 0.0
-            ep_throughput = 0
             steps = 0
 
-            while not done:
-                # Use current phase (no action change) for baseline
-                conn = self.env._get_conn()
-                actions = {
-                    tl_id: conn.trafficlight.getPhase(tl_id)
-                    for tl_id in self.env.tl_ids
-                }
-                observations, rewards, terminateds, truncateds, infos = (
-                    self.env.step(actions)
-                )
-                done = any(
-                    terminateds[t] or truncateds[t] for t in self.env.tl_ids
-                )
+            for sim_step in range(self.env.num_seconds):
+                conn.simulationStep()
 
-                for tl_id in self.env.tl_ids:
-                    ep_waiting += infos[tl_id].get("avg_waiting_time", 0.0)
-                    ep_queue += infos[tl_id].get("avg_queue_length", 0.0)
-                    ep_throughput += infos[tl_id].get("throughput", 0)
-                steps += 1
+                # Sample metrics at the same interval as training
+                if (sim_step + 1) % self.env.delta_time == 0:
+                    for tl_id in self.env.tl_ids:
+                        sig = self.env._signals[tl_id]
+                        lane_vids = []
+                        for lane in sig.lanes:
+                            lane_vids.extend(conn.lane.getLastStepVehicleIDs(lane))
+                        wait = sum(conn.vehicle.getWaitingTime(v) for v in lane_vids)
+                        ep_waiting += wait / max(len(lane_vids), 1)
 
+                        queue = sum(
+                            conn.lane.getLastStepHaltingNumber(lane)
+                            for lane in sig.lanes
+                        )
+                        ep_queue += queue / max(len(sig.lanes), 1)
+                    steps += 1
+
+            ep_throughput = conn.simulation.getArrivedNumber()
             n_agents = len(self.env.tl_ids)
             if steps > 0 and n_agents > 0:
                 total_waiting += ep_waiting / (steps * n_agents)
