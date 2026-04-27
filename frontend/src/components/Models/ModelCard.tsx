@@ -18,7 +18,11 @@ function deltaPercent(baseline: number, trained: number, lowerIsBetter = false):
 }
 
 export function ModelCard({ model, isExpanded, onToggleExpand, onDeploy, onDelete }: ModelCardProps) {
-  const algColor = model.algorithm === 'dqn' ? 'bg-green-100 text-green-700' : 'bg-purple-100 text-purple-700';
+  const algColor = model.algorithm === 'dqn'
+    ? 'bg-green-100 text-green-700'
+    : model.algorithm === 'colight'
+      ? 'bg-amber-100 text-amber-700'
+      : 'bg-purple-100 text-purple-700';
   const results = model.results;
   const isMulti = model.type === 'multi' || (model.tl_ids && model.tl_ids.length > 1);
   const trainedJunctionIds = model.tl_ids ?? [model.tl_id];

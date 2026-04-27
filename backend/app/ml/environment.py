@@ -126,6 +126,11 @@ class TrafficLightEnv(gym.Env):
             "--no-step-log", "true",
             "--waiting-time-memory", "1000",
             "--no-warnings", "true",
+            # Skip vehicles whose trip couldn't be routed instead of aborting
+            # the entire run. randomTrips/duarouter occasionally emit
+            # unroutable trips on dense networks; without this flag a single
+            # unroutable motorbike crashes the whole training episode.
+            "--ignore-route-errors", "true",
         ]
         if seed is not None:
             sumo_cmd.extend(["--seed", str(seed)])

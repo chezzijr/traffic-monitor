@@ -153,7 +153,9 @@ def load_model(model_path: str) -> dict[str, Any]:
     suffix = path.suffix.lower()
 
     # Determine algorithm from filename
-    if "_dqn_" in stem.lower():
+    if "_colight_" in stem.lower():
+        algorithm = Algorithm.COLIGHT
+    elif "_dqn_" in stem.lower():
         algorithm = Algorithm.DQN
     elif "_ppo_" in stem.lower():
         algorithm = Algorithm.PPO
@@ -167,7 +169,23 @@ def load_model(model_path: str) -> dict[str, Any]:
         ob_length = checkpoint["ob_length"]
         num_actions = checkpoint["num_actions"]
 
-        if algo_str == "dqn":
+        if algo_str == "colight":
+            from app.ml.networks.colight_network import CoLightAgent
+
+            agent = CoLightAgent(
+                ob_length=ob_length,
+                num_actions=num_actions,
+                num_intersections=checkpoint["num_intersections"],
+                phase_lengths=checkpoint["phase_lengths"],
+                edge_index=checkpoint["edge_index"],
+                **checkpoint.get("network_params", {}),
+            )
+            agent.q_network.load_state_dict(checkpoint["model_state"])
+            if "target_state" in checkpoint:
+                agent.target_network.load_state_dict(checkpoint["target_state"])
+            agent.q_network.eval()
+            algorithm = Algorithm.COLIGHT
+        elif algo_str == "dqn":
             agent = DQNAgent(ob_length=ob_length, num_actions=num_actions)
             agent.q_network.load_state_dict(checkpoint["model_state"])
             if "target_state" in checkpoint:
@@ -219,7 +237,16 @@ def predict(observation: list[float] | np.ndarray, deterministic: bool = True) -
         observation = np.array(observation, dtype=np.float32)
 
     if model_format == "pytorch":
-        if isinstance(model, DQNAgent):
+        from app.ml.networks.colight_network import CoLightAgent as _CoLightAgent
+
+        if isinstance(model, _CoLightAgent):
+            # CoLight expects [N, ob_length] observation
+            if len(observation.shape) == 1:
+                n = model.num_intersections
+                observation = observation.reshape(n, -1)
+            actions = model.select_action(observation, deterministic=deterministic)
+            return {"actions": actions.tolist()}
+        elif isinstance(model, DQNAgent):
             if len(observation.shape) > 1:
                 observation = observation.flatten()
             action = model.select_action(observation, deterministic=deterministic)

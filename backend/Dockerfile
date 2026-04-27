@@ -29,8 +29,10 @@ WORKDIR /app
 # Copy dependency files first for better layer caching
 COPY pyproject.toml uv.lock ./
 
-# Install dependencies using uv
-RUN uv sync --frozen --no-dev --no-install-project
+# Install dependencies using uv (cache mount = resumable downloads)
+ENV UV_HTTP_TIMEOUT=600
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project
 
 # Copy application code
 COPY app/ ./app/

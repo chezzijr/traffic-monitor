@@ -92,7 +92,7 @@ export interface IntersectionFrames {
 }
 
 // Algorithm enum
-export type Algorithm = 'dqn' | 'ppo';
+export type Algorithm = 'dqn' | 'ppo' | 'colight';
 
 // Traffic scenarios
 export type TrafficScenario = 'light' | 'moderate' | 'heavy' | 'rush_hour';
@@ -106,6 +106,8 @@ export interface SUMOTrafficLight {
   type: string;
   program_id: string;
   num_phases: number;
+  lat?: number | null;
+  lon?: number | null;
 }
 
 // Training requests
