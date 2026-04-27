@@ -7,4 +7,5 @@ export { modelService } from './modelService';
 export { deploymentService } from './deploymentService';
 export { trafficLightSimService } from './trafficLightSimService';
 export { waitingCountService } from './waitingCountService';
+export { digitalTwinLightService } from './digitalTwinLightService';
 export { TrainingSSE } from './sseService';

@@ -83,6 +83,7 @@ export type SimulationStatus = 'idle' | 'running' | 'paused' | 'stopped';
 export interface DirectionFrame {
   number?: number;
   image: string | null;
+  image_annotated?: string | null;
 }
 
 export interface IntersectionFrames {

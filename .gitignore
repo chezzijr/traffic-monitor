@@ -10,3 +10,5 @@ simulation/networks
 # Ignore large files of Digital Twin
 backend/app/data/traffic_video
 backend/app/digital_twin/yolo11x.pt
+services/digital_twin/data/traffic_video/
+services/digital_twin/model/*.pt

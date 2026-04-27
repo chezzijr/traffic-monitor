@@ -12,25 +12,20 @@ router = APIRouter(prefix="/waiting_count", tags=["waiting_count"])
 async def get_waiting_count(
     id_camera: str = Query(..., description="Camera identifier"),
 ) -> WaitingCountResponse:
-    """Analyse ~1 second of traffic video and return waiting vehicle counts.
+    """Proxy waiting-count request to the Digital Twin service.
 
     Args:
-        id_camera: Camera identifier (placeholder – always uses default video).
+        id_camera: Camera identifier forwarded to the video analysis service.
 
     Returns:
         WaitingCountResponse with per-direction waiting vehicle counts.
-
-    Raises:
-        HTTPException 500: If video processing fails.
     """
     try:
-        result = waiting_count_service.get_waiting_count(id_camera)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        result = await waiting_count_service.get_waiting_count(id_camera)
     except Exception as exc:
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to process video: {exc}",
+            status_code=502,
+            detail=f"Digital Twin service error: {exc}",
         ) from exc
 
     return WaitingCountResponse(**result)

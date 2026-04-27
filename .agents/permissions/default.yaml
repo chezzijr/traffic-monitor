@@ -1,0 +1,21 @@
+# agent/permissions/default.yaml
+
+# Cho phép thao tác với file
+file_access:
+  - action: read
+    path: "**/*"        # Cho phép đọc tất cả file trong project
+    allow: always
+  - action: write
+    path: "**/*"        # Cho phép ghi/sửa tất cả file
+    allow: always
+
+# Cho phép chạy các lệnh terminal (cần thiết để tự chạy test/debug)
+terminal:
+  - command: "*"        # Cho phép chạy mọi lệnh (uv, pytest, v.v.)
+    allow: always
+    interactive: false  # Không dừng lại đợi người dùng nhấn phím
+
+# Cho phép Agent tự động sửa lỗi dựa trên log
+auto_fix:
+  enabled: true
+  max_retries: 5        # Số lần tối đa agent tự sửa trước khi bỏ cuộc
