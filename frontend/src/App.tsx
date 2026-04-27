@@ -6,6 +6,7 @@ import {
   MapLegend,
   SelectableIntersectionMarkers,
 } from './components/Map';
+import { CameraModal } from './components/Control';
 import { Sidebar, Header, BottomDrawer, RightPanel } from './components/Layout';
 import { JunctionSelector, TrainingConfigPanel, ActiveTasksPanel, TrainingProgressPanel } from './components/Training';
 import { ModelsPanel, DeploymentsPanel } from './components/Models';
@@ -15,7 +16,7 @@ import { useModelStore } from './store/modelStore';
 import { mapService } from './services/mapService';
 import { modelService } from './services/modelService';
 import { TrainingSSE } from './services/sseService';
-import type { TrainingProgressEvent, TrainingCompletionEvent } from './types';
+import type { TrainingProgressEvent, TrainingCompletionEvent, Intersection } from './types';
 
 export default function App() {
   // Map store — individual selectors to avoid unnecessary re-renders
@@ -44,6 +45,8 @@ export default function App() {
   // Training progress
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [progressHistory, setProgressHistory] = useState<TrainingProgressEvent[]>([]);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [activeIntersection, setActiveIntersection] = useState<Intersection | null>(null);
 
   // SSE ref
   const sseRef = useRef<TrainingSSE | null>(null);
@@ -150,6 +153,11 @@ export default function App() {
     connectSSE(taskId);
   }, [connectSSE]);
 
+  const handleIntersectionClick = useCallback((intersection: Intersection) => {
+    setActiveIntersection(intersection);
+    setCameraOpen(true);
+  }, []);
+
   // Cleanup SSE on unmount
   useEffect(() => {
     return () => {
@@ -179,7 +187,12 @@ export default function App() {
         </Sidebar>
         <main className="flex-1 relative">
           <MapContainer>
-            {hasSumoData && <SelectableIntersectionMarkers deployedJunctionIds={deployedJunctionIds} />}
+            {hasSumoData && (
+              <SelectableIntersectionMarkers
+                deployedJunctionIds={deployedJunctionIds}
+                onIntersectionClick={handleIntersectionClick}
+              />
+            )}
             <RegionSelector />
           </MapContainer>
           <MapLegend className="absolute bottom-4 left-4 z-[1000]" />
@@ -199,6 +212,12 @@ export default function App() {
               </div>
             </div>
           )}
+
+          <CameraModal
+            intersection={activeIntersection}
+            isOpen={cameraOpen}
+            onClose={() => setCameraOpen(false)}
+          />
         </main>
       </div>
 

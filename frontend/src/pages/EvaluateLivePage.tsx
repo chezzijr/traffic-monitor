@@ -5,12 +5,6 @@ import { evaluationService } from '../services/evaluationService';
 import type { SyncSnapshot } from '../services/evaluationService';
 import { IntersectionDiagram } from '../components/Evaluation/IntersectionDiagram';
 
-const formatTime = (seconds: number) => {
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-};
-
 export function EvaluateLivePage() {
 
   const navigate = useNavigate();

@@ -118,14 +118,18 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
     const loadFramesAndCount = useCallback(async () => {
         if (!intersection) return;
 
-        const hasCoords = trafficLight?.lat && trafficLight?.lon;
+        const fallbackLat = useDT ? intersection.lat : undefined;
+        const fallbackLon = useDT ? intersection.lon : undefined;
+        const lat = trafficLight?.lat ?? fallbackLat;
+        const lon = trafficLight?.lon ?? fallbackLon;
+        const hasCoords = typeof lat === 'number' && typeof lon === 'number';
         const idCamera = intersection.id || `osm_${intersection.osm_id}`;
 
         setIsWaitingLoading(true);
 
         const [framesResult, countResult] = await Promise.allSettled([
             hasCoords
-                ? cameraService.getIntersection({ lat: trafficLight!.lat, lon: trafficLight!.lon })
+                ? cameraService.getIntersection({ lat, lon })
                 : Promise.reject('no coords'),
             waitingCountService.getWaitingCount(idCamera),
         ]);
@@ -146,7 +150,7 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
         }
 
         setIsWaitingLoading(false);
-    }, [intersection, trafficLight?.lat, trafficLight?.lon]);
+    }, [intersection, trafficLight?.lat, trafficLight?.lon, useDT]);
 
     // Load data when modal opens
     useEffect(() => {
@@ -158,13 +162,13 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
             return;
         }
 
-        if (!isOpen || !trafficLight?.osm_id) {
+        if (!isOpen || (!trafficLight?.osm_id && !useDT)) {
             console.warn("Intersection OSM ID is missing.");
             return;
         }
 
         loadFramesAndCount();
-    }, [isOpen, intersection, trafficLight?.osm_id, loadFramesAndCount]);
+    }, [isOpen, intersection, trafficLight?.osm_id, useDT, loadFramesAndCount]);
 
     // Start / stop the YOLO video stream when the modal opens/closes (THD×TBT only)
     useEffect(() => {
@@ -227,19 +231,25 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
         const fetchLight = async () => {
             try {
                 if (useDT) {
-                    // Digital twin API → adapt to TrafficLightSimState
-                    const dt = await digitalTwinLightService.getLightState();
-                    if (!cancelled) {
-                        setLightState({
-                            intersection_id: intId,
-                            directions: {
-                                north: { state: dt.north.state, remaining: dt.north.duration },
-                                south: { state: dt.south.state, remaining: dt.south.duration },
-                                east:  { state: dt.east.state,  remaining: dt.east.duration },
-                                west:  { state: dt.west.state,  remaining: dt.west.duration },
-                            },
-                            cycle_duration: -1,
-                        });
+                    try {
+                        // Digital twin API → adapt to TrafficLightSimState
+                        const dt = await digitalTwinLightService.getLightState();
+                        if (!cancelled) {
+                            setLightState({
+                                intersection_id: intId,
+                                directions: {
+                                    north: { state: dt.north.state, remaining: dt.north.duration },
+                                    south: { state: dt.south.state, remaining: dt.south.duration },
+                                    east:  { state: dt.east.state,  remaining: dt.east.duration },
+                                    west:  { state: dt.west.state,  remaining: dt.west.duration },
+                                },
+                                cycle_duration: -1,
+                            });
+                        }
+                    } catch {
+                        // Fallback when digital twin service is down.
+                        const data = await trafficLightSimService.getState(intId);
+                        if (!cancelled) setLightState(data);
                     }
                 } else {
                     const data = await trafficLightSimService.getState(intId);
