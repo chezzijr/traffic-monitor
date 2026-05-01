@@ -372,7 +372,7 @@ class CoLightEnv:
             f"total_in_lanes={total_in_lanes}, "
             f"routes_path={self.routes_path or self._cached_routes_path or 'auto-gen'}, "
             f"action_mode={action_desc}, "
-            f"reward=t2_intersection_waiting_count*-12"
+            f"reward=t1_lane_waiting_count_mean*-12"
         )
 
     # ------------------------------------------------------------------
@@ -609,11 +609,11 @@ class CoLightEnv:
             self._current_green_idx[tl_id] = new_idx
 
         # Phase 4: Advance simulation for steps_per_action, collecting per-TL
-        # per-substep T2 INTERSECTION-LEVEL pressure: count of vehicles whose
-        # `getWaitingTime > 0` summed over all controlled in-lanes per
-        # intersection. Pairs with cyclic-mandatory action_mode="duration" —
-        # whole-intersection visibility means the agent sees unserved
-        # directions queueing up under extended bucket-3 (40 s) holds.
+        # per-substep T1 (LibSignal-exact) lane_waiting_count: count of
+        # vehicles whose `getWaitingTime > 0` per controlled in-lane,
+        # MEAN across in-lanes per intersection. This is what LibSignal's
+        # CoLight ships (`agent/colight.py:62-63` LaneVehicleGenerator
+        # `lane_waiting_count` average='all', `world/world_sumo.py:286-288`).
         sub_step_pressure: dict[str, list[float]] = {tl_id: [] for tl_id in self.tl_ids}
         for _ in range(self.steps_per_action):
             conn.simulationStep()
@@ -629,15 +629,15 @@ class CoLightEnv:
                     for v in conn.lane.getLastStepVehicleIDs(lane):
                         if conn.vehicle.getWaitingTime(v) > 0:
                             waiting_count += 1
-                sub_step_pressure[tl_id].append(float(waiting_count))
+                mean_waiting_count = waiting_count / max(len(in_lanes), 1)
+                sub_step_pressure[tl_id].append(float(mean_waiting_count))
 
         # Advance elapsed tracker by steps_per_action for all TLs that held
         # their current green (switchers got reset above; also advance them).
         for tl_id in self.tl_ids:
             self._elapsed_in_green[tl_id] += self.steps_per_action
 
-        # Phase 5: T2 intersection-pressure reward, mean over substeps,
-        # ×−12 (LibSignal-aligned scaling, no clip).
+        # Phase 5: T1 reward — mean over substeps, ×−12 (LibSignal scaling).
         rewards = np.zeros(n, dtype=np.float32)
         for i, tl_id in enumerate(self.tl_ids):
             p = sub_step_pressure[tl_id]
