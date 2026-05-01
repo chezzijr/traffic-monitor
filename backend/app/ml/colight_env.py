@@ -53,6 +53,7 @@ class CoLightEnv:
         routes_path: str | None = None,
         scenario: str = "moderate",
         action_mode: str = "duration",
+        reward_mode: str = "t1_lane_waiting_count_mean",
     ):
         self.network_path = network_path
         self.network_id = network_id
@@ -68,6 +69,12 @@ class CoLightEnv:
                 f"action_mode must be 'duration' or 'phase', got {action_mode!r}"
             )
         self.action_mode = action_mode
+        if reward_mode not in ("t1_lane_waiting_count_mean", "sqrt_halting"):
+            raise ValueError(
+                f"reward_mode must be 't1_lane_waiting_count_mean' or "
+                f"'sqrt_halting', got {reward_mode!r}"
+            )
+        self.reward_mode = reward_mode
 
         self._yellow_time = yellow_time
         self._vehicle_max = vehicle_max
@@ -372,7 +379,7 @@ class CoLightEnv:
             f"total_in_lanes={total_in_lanes}, "
             f"routes_path={self.routes_path or self._cached_routes_path or 'auto-gen'}, "
             f"action_mode={action_desc}, "
-            f"reward=t1_lane_waiting_count_mean*-12"
+            f"reward={self.reward_mode}"
         )
 
     # ------------------------------------------------------------------
@@ -608,13 +615,14 @@ class CoLightEnv:
                 self._elapsed_in_green[tl_id] = 0
             self._current_green_idx[tl_id] = new_idx
 
-        # Phase 4: Advance simulation for steps_per_action, collecting per-TL
-        # per-substep T1 (LibSignal-exact) lane_waiting_count: count of
-        # vehicles whose `getWaitingTime > 0` per controlled in-lane,
-        # MEAN across in-lanes per intersection. This is what LibSignal's
-        # CoLight ships (`agent/colight.py:62-63` LaneVehicleGenerator
-        # `lane_waiting_count` average='all', `world/world_sumo.py:286-288`).
-        sub_step_pressure: dict[str, list[float]] = {tl_id: [] for tl_id in self.tl_ids}
+        # Phase 4: Advance simulation for steps_per_action, collect per-TL
+        # per-substep reward signal. Two modes:
+        #   - "t1_lane_waiting_count_mean" (default): LibSignal-exact, mean
+        #     count of vehicles with `getWaitingTime > 0` per in-lane.
+        #     `agent/colight.py:62-63` + `world/world_sumo.py:286-288`.
+        #   - "sqrt_halting": main-equivalent, mean halting count across
+        #     in-lanes / sqrt(num_lanes). Ablation against Track 1+T1.
+        sub_step_signal: dict[str, list[float]] = {tl_id: [] for tl_id in self.tl_ids}
         for _ in range(self.steps_per_action):
             conn.simulationStep()
             self._current_step += 1
@@ -622,29 +630,41 @@ class CoLightEnv:
             for tl_id in self.tl_ids:
                 in_lanes = self._controlled_lanes[tl_id]
                 if not in_lanes:
-                    sub_step_pressure[tl_id].append(0.0)
+                    sub_step_signal[tl_id].append(0.0)
                     continue
-                waiting_count = 0
-                for lane in in_lanes:
-                    for v in conn.lane.getLastStepVehicleIDs(lane):
-                        if conn.vehicle.getWaitingTime(v) > 0:
-                            waiting_count += 1
-                mean_waiting_count = waiting_count / max(len(in_lanes), 1)
-                sub_step_pressure[tl_id].append(float(mean_waiting_count))
+                if self.reward_mode == "t1_lane_waiting_count_mean":
+                    waiting_count = 0
+                    for lane in in_lanes:
+                        for v in conn.lane.getLastStepVehicleIDs(lane):
+                            if conn.vehicle.getWaitingTime(v) > 0:
+                                waiting_count += 1
+                    mean_waiting_count = waiting_count / max(len(in_lanes), 1)
+                    sub_step_signal[tl_id].append(float(mean_waiting_count))
+                else:  # "sqrt_halting" — main-equivalent
+                    mean_halting = float(np.mean([
+                        conn.lane.getLastStepHaltingNumber(lane) for lane in in_lanes
+                    ]))
+                    sub_step_signal[tl_id].append(mean_halting)
 
         # Advance elapsed tracker by steps_per_action for all TLs that held
         # their current green (switchers got reset above; also advance them).
         for tl_id in self.tl_ids:
             self._elapsed_in_green[tl_id] += self.steps_per_action
 
-        # Phase 5: T1 reward — mean over substeps, ×−12 (LibSignal scaling).
+        # Phase 5: Reward = mean over substeps, scaled per mode.
+        #   - T1: × −12 (LibSignal scaling).
+        #   - sqrt_halting: × −1 / sqrt(num_lanes) (main scaling).
         rewards = np.zeros(n, dtype=np.float32)
         for i, tl_id in enumerate(self.tl_ids):
-            p = sub_step_pressure[tl_id]
+            p = sub_step_signal[tl_id]
             if not p:
                 continue
             mean_p = float(np.nan_to_num(np.mean(p), nan=0.0, posinf=0.0, neginf=0.0))
-            rewards[i] = -mean_p * 12.0
+            if self.reward_mode == "t1_lane_waiting_count_mean":
+                rewards[i] = -mean_p * 12.0
+            else:
+                num_lanes = max(len(self._controlled_lanes[tl_id]), 1)
+                rewards[i] = -mean_p / float(np.sqrt(num_lanes))
 
         # Phase 6: Observations
         observations = self._get_all_observations()

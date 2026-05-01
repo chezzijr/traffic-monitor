@@ -432,6 +432,8 @@ def train_multi_junction(
     algorithm: str = "dqn",
     total_timesteps: int = 10000,
     scenario: str = "moderate",
+    action_mode: str = "duration",
+    reward_mode: str = "t1_lane_waiting_count_mean",
 ):
     """Multi-junction training task (unchanged - uses existing multi-agent infrastructure)."""
     task_id = self.request.id
@@ -466,6 +468,8 @@ def train_multi_junction(
                 network_id=network_id,
                 tl_ids=tl_ids,
                 scenario=scenario,
+                action_mode=action_mode,
+                reward_mode=reward_mode,
             )
             trainer = CoLightTrainer(env=env)
             baseline = trainer.run_baseline(num_episodes=3)

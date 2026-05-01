@@ -162,6 +162,15 @@ class MultiJunctionTrainingRequest(BaseModel):
     algorithm: str = Field(default="dqn", description="RL algorithm (dqn, ppo, or colight)")
     total_timesteps: int = Field(default=10000, ge=1000, le=1000000, description="Training timesteps")
     scenario: TrafficScenario = Field(default=TrafficScenario.MODERATE, description="Traffic scenario")
+    # CoLight-only ablation knobs. Ignored by dqn/ppo training paths.
+    action_mode: str = Field(
+        default="duration",
+        description="CoLight action mode: 'duration' (Track 1) or 'phase' (legacy)",
+    )
+    reward_mode: str = Field(
+        default="t1_lane_waiting_count_mean",
+        description="CoLight reward: 't1_lane_waiting_count_mean' (LibSignal) or 'sqrt_halting' (main-equivalent)",
+    )
 
 
 class TrainingTaskResponse(BaseModel):
