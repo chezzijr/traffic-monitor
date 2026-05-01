@@ -56,12 +56,14 @@ def main() -> int:
     trainer = CoLightTrainer(env=env)
     trainer.load(args.model_path)
 
-    # Baseline (fixed-time) for comparison.
-    baseline = trainer.run_baseline(num_episodes=3)
-    logger.info(f"Baseline: {baseline}")
-
-    # Multi-seed eval. Repeat seed list to fill num_episodes-per-seed budget.
+    # Build interleaved seed list so baseline & eval see same per-ep traffic.
     eval_seeds = [s for s in seeds for _ in range(args.num_episodes)]
+
+    # Baseline on the SAME seeds (apples-to-apples per-seed comparison).
+    baseline = trainer.run_baseline(num_episodes=len(eval_seeds), seeds=eval_seeds)
+    logger.info(f"Baseline (seeded): {baseline}")
+
+    # Multi-seed agent eval.
     eval_metrics = trainer.evaluate(num_episodes=len(eval_seeds), seeds=eval_seeds)
 
     bw = baseline["avg_waiting_time"] or 1e-9
@@ -82,20 +84,41 @@ def main() -> int:
         s = int(seed_f) if not np.isnan(seed_f) else -1
         per_seed.setdefault(s, []).append(m)
 
+    # Same aggregation for baseline.
+    base_per_seed: dict[int, list[dict]] = {}
+    for m in baseline.get("per_episode", []):
+        seed_val = m.get("seed")
+        try:
+            seed_f = float(seed_val) if seed_val is not None else float("nan")
+        except (TypeError, ValueError):
+            seed_f = float("nan")
+        s = int(seed_f) if not np.isnan(seed_f) else -1
+        base_per_seed.setdefault(s, []).append(m)
+
     seed_summary = []
     for s, eps in sorted(per_seed.items()):
         wait_arr = np.array([e["wait"] for e in eps])
         queue_arr = np.array([e["queue"] for e in eps])
         tput_arr = np.array([e["throughput"] for e in eps])
+        b_eps = base_per_seed.get(s, [])
+        b_wait = np.array([e["wait"] for e in b_eps]) if b_eps else None
+        b_queue = np.array([e["queue"] for e in b_eps]) if b_eps else None
+        b_tput = np.array([e["throughput"] for e in b_eps]) if b_eps else None
+        per_seed_dw = (wait_arr.mean() - b_wait.mean()) / max(b_wait.mean(), 1e-9) * 100.0 if b_wait is not None else None
+        per_seed_dq = (queue_arr.mean() - b_queue.mean()) / max(b_queue.mean(), 1e-9) * 100.0 if b_queue is not None else None
+        per_seed_dt = (tput_arr.mean() - b_tput.mean()) / max(b_tput.mean(), 1e-9) * 100.0 if b_tput is not None else None
         seed_summary.append({
             "seed": s,
             "episodes": len(eps),
-            "wait_mean": float(wait_arr.mean()),
-            "wait_std": float(wait_arr.std()),
-            "queue_mean": float(queue_arr.mean()),
-            "queue_std": float(queue_arr.std()),
-            "tput_mean": float(tput_arr.mean()),
-            "tput_std": float(tput_arr.std()),
+            "agent_wait_mean": float(wait_arr.mean()),
+            "agent_queue_mean": float(queue_arr.mean()),
+            "agent_tput_mean": float(tput_arr.mean()),
+            "baseline_wait_mean": float(b_wait.mean()) if b_wait is not None else None,
+            "baseline_queue_mean": float(b_queue.mean()) if b_queue is not None else None,
+            "baseline_tput_mean": float(b_tput.mean()) if b_tput is not None else None,
+            "delta_wait_pct": per_seed_dw,
+            "delta_queue_pct": per_seed_dq,
+            "delta_tput_pct": per_seed_dt,
         })
 
     summary = {
@@ -138,14 +161,22 @@ def main() -> int:
         f"({dt:+.1f}%)"
     )
     print()
-    print("Per-seed:")
+    print("Per-seed (agent vs fixed-time on SAME traffic):")
     for s in seed_summary:
-        print(
-            f"  seed={s['seed']:>4} (n={s['episodes']}): "
-            f"wait={s['wait_mean']:.2f}±{s['wait_std']:.2f}  "
-            f"queue={s['queue_mean']:.2f}±{s['queue_std']:.2f}  "
-            f"tput={s['tput_mean']:.0f}±{s['tput_std']:.0f}"
-        )
+        if s["baseline_wait_mean"] is not None:
+            print(
+                f"  seed={s['seed']:>4}: agent wait={s['agent_wait_mean']:.1f}s "
+                f"vs base={s['baseline_wait_mean']:.1f}s ({s['delta_wait_pct']:+.1f}%)  "
+                f"queue={s['agent_queue_mean']:.2f} vs {s['baseline_queue_mean']:.2f} "
+                f"({s['delta_queue_pct']:+.1f}%)  "
+                f"tput={s['agent_tput_mean']:.0f} vs {s['baseline_tput_mean']:.0f} "
+                f"({s['delta_tput_pct']:+.1f}%)"
+            )
+        else:
+            print(
+                f"  seed={s['seed']:>4}: agent wait={s['agent_wait_mean']:.1f}s "
+                f"queue={s['agent_queue_mean']:.2f}  tput={s['agent_tput_mean']:.0f}"
+            )
     print("=" * 72)
 
     if args.out_json:

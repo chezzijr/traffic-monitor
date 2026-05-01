@@ -272,18 +272,32 @@ class CoLightTrainer:
 
         logger.info(f"CoLight model loaded from {path}")
 
-    def run_baseline(self, num_episodes: int = 3) -> dict[str, float]:
-        """Run baseline episodes with SUMO's default timing.
+    def run_baseline(
+        self,
+        num_episodes: int = 3,
+        seeds: list[int] | None = None,
+    ) -> dict[str, Any]:
+        """Run baseline episodes with SUMO's default fixed-time timing.
 
-        Returns dict with avg_waiting_time, avg_queue_length, throughput.
+        If `seeds` provided, regenerate routes per seed (clears cache) so
+        per-seed comparison against multi-seed eval is apples-to-apples.
+
+        Returns dict with avg_waiting_time, avg_queue_length, throughput,
+        plus per-episode metrics when seeds provided.
         """
-        logger.info(f"Running {num_episodes} baseline episodes")
+        seed_desc = f" seeds={seeds}" if seeds else ""
+        logger.info(f"Running {num_episodes} baseline episodes{seed_desc}")
         total_waiting = 0.0
         total_queue = 0.0
         total_throughput = 0
+        per_ep_metrics: list[dict[str, float]] = []
 
-        for _ in range(num_episodes):
-            self.env.reset()
+        for ep in range(num_episodes):
+            seed_for_ep: int | None = None
+            if seeds:
+                seed_for_ep = int(seeds[ep % len(seeds)])
+                self.env._cached_routes_path = None
+            self.env.reset(seed=seed_for_ep)
             conn = self.env._get_conn()
 
             # Restore SUMO's default fixed-time program for all TLs
@@ -318,15 +332,23 @@ class CoLightTrainer:
                     ep_queue += float(np.mean(per_tl_queue)) if per_tl_queue else 0.0
                     steps += 1
 
-            if steps > 0:
-                total_waiting += ep_waiting / steps
-                total_queue += ep_queue / steps
+            ep_wait_mean = (ep_waiting / steps) if steps > 0 else 0.0
+            ep_queue_mean = (ep_queue / steps) if steps > 0 else 0.0
+            total_waiting += ep_wait_mean
+            total_queue += ep_queue_mean
             total_throughput += ep_throughput
+            per_ep_metrics.append({
+                "wait": ep_wait_mean,
+                "queue": ep_queue_mean,
+                "throughput": ep_throughput,
+                "seed": float(seed_for_ep) if seed_for_ep is not None else float("nan"),
+            })
 
-        baseline = {
+        baseline: dict[str, Any] = {
             "avg_waiting_time": total_waiting / max(num_episodes, 1),
             "avg_queue_length": total_queue / max(num_episodes, 1),
             "throughput": total_throughput // max(num_episodes, 1),
+            "per_episode": per_ep_metrics,
         }
         logger.info(f"Baseline metrics: {baseline}")
         self._baseline = baseline
