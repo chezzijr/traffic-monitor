@@ -288,25 +288,38 @@ class CoLightTrainer:
         self,
         num_episodes: int = 3,
         callbacks: list[TrainingCallback] | None = None,
-    ) -> dict[str, float]:
+        seeds: list[int] | None = None,
+    ) -> dict[str, Any]:
         """Run deterministic eval episodes with the greedy policy (epsilon=0).
 
         Strips ε-greedy noise from reported metrics. Returns same shape as
-        run_baseline so callers can compare directly.
+        run_baseline so callers can compare directly. If `seeds` provided,
+        each episode regenerates routes with that seed (clears env's cached
+        route path) — required for multi-seed robustness eval.
         """
         agent = self.agent
         saved_epsilon = agent.epsilon
         agent.epsilon = 0.0
         try:
-            logger.info(f"Running {num_episodes} deterministic eval episodes (epsilon=0)")
+            seed_desc = f" seeds={seeds}" if seeds else ""
+            logger.info(
+                f"Running {num_episodes} deterministic eval episodes "
+                f"(epsilon=0){seed_desc}"
+            )
             total_waiting = 0.0
             total_queue = 0.0
             total_throughput = 0
             mean_rewards: list[float] = []
+            per_ep_metrics: list[dict[str, float]] = []
             completed = 0
 
             for ep in range(num_episodes):
-                obs = self.env.reset()
+                seed_for_ep: int | None = None
+                if seeds:
+                    seed_for_ep = int(seeds[ep % len(seeds)])
+                    # Force fresh route generation for this seed.
+                    self.env._cached_routes_path = None
+                obs = self.env.reset(seed=seed_for_ep)
                 done = False
                 ep_reward = 0.0
                 info: dict = {}
@@ -314,10 +327,19 @@ class CoLightTrainer:
                     actions = agent.select_action(obs, deterministic=True)
                     obs, rewards, done, info = self.env.step(actions)
                     ep_reward += float(np.mean(rewards))
-                total_waiting += float(info.get("avg_waiting_time", 0.0))
-                total_queue += float(info.get("avg_queue_length", 0.0))
-                total_throughput += int(info.get("throughput", 0))
+                ep_wait = float(info.get("avg_waiting_time", 0.0))
+                ep_queue = float(info.get("avg_queue_length", 0.0))
+                ep_tput = int(info.get("throughput", 0))
+                total_waiting += ep_wait
+                total_queue += ep_queue
+                total_throughput += ep_tput
                 mean_rewards.append(ep_reward)
+                per_ep_metrics.append({
+                    "wait": ep_wait,
+                    "queue": ep_queue,
+                    "throughput": ep_tput,
+                    "seed": float(seed_for_ep) if seed_for_ep is not None else float("nan"),
+                })
                 completed += 1
 
                 cancelled = False
@@ -330,14 +352,26 @@ class CoLightTrainer:
                     break
 
             divisor = max(completed, 1)
+            wait_arr = np.array([m["wait"] for m in per_ep_metrics], dtype=np.float64) if per_ep_metrics else np.array([0.0])
+            queue_arr = np.array([m["queue"] for m in per_ep_metrics], dtype=np.float64) if per_ep_metrics else np.array([0.0])
+            tput_arr = np.array([m["throughput"] for m in per_ep_metrics], dtype=np.float64) if per_ep_metrics else np.array([0.0])
             eval_metrics = {
                 "avg_waiting_time": total_waiting / divisor,
                 "avg_queue_length": total_queue / divisor,
                 "throughput": total_throughput // divisor,
                 "mean_reward": float(np.mean(mean_rewards)) if mean_rewards else 0.0,
                 "episodes_completed": completed,
+                "wait_std": float(wait_arr.std()),
+                "queue_std": float(queue_arr.std()),
+                "throughput_std": float(tput_arr.std()),
+                "per_episode": per_ep_metrics,
             }
-            logger.info(f"Eval metrics (greedy): {eval_metrics}")
+            logger.info(
+                f"Eval metrics (greedy): wait={eval_metrics['avg_waiting_time']:.2f}±{eval_metrics['wait_std']:.2f}, "
+                f"queue={eval_metrics['avg_queue_length']:.2f}±{eval_metrics['queue_std']:.2f}, "
+                f"tput={eval_metrics['throughput']}±{eval_metrics['throughput_std']:.0f}, "
+                f"episodes={completed}"
+            )
             return eval_metrics
         finally:
             agent.epsilon = saved_epsilon
