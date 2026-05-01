@@ -283,3 +283,61 @@ class CoLightTrainer:
         logger.info(f"Baseline metrics: {baseline}")
         self._baseline = baseline
         return baseline
+
+    def evaluate(
+        self,
+        num_episodes: int = 3,
+        callbacks: list[TrainingCallback] | None = None,
+    ) -> dict[str, float]:
+        """Run deterministic eval episodes with the greedy policy (epsilon=0).
+
+        Strips ε-greedy noise from reported metrics. Returns same shape as
+        run_baseline so callers can compare directly.
+        """
+        agent = self.agent
+        saved_epsilon = agent.epsilon
+        agent.epsilon = 0.0
+        try:
+            logger.info(f"Running {num_episodes} deterministic eval episodes (epsilon=0)")
+            total_waiting = 0.0
+            total_queue = 0.0
+            total_throughput = 0
+            mean_rewards: list[float] = []
+            completed = 0
+
+            for ep in range(num_episodes):
+                obs = self.env.reset()
+                done = False
+                ep_reward = 0.0
+                info: dict = {}
+                while not done:
+                    actions = agent.select_action(obs, deterministic=True)
+                    obs, rewards, done, info = self.env.step(actions)
+                    ep_reward += float(np.mean(rewards))
+                total_waiting += float(info.get("avg_waiting_time", 0.0))
+                total_queue += float(info.get("avg_queue_length", 0.0))
+                total_throughput += int(info.get("throughput", 0))
+                mean_rewards.append(ep_reward)
+                completed += 1
+
+                cancelled = False
+                for cb in (callbacks or []):
+                    if not cb.on_episode_end(ep, num_episodes, ep_reward, info):
+                        cancelled = True
+                        break
+                if cancelled:
+                    logger.info(f"Eval cancelled after episode {ep + 1}/{num_episodes}")
+                    break
+
+            divisor = max(completed, 1)
+            eval_metrics = {
+                "avg_waiting_time": total_waiting / divisor,
+                "avg_queue_length": total_queue / divisor,
+                "throughput": total_throughput // divisor,
+                "mean_reward": float(np.mean(mean_rewards)) if mean_rewards else 0.0,
+                "episodes_completed": completed,
+            }
+            logger.info(f"Eval metrics (greedy): {eval_metrics}")
+            return eval_metrics
+        finally:
+            agent.epsilon = saved_epsilon

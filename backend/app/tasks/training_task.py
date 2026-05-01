@@ -487,12 +487,26 @@ def train_multi_junction(
                     logger.info(f"CoLight task {task_id} was cancelled")
                     return {"status": "cancelled", "task_id": task_id}
 
-            # Save as single .pt file
+            # Save model FIRST so a crashing eval doesn't cost the training.
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             model_filename = f"{network_id}_multi_colight_{timestamp}.pt"
             model_path = MODELS_DIR / model_filename
             MODELS_DIR.mkdir(parents=True, exist_ok=True)
             trainer.save(str(model_path))
+
+            # Deterministic eval (epsilon=0). Training-loop metrics are
+            # noisy ε-greedy averages — eval strips that so wait/queue/tput
+            # reflect the actual learned policy.
+            try:
+                eval_metrics = trainer.evaluate(
+                    num_episodes=3,
+                    callbacks=[CancellationCallback(task_id)],
+                )
+            except Exception as eval_err:
+                logger.warning(
+                    f"CoLight eval failed: {eval_err}; falling back to training-final"
+                )
+                eval_metrics = None
 
             # Save metadata
             model_meta = {
@@ -512,8 +526,14 @@ def train_multi_junction(
             with open(meta_path, "w") as f:
                 json.dump(model_meta, f, indent=2)
 
-            # Gather final metrics
+            # Gather final metrics — prefer eval; fallback to training-final.
             rl_metrics = progress_cb.get_final_metrics()
+            reported = eval_metrics or {
+                "avg_waiting_time": rl_metrics["avg_waiting_time"],
+                "avg_queue_length": rl_metrics["avg_queue_length"],
+                "throughput": rl_metrics["throughput"],
+                "mean_reward": progress_cb.mean_reward,
+            }
             results = {
                 "baseline": baseline or {},
                 "trained": {
@@ -522,6 +542,8 @@ def train_multi_junction(
                     "throughput": rl_metrics["throughput"],
                     "mean_reward": progress_cb.mean_reward,
                 },
+                "eval": eval_metrics or {},
+                "reported": reported,
                 "training_config": {
                     "algorithm": algorithm,
                     "total_timesteps": total_timesteps,
@@ -533,7 +555,7 @@ def train_multi_junction(
             with open(results_path, "w") as f:
                 json.dump(results, f, indent=2)
 
-            # Publish completion
+            # Publish completion (eval if available, training-final otherwise)
             completion = {
                 "task_id": task_id,
                 "status": "completed",
@@ -541,13 +563,13 @@ def train_multi_junction(
                 "total_timesteps": total_timesteps,
                 "progress": 1.0,
                 "model_path": str(model_path),
-                "avg_waiting_time": rl_metrics["avg_waiting_time"],
-                "avg_queue_length": rl_metrics["avg_queue_length"],
-                "throughput": rl_metrics["throughput"],
+                "avg_waiting_time": reported["avg_waiting_time"],
+                "avg_queue_length": reported["avg_queue_length"],
+                "throughput": reported["throughput"],
                 "network_id": network_id,
                 "tl_ids": tl_ids,
                 "algorithm": algorithm,
-                "mean_reward": progress_cb.mean_reward,
+                "mean_reward": reported.get("mean_reward", progress_cb.mean_reward),
             }
             if baseline:
                 completion["baseline_avg_waiting_time"] = baseline.get("avg_waiting_time", 0.0)
