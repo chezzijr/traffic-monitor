@@ -4,7 +4,9 @@ Custom DQN training loop following V1 TrafficLightTrainer pattern,
 adapted for CoLight's graph-based multi-agent structure.
 """
 
+import copy
 import logging
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +36,15 @@ class CoLightTrainer:
         self._seed = seed
         self._episode_rewards: list[float] = []
         self._baseline: dict[str, float] | None = None
+
+        # Best-model snapshot state. Tracks a 5-episode trailing-mean training
+        # score (lower = better policy) and snapshots q_network weights when
+        # the score improves. End of train() restores best weights so save()
+        # and evaluate() see the best-ever model, not the post-collapse last.
+        self._best_state_dict: dict | None = None
+        self._best_score: float = float("inf")
+        self._best_episode: int = -1
+        self._recent_scores: deque[float] = deque(maxlen=5)
 
         # Trigger lazy initialization so env dimensions are available
         self.env.reset(seed=seed)
@@ -154,6 +165,7 @@ class CoLightTrainer:
             wait = float(info.get("avg_waiting_time", 0.0))
             queue = float(info.get("avg_queue_length", 0.0))
             throughput = int(info.get("throughput", 0))
+            dw = dq = dt = 0.0
             if self._baseline is not None:
                 bw = self._baseline.get("avg_waiting_time", 0.0) or 1e-9
                 bq = self._baseline.get("avg_queue_length", 0.0) or 1e-9
@@ -179,12 +191,48 @@ class CoLightTrainer:
                 f"action_dist=[{action_dist_str}], per_tl_reward=[{per_tl_str}]"
             )
 
+            # Best-model snapshot: trailing-5-ep mean of
+            # `wait_pct + queue_pct - tput_pct` (lower beats baseline more).
+            # Snapshot when trailing mean improves; restore at end of train()
+            # so save() and evaluate() use best-ever weights, not last.
+            if self._baseline is not None and total_decisions > learning_start:
+                score = dw + dq - dt
+                self._recent_scores.append(score)
+                if len(self._recent_scores) == self._recent_scores.maxlen:
+                    trailing = float(np.mean(self._recent_scores))
+                    if trailing < self._best_score:
+                        self._best_score = trailing
+                        self._best_episode = episode + 1
+                        self._best_state_dict = copy.deepcopy(
+                            agent.q_network.state_dict()
+                        )
+                        logger.info(
+                            f"Snapshot at ep {episode + 1} (score={trailing:.2f})"
+                        )
+
             for cb in (callbacks or []):
                 if not cb.on_episode_end(episode, num_episodes, episode_reward, info):
                     logger.info("Training cancelled by callback")
+                    self._restore_best(agent)
                     return
 
+        self._restore_best(agent)
         logger.info("CoLight training complete")
+
+    def _restore_best(self, agent: CoLightAgent) -> None:
+        """Load best snapshot into q_network/target_network if any taken.
+
+        Called at end of train() (and on cancellation) so subsequent save()
+        and evaluate() see best-ever weights — not the post-collapse last.
+        """
+        if self._best_state_dict is None:
+            return
+        agent.q_network.load_state_dict(self._best_state_dict)
+        agent.target_network.load_state_dict(self._best_state_dict)
+        logger.info(
+            f"Restored best weights from episode {self._best_episode} "
+            f"(score={self._best_score:.2f})"
+        )
 
     def save(self, path: str | Path) -> Path:
         """Save the trained model as a PyTorch checkpoint."""
