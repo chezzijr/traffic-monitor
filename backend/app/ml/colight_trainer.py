@@ -40,11 +40,21 @@ class CoLightTrainer:
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
+        # Track 1: in duration mode, every TL has a uniform 4-bucket action
+        # space (no per-TL masking). In phase mode the legacy per-TL
+        # phase_lengths mask is needed so 2-phase TLs don't argmax over an
+        # invalid 3rd phase.
+        agent_phase_lengths = (
+            [env.num_actions] * len(env.tl_ids)
+            if env.action_mode == "duration"
+            else env.phase_lengths
+        )
+
         self.agent = CoLightAgent(
             ob_length=env.ob_length,
             num_actions=env.num_actions,
             num_intersections=len(env.tl_ids),
-            phase_lengths=env.phase_lengths,
+            phase_lengths=agent_phase_lengths,
             edge_index=env.edge_index,
             lr=1e-3,
             gamma=0.95,

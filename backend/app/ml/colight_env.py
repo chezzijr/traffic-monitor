@@ -12,15 +12,31 @@ from app.ml._sumo_compat import get_traci as _get_traci
 logger = logging.getLogger(__name__)
 
 
+# Track 1 (plan.md): duration-bucket action with cyclic phase advance.
+# Action ∈ {0,1,2,3} → target green durations in sumo seconds. Phase always
+# advances when its age reaches the bucket target → 2-phase TLs cannot
+# starve (cycle is mandatory), and DQN argmax has 4 alternatives instead
+# of 2 → less prone to extrapolation lock-in. Refs: Liang 2019
+# (arxiv 1803.11115), GuideLight (arxiv 2407.10811).
+DURATION_BUCKETS_SEC: tuple[int, ...] = (10, 20, 30, 40)
+
+
 class CoLightEnv:
     """Multi-agent environment for CoLight: N intersections, one SUMO instance, graph topology.
 
     NOT a gym.Env subclass. Manages N traffic lights in a single SUMO simulation
     with graph-based adjacency for CoLight's attention mechanism.
 
-    Observation per TL: normalized lane vehicle counts (LibSignal CoLight, phase=False), padded to ob_length.
-    Action per TL: int index selecting a green phase.
-    Reward per TL: -mean(halting_over_substeps) * 12.0 (LibSignal unified reward).
+    Observation per TL: [lane vehicle counts, phase one-hot, elapsed scalar].
+    Action semantics depend on `action_mode`:
+        - "duration" (Track 1, default): action = duration-bucket index. Phase
+          cycles automatically; bucket selects how long the *current* green
+          must persist before advancing to the next. 2-phase TLs cannot
+          starve by construction.
+        - "phase" (legacy): action = green phase index to switch to.
+    Reward per TL: T2 intersection-level pressure — count of vehicles whose
+    `getWaitingTime > 0` summed over all controlled in-lanes per intersection,
+    mean over substeps, * -12 (LibSignal-aligned scaling, no clip).
     """
 
     def __init__(
@@ -36,6 +52,7 @@ class CoLightEnv:
         gui: bool = False,
         routes_path: str | None = None,
         scenario: str = "moderate",
+        action_mode: str = "duration",
     ):
         self.network_path = network_path
         self.network_id = network_id
@@ -46,6 +63,11 @@ class CoLightEnv:
         self.gui = gui
         self.routes_path = routes_path
         self.scenario = scenario
+        if action_mode not in ("duration", "phase"):
+            raise ValueError(
+                f"action_mode must be 'duration' or 'phase', got {action_mode!r}"
+            )
+        self.action_mode = action_mode
 
         self._yellow_time = yellow_time
         self._vehicle_max = vehicle_max
@@ -317,18 +339,40 @@ class CoLightEnv:
             len(self._green_phases[tl])
             for tl in self.tl_ids  # ordered by node_id2idx (same order as tl_ids)
         ]
-        self.num_actions = max(self.phase_lengths)
-        self.ob_length = self._max_lanes + self.num_actions
+        if self.action_mode == "duration":
+            # Track 1: 4 duration buckets, uniform across all TLs.
+            # phase_lengths still drives cyclic modulo (per-TL).
+            self.num_actions = len(DURATION_BUCKETS_SEC)
+        else:
+            self.num_actions = max(self.phase_lengths)
+        # +1 for normalized elapsed_in_green scalar — without it the agent
+        # cannot tell "phase just started" from "phase about to cycle".
+        self.ob_length = self._max_lanes + self.num_actions + 1
 
         # Build graph adjacency
         self._build_graph()
 
         self._is_initialized = True
+        action_desc = (
+            f"duration{list(DURATION_BUCKETS_SEC)}"
+            if self.action_mode == "duration"
+            else "phase"
+        )
         logger.info(
             f"CoLightEnv initialized: {len(self.tl_ids)} TLs, "
             f"ob_length={self.ob_length}, num_actions={self.num_actions}, "
             f"phase_lengths={self.phase_lengths}, "
             f"edge_index shape={self.edge_index.shape}"
+        )
+        total_in_lanes = sum(len(self._controlled_lanes[tl]) for tl in self.tl_ids)
+        logger.info(
+            f"Scenario sanity: scenario={self.scenario}, "
+            f"vehicle_max={self._vehicle_max:.1f}, "
+            f"max_steps={self.max_steps}, steps_per_action={self.steps_per_action}, "
+            f"total_in_lanes={total_in_lanes}, "
+            f"routes_path={self.routes_path or self._cached_routes_path or 'auto-gen'}, "
+            f"action_mode={action_desc}, "
+            f"reward=t2_intersection_waiting_count*-12"
         )
 
     # ------------------------------------------------------------------
@@ -407,11 +451,13 @@ class CoLightEnv:
     # ------------------------------------------------------------------
 
     def _get_observation(self, tl_id: str) -> np.ndarray:
-        """CoLight observation: [normalized lane vehicle counts, phase one-hot].
+        """CoLight observation: [lane vehicle counts, phase one-hot, elapsed scalar].
 
         - Lane vehicle counts padded with zeros to self._max_lanes.
-        - Phase one-hot over self.num_actions using current green index.
-        - Total dim = self.ob_length = max_lanes + num_actions.
+        - Phase one-hot over self.num_actions slots using current green index.
+        - Elapsed scalar = min(elapsed_in_green / max_bucket, 1.0). Required
+          for duration-mode decisions to be informed.
+        - Total dim = self.ob_length = max_lanes + num_actions + 1.
         """
         conn = self._get_conn()
 
@@ -429,7 +475,13 @@ class CoLightEnv:
         if 0 <= cur_green < self.num_actions:
             phase_oh[cur_green] = 1.0
 
-        return np.concatenate([vehicle_counts, phase_oh], axis=0)
+        max_bucket = float(max(DURATION_BUCKETS_SEC))
+        elapsed = float(self._elapsed_in_green.get(tl_id, 0))
+        elapsed_scalar = np.array(
+            [min(elapsed / max_bucket, 1.0)], dtype=np.float32
+        )
+
+        return np.concatenate([vehicle_counts, phase_oh, elapsed_scalar], axis=0)
 
     def _get_all_observations(self) -> np.ndarray:
         """Stack per-TL observations in node index order -> [N, ob_length]."""
@@ -490,23 +542,41 @@ class CoLightEnv:
         needs_yellow: dict[str, bool] = {}
 
         # Phase 1: Determine desired green index per TL.
-        # Enforce min_green: if agent wants to switch but current phase has
-        # been held < min_green sim-seconds, keep current phase to prevent
-        # thrashing (49-TL coordination requires cycles matching fixed-time).
+        # Two interpretations of `actions[i]`:
+        #
+        # action_mode="duration" (Track 1, default): action = bucket index
+        # into DURATION_BUCKETS_SEC. If phase_age >= bucket target, cycle to
+        # (current+1) % num_green; else hold. Always cyclic, never reverses
+        # — 2-phase TLs cannot starve.
+        #
+        # action_mode="phase" (legacy): action = green phase index. Subject
+        # to DQN extrapolation error on 2-phase TLs (colight_problem5.md).
         for i, tl_id in enumerate(self.tl_ids):
             action = int(actions[i])
-            # Clamp action to valid range for this TL
             num_green = len(self._green_phases[tl_id])
-            action = action % num_green
-
             current_idx = self._current_green_idx[tl_id]
-            wants_switch = action != current_idx
-            if wants_switch and self._elapsed_in_green[tl_id] < self.min_green:
-                desired_green[tl_id] = current_idx
-                needs_yellow[tl_id] = False
+
+            if self.action_mode == "duration":
+                bucket = action % len(DURATION_BUCKETS_SEC)
+                target_age = DURATION_BUCKETS_SEC[bucket]
+                if num_green <= 1:
+                    desired_green[tl_id] = current_idx
+                    needs_yellow[tl_id] = False
+                elif self._elapsed_in_green[tl_id] >= target_age:
+                    desired_green[tl_id] = (current_idx + 1) % num_green
+                    needs_yellow[tl_id] = True
+                else:
+                    desired_green[tl_id] = current_idx
+                    needs_yellow[tl_id] = False
             else:
-                desired_green[tl_id] = action
-                needs_yellow[tl_id] = wants_switch
+                action = action % num_green
+                wants_switch = action != current_idx
+                if wants_switch and self._elapsed_in_green[tl_id] < self.min_green:
+                    desired_green[tl_id] = current_idx
+                    needs_yellow[tl_id] = False
+                else:
+                    desired_green[tl_id] = action
+                    needs_yellow[tl_id] = wants_switch
 
         # Phase 2: Yellow transitions (shared simulation, all TLs advance together)
         any_yellow = any(needs_yellow.values())
@@ -538,51 +608,43 @@ class CoLightEnv:
                 self._elapsed_in_green[tl_id] = 0
             self._current_green_idx[tl_id] = new_idx
 
-        # Phase 4: Advance simulation for steps_per_action, collecting per-substep
-        # MEAN halting and MEAN per-vehicle wait-time across lanes per TL.
-        sub_step_halting: dict[str, list[float]] = {tl_id: [] for tl_id in self.tl_ids}
-        sub_step_waiting: dict[str, list[float]] = {tl_id: [] for tl_id in self.tl_ids}
+        # Phase 4: Advance simulation for steps_per_action, collecting per-TL
+        # per-substep T2 INTERSECTION-LEVEL pressure: count of vehicles whose
+        # `getWaitingTime > 0` summed over all controlled in-lanes per
+        # intersection. Pairs with cyclic-mandatory action_mode="duration" —
+        # whole-intersection visibility means the agent sees unserved
+        # directions queueing up under extended bucket-3 (40 s) holds.
+        sub_step_pressure: dict[str, list[float]] = {tl_id: [] for tl_id in self.tl_ids}
         for _ in range(self.steps_per_action):
             conn.simulationStep()
             self._current_step += 1
             self._cumulative_throughput += conn.simulation.getArrivedNumber()
             for tl_id in self.tl_ids:
-                lanes = self._controlled_lanes[tl_id]
-                if not lanes:
-                    sub_step_halting[tl_id].append(0.0)
-                    sub_step_waiting[tl_id].append(0.0)
+                in_lanes = self._controlled_lanes[tl_id]
+                if not in_lanes:
+                    sub_step_pressure[tl_id].append(0.0)
                     continue
-                mean_halting = float(np.mean([
-                    conn.lane.getLastStepHaltingNumber(lane) for lane in lanes
-                ]))
-                vids: list[str] = []
-                for lane in lanes:
-                    vids.extend(conn.lane.getLastStepVehicleIDs(lane))
-                mean_waiting = (
-                    sum(conn.vehicle.getWaitingTime(v) for v in vids)
-                    / max(len(vids), 1)
-                    / 10.0  # normalize sec→reward scale comparable to halting count
-                )
-                sub_step_halting[tl_id].append(mean_halting)
-                sub_step_waiting[tl_id].append(mean_waiting)
+                waiting_count = 0
+                for lane in in_lanes:
+                    for v in conn.lane.getLastStepVehicleIDs(lane):
+                        if conn.vehicle.getWaitingTime(v) > 0:
+                            waiting_count += 1
+                sub_step_pressure[tl_id].append(float(waiting_count))
 
         # Advance elapsed tracker by steps_per_action for all TLs that held
         # their current green (switchers got reset above; also advance them).
         for tl_id in self.tl_ids:
             self._elapsed_in_green[tl_id] += self.steps_per_action
 
-        # Phase 5: Halting-only reward, normalized per-TL so big/busy intersections
-        # don't dominate the shared-parameter Q-net gradient. Raw -mean(halting) is
-        # already averaged over lanes, but a TL with 6 wide lanes still sees an order
-        # of magnitude more halting than a 3-lane TL under the same congestion level.
-        # Dividing by sqrt(num_lanes) rescales to roughly per-lane-utilization.
+        # Phase 5: T2 intersection-pressure reward, mean over substeps,
+        # ×−12 (LibSignal-aligned scaling, no clip).
         rewards = np.zeros(n, dtype=np.float32)
         for i, tl_id in enumerate(self.tl_ids):
-            h = sub_step_halting[tl_id]
-            if not h:
+            p = sub_step_pressure[tl_id]
+            if not p:
                 continue
-            num_lanes = max(len(self._controlled_lanes[tl_id]), 1)
-            rewards[i] = -float(np.mean(h)) / float(np.sqrt(num_lanes))
+            mean_p = float(np.nan_to_num(np.mean(p), nan=0.0, posinf=0.0, neginf=0.0))
+            rewards[i] = -mean_p * 12.0
 
         # Phase 6: Observations
         observations = self._get_all_observations()
