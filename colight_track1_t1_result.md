@@ -55,8 +55,50 @@ accommodate heavy queue buildup. Saturation regime — fixed-time is
 already near-optimal here (low headroom for RL gain). Variance is tight
 (σ=10.87 s across 5 seeds vs 14.04 s on moderate).
 
-For production heavy traffic: **train a separate model on heavy** rather
-than relying on moderate-trained generalization.
+For production heavy traffic: a heavy-scenario-specific model performs
+nearly identically to moderate-trained generalization (see below) —
+fixed-time is near-optimal at saturation; RL has limited headroom.
+
+## Heavy-scenario training (Track 1+T1, scenario=heavy, 27 episodes)
+
+Trained a separate model on heavy. Saved at
+`simulation/models/90ccdbcc952c5394_multi_colight_20260501_064735.pt`.
+5 SUMO seeds × 1 ep multi-seed eval:
+
+| Metric | Baseline (heavy) | Heavy-trained eval | Δ |
+|---|---|---|---|
+| Avg waiting time | 142.99 s | 154.52 ± 16.65 s | **+8.1 %** ✗ |
+| Avg queue length | 11.76 | 11.14 ± 0.30 | **−5.2 %** ✓ pass |
+| Throughput | 2785 | 3008 ± 33 | **+8.0 %** ✓ stretch |
+
+| Seed | wait (s) | queue | tput |
+|---|---|---|---|
+| 1 | 175.15 | 11.32 | 3003 |
+| 2 | 145.75 | 10.86 | 2976 |
+| 3 | 143.94 | 11.15 | 3047 |
+| 4 | 173.53 | 11.60 | 3047 |
+| 5 | 134.25 | 10.78 | 2971 |
+
+### Heavy-trained ≈ moderate-trained on heavy (saturation regime)
+
+| Configuration | wait Δ | queue Δ | tput Δ |
+|---|---|---|---|
+| moderate-trained, eval heavy | +7.4 % | −6.6 % | +6.0 % |
+| heavy-trained, eval heavy | +8.1 % | −5.2 % | +8.0 % |
+
+At heavy 1.5 veh/s the cluster is saturated — fixed-time is near-optimal
+and RL has limited headroom. Both models converge to a similar policy:
+**trade per-vehicle wait time for higher total throughput** (longer
+green-phase holds flush more vehicles but each waits longer between cycles).
+Heavy-trained gains marginally on tput (+8.0 vs +6.0 %) but loses
+marginally on wait/queue. Aligns with `colight_problem*.md` documented
+finding that "MaxPressure loses to fixed-time at saturation → no RL
+approach will help".
+
+**Production guidance**:
+- Light/moderate traffic → use moderate-trained model (Track 1+T1).
+- Heavy/rush_hour → fixed-time is near-optimal. Use RL only if tput
+  improvement (+6-8 %) outweighs wait regression (+7-8 %).
 
 ## Comparison to prior reward iterations
 
