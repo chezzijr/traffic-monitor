@@ -30,6 +30,34 @@ beats stretch (≤ −5 %), queue at stretch (≤ −10 %), tput within pass.
 Variance is dominated by traffic-burst patterns at `cluster_12181658673_2036141704`
 (per `colight_problem5.md`).
 
+## Cross-scenario generalization (heavy — same model, no retrain)
+
+5 SUMO seeds × 1 ep, scenario `heavy` (1.5 veh/s, ~5400 trips/3600 s).
+
+| Metric | Baseline (heavy fixed-time) | Eval (heavy, moderate-trained model) | Δ |
+|---|---|---|---|
+| Avg waiting time | 142.99 s | 153.51 ± 10.87 s | **+7.4 %** ✗ |
+| Avg queue length | 11.76 | 10.98 ± 0.27 | **−6.6 %** ✓ pass |
+| Throughput | 2785 | 2951 ± 89 | **+6.0 %** ✓ stretch |
+
+| Seed | wait (s) | queue | tput |
+|---|---|---|---|
+| 1 | 139.14 | 10.59 | 2859 |
+| 2 | 163.70 | 11.25 | 2974 |
+| 3 | 165.74 | 10.79 | 2888 |
+| 4 | 156.52 | 11.29 | 2923 |
+| 5 | 142.47 | 11.01 | 3111 |
+
+Cross-scenario verdict: agent flushes more vehicles (tput +6 %) and keeps
+momentary queues shorter (−6.6 %), but per-vehicle wait time regresses
+(+7.4 %) because moderate-trained 10–20 s bucket preferences don't
+accommodate heavy queue buildup. Saturation regime — fixed-time is
+already near-optimal here (low headroom for RL gain). Variance is tight
+(σ=10.87 s across 5 seeds vs 14.04 s on moderate).
+
+For production heavy traffic: **train a separate model on heavy** rather
+than relying on moderate-trained generalization.
+
 ## Comparison to prior reward iterations
 
 | Run | Reward | Action | Wait Δ | Queue Δ | Tput Δ |
