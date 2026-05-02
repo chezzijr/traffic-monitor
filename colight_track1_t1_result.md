@@ -115,6 +115,158 @@ approach will help".
 T1 reward + duration action mode is the first CoLight configuration that
 beats fixed-time on **all three metrics simultaneously** on this cluster.
 
+---
+
+## 50k retrain — full convergence + saturation diagnosis
+
+The 10k run above (27 ep) was severely undertrained. LibSignal default for
+CoLight is 200 ep / ~75k timesteps. Re-ran at 50k timesteps (138 ep × ~213
+decisions) on both `moderate` and `heavy` to diagnose the real ceiling.
+
+### Moderate 50k — clean win across all metrics
+
+5 SUMO seeds × 1 ep, fair per-seed baseline (each seed re-runs no-RL on
+the same route file — eliminates baseline mismatch from 10k era).
+Model: `simulation/models/90ccdbcc952c5394_multi_colight_20260501_194246.pt`.
+Best snapshot: ep 62 (score=−53.52, vs ep 28 at −25.82 → 2× improvement
+in second half).
+
+| Metric | Baseline (per-seed) | 50k Track 1+T1 (5 seeds) | Δ |
+|---|---|---|---|
+| Avg waiting time | 82.92 s | **56.28 ± 7.58 s** | **−32.1 %** ✓✓ |
+| Avg queue length | 7.53 | **5.88 ± 0.48** | **−21.9 %** ✓✓ |
+| Throughput | 4145 | **4658 ± 267** | **+12.4 %** ✓✓ |
+
+**All three pass + stretch bars cleared.** σ tight on queue (0.48) and
+wait (7.58 s = 13 % of mean).
+
+#### Per-seed (4/5 clean wins, 0 regressions)
+
+| Seed | wait Δ | queue Δ | tput Δ |
+|---|---|---|---|
+| 1 | **−33.5 %** | **−30.0 %** | **+16.8 %** |
+| 2 | **−29.2 %** | **−24.6 %** | **+14.1 %** |
+| 3 | +1.8 %     | −8.3 %      | +2.9 % (borderline) |
+| 4 | **−47.1 %** | **−26.2 %** | **+17.9 %** |
+| 5 | **−36.9 %** | **−18.5 %** | **+11.2 %** |
+
+Action distribution converged to bucket 0 (10 s) at ~0.6-0.7 frequency —
+agent learned aggressive cycling for moderate density.
+
+### Heavy 50k cross-scenario (moderate-trained model on heavy)
+
+No retrain. Same model, scenario flipped to heavy.
+
+| Metric | Baseline (per-seed) | Eval | Δ |
+|---|---|---|---|
+| Avg waiting time | 149.91 s | 151.05 ± 10.63 s | **+0.76 %** ≈ tie |
+| Avg queue length | 11.17 | 10.98 ± 0.32 | **−0.53 %** ≈ tie |
+| Throughput | 2978 | 2933 ± 52 | **−1.51 %** within pass |
+
+Cross-scenario generalization: **no catastrophic regression**. RL doesn't
+help, but doesn't hurt either at saturation.
+
+### Heavy 50k dedicated training — surprising regression vs cross-scenario
+
+Trained a separate model on `scenario=heavy` (50k steps, 138 ep). Best
+snapshot: ep 53 (score=−22.83 — 2.3× weaker than moderate's −53.52 ceiling).
+Action distribution converged to bucket 2 (30 s) at 0.65-0.83 — agent learned
+*longer* greens than moderate-trained.
+Model: `simulation/models/90ccdbcc952c5394_multi_colight_20260502_110253.pt`.
+
+| Metric | Baseline | 50k heavy-trained | Δ |
+|---|---|---|---|
+| Avg waiting time | 146.46 s | 151.73 ± 13.02 s | **+3.60 %** ✗ |
+| Avg queue length | 11.31 | 10.98 ± 0.16 | **−2.93 %** ✓ |
+| Throughput | 2921 | 2930 ± 71 | **+0.31 %** ≈ tie |
+
+| Seed | wait Δ | queue Δ | tput Δ |
+|---|---|---|---|
+| 1 | **−23.0 %** | −4.8 % | +2.6 % |
+| 2 | +16.8 %     | −5.1 % | +5.2 % |
+| 3 | +7.2 %      | +0.6 % | −3.2 % |
+| 4 | +13.2 %     | −2.0 % | −0.6 % |
+| 5 | +10.4 %     | −3.4 % | −2.2 % |
+
+### Heavy comparison summary
+
+| Run | wait Δ | queue Δ | tput Δ |
+|---|---|---|---|
+| 10k heavy cross-scenario | +0.86 % | −2.03 % | +1.86 % |
+| 10k heavy dedicated      | +8.1 %  | −5.2 %  | +8.0 %  |
+| **50k moderate cross-scenario** | **+0.76 %** | −0.53 % | −1.51 % |
+| 50k heavy dedicated      | +3.60 % | **−2.93 %** | +0.31 % |
+
+**Best wait result on heavy is the moderate-trained model**, not the
+heavy-dedicated one. Heavy-dedicated optimizes queue/throughput at the
+cost of per-vehicle wait time.
+
+### Diagnosis — why heavy-dedicated underperforms cross-scenario
+
+1. **Reward proxy decouples from eval metric at saturation.**
+   T1 reward = `mean(lane_waiting_count) × −12` counts vehicles with
+   `getWaitingTime > 0`. At 1.5 veh/s saturation, every lane has waiting
+   vehicles permanently → the count saturates near `lane_capacity` and
+   loses discriminative signal. Reward ≈ −queue_length. The agent
+   effectively trains on a **queue-minimization objective**, not a
+   **wait-minimization objective**. Result: queue drops (−2.93 %), wait
+   goes the wrong way (+3.60 %).
+
+2. **Longer-green bucket lock-in.** Heavy-dedicated converged to bucket 2
+   (30 s) at 0.65-0.83 frequency. Moderate-trained on heavy uses bucket 0
+   (10 s) at 0.6-0.7. **Longer green → fewer cycles per hour → cars on the
+   *unserved* phase wait longer per cycle.** Queue snapshot looks better
+   (current waiters get flushed) but cumulative per-vehicle wait grows.
+   This is the same starvation pattern we fixed at the action-space level
+   in Track 1 — re-emerging at the reward-signal level under saturation.
+
+3. **Snapshot-score ceiling 2.3× weaker than moderate.** Heavy converged
+   at score=−22.83 vs moderate's −53.52. The same code, the same model
+   architecture, the same 50k budget produce dramatically different best
+   trailing-mean scores because the saturation regime caps achievable
+   improvement: every action choice differs by only 1-2 waiting-vehicle
+   count per substep, swamped by route-specific noise.
+
+4. **Cross-scenario "wins" by accident.** Moderate-trained agent's
+   bucket-0 (10 s) preference was learned for 0.8 veh/s. Applied to 1.5
+   veh/s, that aggressive cycling distributes wait more evenly across
+   directions — beating the heavy-dedicated agent's longer holds, even
+   though the moderate-trained agent never saw heavy data.
+
+5. **Per-seed variance dominates at saturation.** σ wait = 13 s = 9 % of
+   mean for heavy-dedicated. Single bad seed (s2 +16.8 %) dominates the
+   aggregate. At saturation, route-specific congestion patterns matter
+   more than policy quality. 5 seeds is borderline-insufficient — would
+   want 10-15 to claim heavy results with confidence.
+
+**Root cause TL;DR**: At saturation the reward (`lane_waiting_count`)
+collapses onto a queue-length proxy and decouples from the eval metric
+(`wait_seconds`). The agent rationally optimizes the proxy and pays the
+eval cost. This is **not a Track 1 / T1 / hyperparameter / training-depth
+problem** — it's a **reward-design problem specific to congested regimes**
+that no amount of training fixes without changing the reward.
+
+**Production guidance (revised)**:
+- Light traffic (0.3 veh/s) → fixed-time. RL adds wait, no headroom.
+- **Moderate traffic (0.8 veh/s) → moderate-trained model. Decisive win.**
+- Heavy traffic (1.5 veh/s) → **moderate-trained model also**, NOT heavy-trained.
+  Cross-scenario generalization preserves wait better than dedicated retraining.
+- Rush hour / saturation → fixed-time. RL ceiling here is "don't make it worse".
+
+### Future work to break the saturation ceiling
+
+- **Direct wait-time reward** (per-vehicle accumulated wait, not lane count):
+  removes the saturation collapse. Cost: more expensive to compute (per-vehicle
+  TraCI calls). Tested as `reward_mode="sqrt_halting"` ablation, available via
+  API (`MultiJunctionTrainingRequest.reward_mode`).
+- **Pressure reward** (in_lane − out_lane vehicle count) tied to throughput
+  per LibSignal MaxPressure agent — known to outperform count-based rewards
+  at saturation in CityFlow benchmarks.
+- **Curriculum training**: warm-start from moderate-trained weights before
+  fine-tuning on heavy.
+- **More seeds** (10-15) to reduce per-seed variance noise in the heavy
+  comparison.
+
 ## Why this works (mechanism)
 
 1. **Action space (Track 1)**: cyclic-mandatory duration buckets {10, 20, 30,
