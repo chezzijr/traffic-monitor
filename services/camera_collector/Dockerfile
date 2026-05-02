@@ -10,7 +10,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 ENV PYTHONPATH=/app
 
 # Install uv (same as backend for consistency)
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.6.8 /uv /uvx /bin/
 
 WORKDIR /app
 
@@ -18,7 +18,9 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 
 # Install dependencies only (no project install)
-RUN uv sync --frozen --no-dev --no-install-project
+ENV UV_HTTP_TIMEOUT=600
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project
 
 # Copy source code
 COPY . .

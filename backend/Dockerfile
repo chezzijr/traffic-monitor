@@ -22,12 +22,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.6.8 /uv /uvx /bin/
 
 WORKDIR /app
 
 # Copy dependency files first for better layer caching
 COPY pyproject.toml uv.lock ./
+COPY .python-version ./
 
 # Install dependencies using uv (cache mount = resumable downloads)
 ENV UV_HTTP_TIMEOUT=600
