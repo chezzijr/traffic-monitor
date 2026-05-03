@@ -12,3 +12,6 @@ backend/app/digital_twin/yolo11x.pt
 services/digital_twin/data/traffic_video/
 services/digital_twin/model/*.pt
 simulation/data
+
+.agents
+digital_twin.log

@@ -1,0 +1,17 @@
+# Python caches and environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# Service specific directories that are mounted via volumes
+data/
+model/
+*.log
+
+# OS and IDE files
+.vscode/
+.idea/
+.DS_Store

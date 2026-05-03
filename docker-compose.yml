@@ -12,6 +12,7 @@ services:
       - ./frontend/vite.config.ts:/app/vite.config.ts:ro
     environment:
       - VITE_API_URL=http://backend:8000
+      - VITE_DIGITAL_TWIN_URL=http://digital-twin:8001
     depends_on:
       - backend
     networks:
@@ -31,6 +32,7 @@ services:
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - REDIS_HOST=redis
       - GEOFABRIK_PBF_PATH=/app/simulation/data/vietnam-latest.osm.pbf
+      - DIGITAL_TWIN_URL=http://digital-twin:8001
     volumes:
       - ./simulation:/app/simulation
       - ./backend/app:/app/app:ro
@@ -66,6 +68,7 @@ services:
       - REDIS_HOST=redis
       - LIBSUMO_AS_TRACI=1
       - GEOFABRIK_PBF_PATH=/app/simulation/data/vietnam-latest.osm.pbf
+      - DIGITAL_TWIN_URL=http://digital-twin:8001
     volumes:
       - ./simulation:/app/simulation
       - ./backend/app:/app/app:ro
