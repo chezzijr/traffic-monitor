@@ -83,6 +83,7 @@ export type SimulationStatus = 'idle' | 'running' | 'paused' | 'stopped';
 export interface DirectionFrame {
   number?: number;
   image: string | null;
+  image_annotated?: string | null;
 }
 
 export interface IntersectionFrames {
@@ -255,4 +256,26 @@ export interface NetworkMetadata {
   created_at?: string;
   junctions: NetworkJunction[];
   road_count: number;
+}
+
+// Traffic light simulation state
+export interface DirectionLightState {
+  state: 'red' | 'yellow' | 'green';
+  remaining: number;
+}
+
+export interface TrafficLightSimState {
+  intersection_id: string;
+  directions: Record<string, DirectionLightState>;
+  cycle_duration: number;
+}
+
+// Waiting vehicle count per direction from backend
+export interface WaitingCountResponse {
+  id_camera: string;
+  north: number;
+  south: number;
+  east: number;
+  west: number;
+  total: number;
 }

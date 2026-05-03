@@ -20,7 +20,8 @@ services:
   backend:
     build:
       context: ./backend
-    image: traffic-monitor-backend
+    image: traffic-monitor-backend:dev
+    pull_policy: never
     ports:
       - "8000:8000"
     environment:
@@ -55,7 +56,8 @@ services:
   celery-worker:
     build:
       context: ./backend
-    image: traffic-monitor-backend
+    image: traffic-monitor-backend:dev
+    pull_policy: never
     command: uv run celery -A app.celery_app worker --loglevel=info --concurrency=1
     environment:
       - SUMO_HOME=/usr/share/sumo
@@ -79,6 +81,39 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+
+  digital-twin:
+    build:
+      context: ./services/digital_twin
+    image: traffic-monitor-digital-twin
+    ports:
+      - "8001:8001"
+    environment:
+      - SUMO_HOME=/usr/share/sumo
+      - PORT=8001
+      - RL_MODEL_DIR=/simulation/models
+    volumes:
+      - ./services/digital_twin/data:/app/data
+      - ./services/digital_twin/model:/app/model:ro
+      - ./simulation:/simulation
+    networks:
+      - traffic-network
+
+  camera-collector:
+    build:
+      context: ./services/camera_collector
+    image: traffic-monitor-camera-collector
+    restart: unless-stopped
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DATASET_DIR=/data/dataset
+    volumes:
+      - ./dataset:/data/dataset
+    depends_on:
+      - redis
+    networks:
+      - traffic-network
 
 networks:
   traffic-network:

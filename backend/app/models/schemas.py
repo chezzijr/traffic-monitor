@@ -292,3 +292,14 @@ class DirectionFrame(BaseModel):
 class IntersectionFrames(BaseModel):
     intersection_id: str
     frames: list[DirectionFrame]
+
+
+class WaitingCountResponse(BaseModel):
+    """Response model for waiting vehicle count per direction."""
+
+    id_camera: str = Field(..., description="Camera identifier")
+    north: int = Field(default=0, ge=0, description="Waiting vehicles heading north")
+    south: int = Field(default=0, ge=0, description="Waiting vehicles heading south")
+    east: int = Field(default=0, ge=0, description="Waiting vehicles heading east")
+    west: int = Field(default=0, ge=0, description="Waiting vehicles heading west")
+    total: int = Field(default=0, ge=0, description="Total waiting vehicles")

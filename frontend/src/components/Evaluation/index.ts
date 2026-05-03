@@ -1,0 +1,1 @@
+export { IntersectionDiagram } from './IntersectionDiagram';

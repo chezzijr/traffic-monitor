@@ -25,7 +25,12 @@ const normalizeFrames = (frames: unknown): DirectionFrame[] => {
                         ? record.data
                         : null;
 
-        return { number, image };
+        const image_annotated =
+            typeof record.image_annotated === "string"
+                ? record.image_annotated
+                : null;
+
+        return { number, image, image_annotated };
     });
 };
 

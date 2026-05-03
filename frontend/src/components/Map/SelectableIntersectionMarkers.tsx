@@ -1,12 +1,23 @@
 import { Marker, Popup } from 'react-leaflet';
 import { useMapStore } from '../../store/mapStore';
 import { grayIcon, greenIcon, amberIcon, purpleIcon } from './markerIcons';
+import type { Intersection } from '../../types';
 
 interface SelectableIntersectionMarkersProps {
   deployedJunctionIds?: string[];
+  onIntersectionClick?: (intersection: Intersection) => void;
 }
 
-export function SelectableIntersectionMarkers({ deployedJunctionIds = [] }: SelectableIntersectionMarkersProps) {
+// Special clickable intersection: Tran Binh Trong x Tran Hung Dao.
+const THD_TBT_LAT = 10.755388;
+const THD_TBT_LON = 106.681386;
+const COORD_TOLERANCE = 0.002;
+
+const isTHDTBTIntersection = (intersection: Intersection): boolean =>
+  Math.abs(intersection.lat - THD_TBT_LAT) < COORD_TOLERANCE &&
+  Math.abs(intersection.lon - THD_TBT_LON) < COORD_TOLERANCE;
+
+export function SelectableIntersectionMarkers({ deployedJunctionIds = [], onIntersectionClick }: SelectableIntersectionMarkersProps) {
   const intersections = useMapStore((s) => s.intersections);
   const sumoTrafficLights = useMapStore((s) => s.sumoTrafficLights);
   const selectedRegion = useMapStore((s) => s.selectedRegion);
@@ -38,11 +49,20 @@ export function SelectableIntersectionMarkers({ deployedJunctionIds = [] }: Sele
         const hasTL = intersection.has_traffic_light && sumoTlId;
 
         if (!hasTL) {
+          const isSpecialIntersection = isTHDTBTIntersection(intersection);
+
           return (
             <Marker
               key={intersection.id}
               position={[intersection.lat, intersection.lon]}
               icon={grayIcon}
+              eventHandlers={
+                isSpecialIntersection
+                  ? {
+                      click: () => onIntersectionClick?.(intersection),
+                    }
+                  : undefined
+              }
             />
           );
         }
@@ -57,7 +77,10 @@ export function SelectableIntersectionMarkers({ deployedJunctionIds = [] }: Sele
             position={[intersection.lat, intersection.lon]}
             icon={icon}
             eventHandlers={{
-              click: () => toggleJunctionSelection(sumoTlId),
+              click: () => {
+                toggleJunctionSelection(sumoTlId);
+                onIntersectionClick?.(intersection);
+              },
             }}
           >
             <Popup>

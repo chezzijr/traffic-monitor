@@ -11,7 +11,13 @@ export default defineConfig({
         target: process.env.VITE_API_URL || 'http://localhost:8000',
         changeOrigin: true,
         secure: false,
-      }
+      },
+      '/digital-twin': {
+        target: process.env.VITE_DIGITAL_TWIN_URL || 'http://localhost:8001',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/digital-twin/, ''),
+      },
     }
   }
 })

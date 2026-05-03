@@ -17,10 +17,22 @@ os.makedirs(DATASET_DIR, exist_ok=True)
 
 BASE_PAGE = "https://giaothong.hochiminhcity.gov.vn/map.aspx"
 
-async def init_session(session):
-    async with session.get(BASE_PAGE) as resp:
-        await resp.text()  # nhận cookie
-        print("session initialized")
+async def init_session(session, max_retries: int = 10, base_delay: float = 5.0):
+    """Initialize session by hitting the base page to obtain cookies.
+    
+    Retries with exponential backoff if the server is temporarily unavailable.
+    """
+    for attempt in range(1, max_retries + 1):
+        try:
+            async with session.get(BASE_PAGE) as resp:
+                await resp.text()
+                print(f"Session initialized (attempt {attempt})")
+                return
+        except Exception as e:
+            delay = min(base_delay * attempt, 60.0)  # cap at 60s
+            print(f"init_session failed (attempt {attempt}/{max_retries}): {e} — retrying in {delay:.0f}s")
+            await asyncio.sleep(delay)
+    print("init_session: all retries exhausted — continuing without session cookie")
 
 def write_file(path, data):
     with open(path, "wb") as f:
