@@ -4,7 +4,9 @@ Custom DQN training loop following V1 TrafficLightTrainer pattern,
 adapted for CoLight's graph-based multi-agent structure.
 """
 
+import copy
 import logging
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -35,16 +37,35 @@ class CoLightTrainer:
         self._episode_rewards: list[float] = []
         self._baseline: dict[str, float] | None = None
 
+        # Best-model snapshot state. Tracks a 5-episode trailing-mean training
+        # score (lower = better policy) and snapshots q_network weights when
+        # the score improves. End of train() restores best weights so save()
+        # and evaluate() see the best-ever model, not the post-collapse last.
+        self._best_state_dict: dict | None = None
+        self._best_score: float = float("inf")
+        self._best_episode: int = -1
+        self._recent_scores: deque[float] = deque(maxlen=5)
+
         # Trigger lazy initialization so env dimensions are available
         self.env.reset(seed=seed)
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
+        # Track 1: in duration mode, every TL has a uniform 4-bucket action
+        # space (no per-TL masking). In phase mode the legacy per-TL
+        # phase_lengths mask is needed so 2-phase TLs don't argmax over an
+        # invalid 3rd phase.
+        agent_phase_lengths = (
+            [env.num_actions] * len(env.tl_ids)
+            if env.action_mode == "duration"
+            else env.phase_lengths
+        )
+
         self.agent = CoLightAgent(
             ob_length=env.ob_length,
             num_actions=env.num_actions,
             num_intersections=len(env.tl_ids),
-            phase_lengths=env.phase_lengths,
+            phase_lengths=agent_phase_lengths,
             edge_index=env.edge_index,
             lr=1e-3,
             gamma=0.95,
@@ -144,6 +165,7 @@ class CoLightTrainer:
             wait = float(info.get("avg_waiting_time", 0.0))
             queue = float(info.get("avg_queue_length", 0.0))
             throughput = int(info.get("throughput", 0))
+            dw = dq = dt = 0.0
             if self._baseline is not None:
                 bw = self._baseline.get("avg_waiting_time", 0.0) or 1e-9
                 bq = self._baseline.get("avg_queue_length", 0.0) or 1e-9
@@ -169,12 +191,48 @@ class CoLightTrainer:
                 f"action_dist=[{action_dist_str}], per_tl_reward=[{per_tl_str}]"
             )
 
+            # Best-model snapshot: trailing-5-ep mean of
+            # `wait_pct + queue_pct - tput_pct` (lower beats baseline more).
+            # Snapshot when trailing mean improves; restore at end of train()
+            # so save() and evaluate() use best-ever weights, not last.
+            if self._baseline is not None and total_decisions > learning_start:
+                score = dw + dq - dt
+                self._recent_scores.append(score)
+                if len(self._recent_scores) == self._recent_scores.maxlen:
+                    trailing = float(np.mean(self._recent_scores))
+                    if trailing < self._best_score:
+                        self._best_score = trailing
+                        self._best_episode = episode + 1
+                        self._best_state_dict = copy.deepcopy(
+                            agent.q_network.state_dict()
+                        )
+                        logger.info(
+                            f"Snapshot at ep {episode + 1} (score={trailing:.2f})"
+                        )
+
             for cb in (callbacks or []):
                 if not cb.on_episode_end(episode, num_episodes, episode_reward, info):
                     logger.info("Training cancelled by callback")
+                    self._restore_best(agent)
                     return
 
+        self._restore_best(agent)
         logger.info("CoLight training complete")
+
+    def _restore_best(self, agent: CoLightAgent) -> None:
+        """Load best snapshot into q_network/target_network if any taken.
+
+        Called at end of train() (and on cancellation) so subsequent save()
+        and evaluate() see best-ever weights — not the post-collapse last.
+        """
+        if self._best_state_dict is None:
+            return
+        agent.q_network.load_state_dict(self._best_state_dict)
+        agent.target_network.load_state_dict(self._best_state_dict)
+        logger.info(
+            f"Restored best weights from episode {self._best_episode} "
+            f"(score={self._best_score:.2f})"
+        )
 
     def save(self, path: str | Path) -> Path:
         """Save the trained model as a PyTorch checkpoint."""
@@ -214,18 +272,32 @@ class CoLightTrainer:
 
         logger.info(f"CoLight model loaded from {path}")
 
-    def run_baseline(self, num_episodes: int = 3) -> dict[str, float]:
-        """Run baseline episodes with SUMO's default timing.
+    def run_baseline(
+        self,
+        num_episodes: int = 3,
+        seeds: list[int] | None = None,
+    ) -> dict[str, Any]:
+        """Run baseline episodes with SUMO's default fixed-time timing.
 
-        Returns dict with avg_waiting_time, avg_queue_length, throughput.
+        If `seeds` provided, regenerate routes per seed (clears cache) so
+        per-seed comparison against multi-seed eval is apples-to-apples.
+
+        Returns dict with avg_waiting_time, avg_queue_length, throughput,
+        plus per-episode metrics when seeds provided.
         """
-        logger.info(f"Running {num_episodes} baseline episodes")
+        seed_desc = f" seeds={seeds}" if seeds else ""
+        logger.info(f"Running {num_episodes} baseline episodes{seed_desc}")
         total_waiting = 0.0
         total_queue = 0.0
         total_throughput = 0
+        per_ep_metrics: list[dict[str, float]] = []
 
-        for _ in range(num_episodes):
-            self.env.reset()
+        for ep in range(num_episodes):
+            seed_for_ep: int | None = None
+            if seeds:
+                seed_for_ep = int(seeds[ep % len(seeds)])
+                self.env._cached_routes_path = None
+            self.env.reset(seed=seed_for_ep)
             conn = self.env._get_conn()
 
             # Restore SUMO's default fixed-time program for all TLs
@@ -260,16 +332,116 @@ class CoLightTrainer:
                     ep_queue += float(np.mean(per_tl_queue)) if per_tl_queue else 0.0
                     steps += 1
 
-            if steps > 0:
-                total_waiting += ep_waiting / steps
-                total_queue += ep_queue / steps
+            ep_wait_mean = (ep_waiting / steps) if steps > 0 else 0.0
+            ep_queue_mean = (ep_queue / steps) if steps > 0 else 0.0
+            total_waiting += ep_wait_mean
+            total_queue += ep_queue_mean
             total_throughput += ep_throughput
+            per_ep_metrics.append({
+                "wait": ep_wait_mean,
+                "queue": ep_queue_mean,
+                "throughput": ep_throughput,
+                "seed": float(seed_for_ep) if seed_for_ep is not None else float("nan"),
+            })
 
-        baseline = {
+        baseline: dict[str, Any] = {
             "avg_waiting_time": total_waiting / max(num_episodes, 1),
             "avg_queue_length": total_queue / max(num_episodes, 1),
             "throughput": total_throughput // max(num_episodes, 1),
+            "per_episode": per_ep_metrics,
         }
         logger.info(f"Baseline metrics: {baseline}")
         self._baseline = baseline
         return baseline
+
+    def evaluate(
+        self,
+        num_episodes: int = 3,
+        callbacks: list[TrainingCallback] | None = None,
+        seeds: list[int] | None = None,
+    ) -> dict[str, Any]:
+        """Run deterministic eval episodes with the greedy policy (epsilon=0).
+
+        Strips ε-greedy noise from reported metrics. Returns same shape as
+        run_baseline so callers can compare directly. If `seeds` provided,
+        each episode regenerates routes with that seed (clears env's cached
+        route path) — required for multi-seed robustness eval.
+        """
+        agent = self.agent
+        saved_epsilon = agent.epsilon
+        agent.epsilon = 0.0
+        try:
+            seed_desc = f" seeds={seeds}" if seeds else ""
+            logger.info(
+                f"Running {num_episodes} deterministic eval episodes "
+                f"(epsilon=0){seed_desc}"
+            )
+            total_waiting = 0.0
+            total_queue = 0.0
+            total_throughput = 0
+            mean_rewards: list[float] = []
+            per_ep_metrics: list[dict[str, float]] = []
+            completed = 0
+
+            for ep in range(num_episodes):
+                seed_for_ep: int | None = None
+                if seeds:
+                    seed_for_ep = int(seeds[ep % len(seeds)])
+                    # Force fresh route generation for this seed.
+                    self.env._cached_routes_path = None
+                obs = self.env.reset(seed=seed_for_ep)
+                done = False
+                ep_reward = 0.0
+                info: dict = {}
+                while not done:
+                    actions = agent.select_action(obs, deterministic=True)
+                    obs, rewards, done, info = self.env.step(actions)
+                    ep_reward += float(np.mean(rewards))
+                ep_wait = float(info.get("avg_waiting_time", 0.0))
+                ep_queue = float(info.get("avg_queue_length", 0.0))
+                ep_tput = int(info.get("throughput", 0))
+                total_waiting += ep_wait
+                total_queue += ep_queue
+                total_throughput += ep_tput
+                mean_rewards.append(ep_reward)
+                per_ep_metrics.append({
+                    "wait": ep_wait,
+                    "queue": ep_queue,
+                    "throughput": ep_tput,
+                    "seed": float(seed_for_ep) if seed_for_ep is not None else float("nan"),
+                })
+                completed += 1
+
+                cancelled = False
+                for cb in (callbacks or []):
+                    if not cb.on_episode_end(ep, num_episodes, ep_reward, info):
+                        cancelled = True
+                        break
+                if cancelled:
+                    logger.info(f"Eval cancelled after episode {ep + 1}/{num_episodes}")
+                    break
+
+            divisor = max(completed, 1)
+            wait_arr = np.array([m["wait"] for m in per_ep_metrics], dtype=np.float64) if per_ep_metrics else np.array([0.0])
+            queue_arr = np.array([m["queue"] for m in per_ep_metrics], dtype=np.float64) if per_ep_metrics else np.array([0.0])
+            tput_arr = np.array([m["throughput"] for m in per_ep_metrics], dtype=np.float64) if per_ep_metrics else np.array([0.0])
+            eval_metrics = {
+                "avg_waiting_time": total_waiting / divisor,
+                "avg_queue_length": total_queue / divisor,
+                "throughput": total_throughput // divisor,
+                "mean_reward": float(np.mean(mean_rewards)) if mean_rewards else 0.0,
+                "episodes_completed": completed,
+                "wait_std": float(wait_arr.std()),
+                "queue_std": float(queue_arr.std()),
+                "throughput_std": float(tput_arr.std()),
+                "per_episode": per_ep_metrics,
+            }
+            logger.info(
+                f"Eval metrics (greedy): wait={eval_metrics['avg_waiting_time']:.2f}±{eval_metrics['wait_std']:.2f}, "
+                f"queue={eval_metrics['avg_queue_length']:.2f}±{eval_metrics['queue_std']:.2f}, "
+                f"tput={eval_metrics['throughput']}±{eval_metrics['throughput_std']:.0f}, "
+                f"episodes={completed}"
+            )
+            return eval_metrics
+        finally:
+            agent.epsilon = saved_epsilon

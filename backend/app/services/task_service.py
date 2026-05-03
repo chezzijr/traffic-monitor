@@ -42,6 +42,8 @@ def create_multi_training_task(
     algorithm: str = "dqn",
     total_timesteps: int = 10000,
     scenario: str = "moderate",
+    action_mode: str = "duration",
+    reward_mode: str = "t1_lane_waiting_count_mean",
 ) -> str:
     """Dispatch a multi-junction training task to Celery."""
     from app.tasks.training_task import train_multi_junction
@@ -52,6 +54,8 @@ def create_multi_training_task(
         algorithm=algorithm,
         total_timesteps=total_timesteps,
         scenario=scenario,
+        action_mode=action_mode,
+        reward_mode=reward_mode,
     )
     return result.id
 
