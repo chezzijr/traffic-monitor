@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Traffic Light Optimization Web App - a full-stack application for real-time traffic monitoring and reinforcement learning-based traffic light optimization. Uses SUMO (Simulation of Urban Mobility), OpenStreetMap data extraction, and RL algorithms (DQN, PPO) to optimize traffic flow at single or multiple intersections simultaneously.
+Traffic Light Optimization Web App - a full-stack application for real-time traffic monitoring and reinforcement learning-based traffic light optimization. Uses SUMO (Simulation of Urban Mobility), OpenStreetMap data extraction, and RL algorithms (DQN, PPO single-agent; CoLight graph-attention multi-agent) to optimize traffic flow at single or multiple intersections simultaneously.
 
 ## Commands
 
@@ -46,14 +46,15 @@ Dev stack has 4 services: frontend, backend, redis, celery-worker. The `simulati
 
 1. **Frontend (React 19 + TypeScript + Vite)**: Leaflet map for region selection and junction picking, Recharts for training metrics visualization, Zustand stores (`mapStore`, `trainingStore`, `modelStore`). Component groups: Map/, Control/, Training/, Models/, Dashboard/, Layout/. `TrainingSSE` service for real-time progress streaming via SSE.
 
-2. **Backend (FastAPI)**: Seven route modules:
+2. **Backend (FastAPI)**: Eight route modules:
    - `routes/map.py` - OSM extraction, SUMO conversion, network caching
    - `routes/metrics.py` - Vehicle counts, wait times, throughput
    - `routes/control.py` - Traffic light phase control
-   - `routes/traffic_light.py` - Traffic light state queries
    - `routes/training.py` - ML training dispatch (single/multi-junction) and SSE streaming
    - `routes/tasks.py` - Celery task management, cancellation, and SSE progress streaming
    - `routes/networks.py` - Persisted network metadata CRUD
+   - `routes/models.py` - Trained model listing, prediction, deletion
+   - `routes/deployment.py` - Deploy trained models to specific TLs
 
 3. **Services:**
    - `osm_service.py` - OSM data fetching with hash-based disk caching
@@ -66,17 +67,18 @@ Dev stack has 4 services: frontend, backend, redis, celery-worker. The `simulati
    - `validation_service.py` - Business rule validation for training/deployment requests
    - `route_service.py` - Vehicle route generation using SUMO tools (randomTrips.py, duarouter)
    - `traffic_light_service.py` - Traffic light state queries via TraCI
+   - `graph_service.py` + `sumo_graph_utils.py` - TL adjacency graph (used by CoLight to build edge_index)
 
 4. **ML Pipeline (`ml/`) — LibSignal V1 approach:**
-   - *Single-agent:* `environment.py` (V1 Gymnasium env, LibSignal-style yellow phase creation, direct TraCI), `trainer.py` (custom DQN/PPO training loops, no SB3)
-   - *Multi-agent:* `multi_agent_env_v2.py` (N junctions sharing one SUMO instance), `multi_agent_trainer.py` (custom collect-train loop, max 10 junctions, still uses SB3)
-   - *Networks:* `networks/dqn_network.py` (`DQNAgent` with replay buffer, epsilon-greedy, [in→20→20→actions]), `networks/ppo_network.py` (`PPOAgent` Actor-Critic [in→64→64])
-   - *Rewards:* `rewards.py` — all algorithms: `-mean(halting) * 12.0` (LibSignal unified reward)
-   - *Observation:* `[lane_vehicle_counts, phase_one_hot]` (dimension: num_lanes + num_green_phases)
-   - *Yellow phases:* Dynamically created pairwise yellow transitions between all green phases (LibSignal `create_yellows` pattern), installed as custom SUMO program `{tl_id}_rl`
-   - *DQN hyperparams:* lr=1e-3 (RMSprop), buffer=5000 (deque), batch=64, gamma=0.95, epsilon=0.1→0.01 (multiplicative 0.995), hard target copy every 10 decisions, grad_clip=5.0, learning_start=1000
-   - *PPO hyperparams:* lr=3e-4 (Adam), n_steps=360, n_epochs=4, gamma=0.99, clip=0.1, GAE lambda=0.95
-   - *Model format:* `.pt` (PyTorch state dict), legacy `.zip` (SB3) still loadable
+   - *Single-agent (DQN/PPO):* `environment.py` (V1 Gymnasium env, LibSignal yellow-phase creation, direct TraCI), `trainer.py` (custom training loops, no SB3), `networks/dqn_network.py` ([in→20→20→actions]), `networks/ppo_network.py` (Actor-Critic [in→64→64]).
+   - *Multi-agent CoLight (recommended for >1 TL):* `colight_env.py` + `colight_trainer.py` + `networks/colight_network.py`. N intersections in one SUMO instance with edge_index graph topology. Defaults: `action_mode="duration"` (4 cyclic duration buckets `(10,20,30,40)` sec — phase auto-cycles when elapsed ≥ target; 2-phase TLs can't starve), `reward_mode="t1_lane_waiting_count_mean"` (`mean(waiting_count) × −12`). Legacy ablation knobs: `action_mode="phase"`, `reward_mode="sqrt_halting"`, exposed via `MultiJunctionTrainingRequest`. Trainer does best-trailing-snapshot weight restore (5-ep trailing-mean of `wait%+queue%−tput%`) so eval/save use peak weights, not post-collapse.
+   - *Multi-agent legacy (DQN/PPO):* `multi_agent_env_v2.py` + `multi_agent_trainer.py` (SB3-based, max 10 junctions). Used only for `algorithm=dqn|ppo` on `/api/training/multi`.
+   - *Reward (DQN/PPO):* `rewards.py` — `-mean(halting) * 12.0` (LibSignal unified).
+   - *Observation:* DQN/PPO `[lane_counts, phase_one_hot]`; CoLight adds `elapsed_in_green/max_bucket` scalar.
+   - *Yellow phases:* pairwise yellow transitions between all green phases auto-created, installed as custom SUMO program `{tl_id}_rl`.
+   - *Hyperparams:* DQN lr=1e-3 (RMSprop α=0.9), buffer=5000, batch=64, γ=0.95, ε 0.1→0.01 (×0.9995/decision), target sync every 10 decisions, grad_clip=5.0, learning_start=1000. PPO lr=3e-4 (Adam), n_steps=360, n_epochs=4, γ=0.99, clip=0.1, GAE λ=0.95. CoLight lr=1e-3 (RMSprop α=0.9), γ=0.95, buffer=20000, batch=64, ε 0.5→0.01 (×0.9995/decision), target sync every 10, learning_start=3600 decisions.
+   - *Eval:* `app/scripts/multi_seed_eval.py` — N seeds × M episodes deterministic eval (ε=0) with per-seed baseline (each seed re-runs no-RL on the same routes). Required for honest CoLight comparison; built-in 3-ep eval uses cached single route file (std=0 artifact).
+   - *Model format:* `.pt` (PyTorch state dict), legacy `.zip` (SB3) still loadable.
 
 5. **Task Queue (Celery + Redis):** Long-running training dispatched to Celery workers (concurrency=1 per worker, SUMO is heavy). Tasks publish progress via Redis Pub/Sub (every 500 steps); backend streams to frontend via SSE. Tasks: `train_traffic_light` (single-agent), `train_multi_junction` (multi-agent). GPU support via `torch.cuda.is_available()`.
 
@@ -157,44 +159,44 @@ curl -s -X POST http://localhost:8000/api/training/single \
 # Monitor progress via task status
 curl -s http://localhost:8000/api/tasks/<TASK_ID>/status | jq .
 
-# Or stream SSE progress (ctrl+C to stop)
+# Stream SSE progress
 curl -N http://localhost:8000/api/tasks/<TASK_ID>/stream
-
-# Watch celery worker logs for episode rewards
-docker compose logs celery-worker -f --tail 5
 ```
 
-Expected reward progression: starts around -28 to -32, improves to -3 to -1 by episode 13.
+Swap `"algorithm": "dqn"` → `"ppo"` for single-junction PPO. Same call shape.
 
-### Single-junction PPO training
-
-```bash
-curl -s -X POST http://localhost:8000/api/training/single \
-  -H "Content-Type: application/json" \
-  -d '{
-    "network_id": "b14e4a2c9df9be98",
-    "tl_id": "411918637",
-    "algorithm": "ppo",
-    "total_timesteps": 5000,
-    "scenario": "moderate"
-  }' | jq .
-```
-
-### Multi-junction training
+### Multi-junction CoLight training (recommended for >1 TL)
 
 ```bash
 curl -s -X POST http://localhost:8000/api/training/multi \
   -H "Content-Type: application/json" \
   -d '{
-    "network_id": "b14e4a2c9df9be98",
-    "tl_ids": ["411918637", "411918820"],
-    "algorithm": "dqn",
-    "total_timesteps": 10000,
+    "network_id": "90ccdbcc952c5394",
+    "tl_ids": ["411919431","411926160","411926403","411926419","411926532",
+               "411926559","5772027667","GS_cluster_13075564400_13075589603",
+               "GS_cluster_13075589601_13075589602_411926477",
+               "cluster_12181658673_2036141704"],
+    "algorithm": "colight",
+    "total_timesteps": 50000,
     "scenario": "moderate"
   }' | jq .
 ```
 
-Note: multi-junction still uses V2 env (SUMO-RL style) and SB3 internally.
+50k ≈ 138 ep ≈ ~3.5 h GPU for 10-TL cluster. 10k undertrains. Optional: `action_mode` (`duration` default | `phase`), `reward_mode` (`t1_lane_waiting_count_mean` default | `sqrt_halting`) for ablation. Use `algorithm=dqn|ppo` here for legacy V2/SB3 multi-agent path.
+
+### Multi-seed eval on saved CoLight model
+
+Runs N seeds × M ep with deterministic ε=0 and per-seed baseline (re-runs no-RL on same routes — required for honest comparison). Writes JSON: `baseline`, `eval_aggregate`, `deltas_pct_vs_baseline`, `per_seed`.
+
+```bash
+docker compose exec celery-worker uv run python -m app.scripts.multi_seed_eval \
+  --model-path /app/simulation/models/<MODEL>.pt \
+  --network-id <NETWORK_ID> \
+  --tl-ids '<COMMA_SEPARATED_TL_IDS>' \
+  --scenario moderate --seeds 1,2,3,4,5 --num-episodes 1 \
+  --out-json /app/simulation/<OUT>.json
+jq '{baseline, eval: .eval_aggregate, deltas: .deltas_pct_vs_baseline}' simulation/<OUT>.json
+```
 
 ### List trained models
 

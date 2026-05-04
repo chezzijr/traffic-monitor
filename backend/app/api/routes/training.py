@@ -47,6 +47,8 @@ def start_multi_training(request: MultiJunctionTrainingRequest) -> TrainingTaskR
         algorithm=request.algorithm,
         total_timesteps=request.total_timesteps,
         scenario=request.scenario.value,
+        action_mode=request.action_mode,
+        reward_mode=request.reward_mode,
     )
     return TrainingTaskResponse(task_id=task_id, status="queued")
 

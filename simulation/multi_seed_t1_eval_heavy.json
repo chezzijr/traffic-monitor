@@ -1,0 +1,116 @@
+{
+  "model_path": "/app/simulation/models/90ccdbcc952c5394_multi_colight_20260501_043446.pt",
+  "network_id": "90ccdbcc952c5394",
+  "scenario": "heavy",
+  "seeds": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "num_episodes_per_seed": 1,
+  "total_eval_episodes": 5,
+  "baseline": {
+    "avg_waiting_time": 142.98718253376157,
+    "avg_queue_length": 11.75687566137566,
+    "throughput": 2785
+  },
+  "eval_aggregate": {
+    "wait_mean": 153.513638912158,
+    "wait_std": 10.868868782352397,
+    "queue_mean": 10.984215034441451,
+    "queue_std": 0.2679225978108695,
+    "tput_mean": 2951,
+    "tput_std": 88.70851142928733
+  },
+  "deltas_pct_vs_baseline": {
+    "wait": 7.3618181657023465,
+    "queue": -6.571989439954673,
+    "throughput": 5.960502692998205
+  },
+  "per_seed": [
+    {
+      "seed": 1,
+      "episodes": 1,
+      "wait_mean": 139.13809753651222,
+      "wait_std": 0.0,
+      "queue_mean": 10.587483902365978,
+      "queue_std": 0.0,
+      "tput_mean": 2859.0,
+      "tput_std": 0.0
+    },
+    {
+      "seed": 2,
+      "episodes": 1,
+      "wait_mean": 163.6983914234378,
+      "wait_std": 0.0,
+      "queue_mean": 11.252347634022167,
+      "queue_std": 0.0,
+      "tput_mean": 2974.0,
+      "tput_std": 0.0
+    },
+    {
+      "seed": 3,
+      "episodes": 1,
+      "wait_mean": 165.73559969748422,
+      "wait_std": 0.0,
+      "queue_mean": 10.789043126684632,
+      "queue_std": 0.0,
+      "tput_mean": 2888.0,
+      "tput_std": 0.0
+    },
+    {
+      "seed": 4,
+      "episodes": 1,
+      "wait_mean": 156.5212282602895,
+      "wait_std": 0.0,
+      "queue_mean": 11.285950509134473,
+      "queue_std": 0.0,
+      "tput_mean": 2923.0,
+      "tput_std": 0.0
+    },
+    {
+      "seed": 5,
+      "episodes": 1,
+      "wait_mean": 142.47487764306615,
+      "wait_std": 0.0,
+      "queue_mean": 11.00625,
+      "queue_std": 0.0,
+      "tput_mean": 3111.0,
+      "tput_std": 0.0
+    }
+  ],
+  "per_episode": [
+    {
+      "wait": 139.13809753651222,
+      "queue": 10.587483902365978,
+      "throughput": 2859,
+      "seed": 1.0
+    },
+    {
+      "wait": 163.6983914234378,
+      "queue": 11.252347634022167,
+      "throughput": 2974,
+      "seed": 2.0
+    },
+    {
+      "wait": 165.73559969748422,
+      "queue": 10.789043126684632,
+      "throughput": 2888,
+      "seed": 3.0
+    },
+    {
+      "wait": 156.5212282602895,
+      "queue": 11.285950509134473,
+      "throughput": 2923,
+      "seed": 4.0
+    },
+    {
+      "wait": 142.47487764306615,
+      "queue": 11.00625,
+      "throughput": 3111,
+      "seed": 5.0
+    }
+  ]
+}
