@@ -101,6 +101,13 @@ services:
       - ./simulation:/simulation
     networks:
       - traffic-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   camera-collector:
     build:
