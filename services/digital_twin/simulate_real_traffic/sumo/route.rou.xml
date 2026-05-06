@@ -1,0 +1,81 @@
+<?xml version='1.0' encoding='utf-8'?>
+<routes>
+    <vType id="vType_motorcycle" maxSpeed="15.0" length="2.2" width="0.8" minGap="0.5" minGapLat="0.3" maxSpeedLat="1.0" latAlignment="center" accel="2" decel="6.0" sigma="0.5" guiShape="motorcycle" />
+    <vType id="vType_car" maxSpeed="15.0" length="4.5" width="1.8" minGap="2.0" minGapLat="0.6" maxSpeedLat="0.5" latAlignment="center" accel="1.5" decel="5.0" sigma="0.5" guiShape="passenger" />
+    <vType id="vType_bus" maxSpeed="15.0" length="12.0" width="2.5" minGap="2.5" minGapLat="0.8" maxSpeedLat="0.3" latAlignment="center" accel="1.5" decel="4.0" sigma="0.5" guiShape="bus" />
+    <vType id="vType_truck" maxSpeed="15.0" length="8.0" width="2.3" minGap="2.5" minGapLat="0.7" maxSpeedLat="0.4" latAlignment="center" accel="1.5" decel="4.5" sigma="0.5" guiShape="truck" />
+    <route id="route_e_b_north_0_0_to_i_0_0_to_e_i_1_0_to_b_south_1_0" edges="e_b_north_0_0_to_i_0_0 e_i_0_0_to_i_1_0 e_i_1_0_to_b_south_1_0" />
+    <route id="route_e_b_north_0_0_to_i_0_0_to_e_i_1_1_to_b_south_1_1" edges="e_b_north_0_0_to_i_0_0 e_i_0_0_to_i_0_1 e_i_0_1_to_i_1_1 e_i_1_1_to_b_south_1_1" />
+    <route id="route_e_b_north_0_0_to_i_0_0_to_e_i_1_2_to_b_south_1_2" edges="e_b_north_0_0_to_i_0_0 e_i_0_0_to_i_0_1 e_i_0_1_to_i_0_2 e_i_0_2_to_i_1_2 e_i_1_2_to_b_south_1_2" />
+    <route id="route_e_b_north_0_1_to_i_0_1_to_e_i_1_0_to_b_south_1_0" edges="e_b_north_0_1_to_i_0_1 e_i_0_1_to_i_0_0 e_i_0_0_to_i_1_0 e_i_1_0_to_b_south_1_0" />
+    <route id="route_e_b_north_0_1_to_i_0_1_to_e_i_1_1_to_b_south_1_1" edges="e_b_north_0_1_to_i_0_1 e_i_0_1_to_i_1_1 e_i_1_1_to_b_south_1_1" />
+    <route id="route_e_b_north_0_1_to_i_0_1_to_e_i_1_2_to_b_south_1_2" edges="e_b_north_0_1_to_i_0_1 e_i_0_1_to_i_0_2 e_i_0_2_to_i_1_2 e_i_1_2_to_b_south_1_2" />
+    <route id="route_e_b_north_0_2_to_i_0_2_to_e_i_1_0_to_b_south_1_0" edges="e_b_north_0_2_to_i_0_2 e_i_0_2_to_i_0_1 e_i_0_1_to_i_0_0 e_i_0_0_to_i_1_0 e_i_1_0_to_b_south_1_0" />
+    <route id="route_e_b_north_0_2_to_i_0_2_to_e_i_1_1_to_b_south_1_1" edges="e_b_north_0_2_to_i_0_2 e_i_0_2_to_i_0_1 e_i_0_1_to_i_1_1 e_i_1_1_to_b_south_1_1" />
+    <route id="route_e_b_north_0_2_to_i_0_2_to_e_i_1_2_to_b_south_1_2" edges="e_b_north_0_2_to_i_0_2 e_i_0_2_to_i_1_2 e_i_1_2_to_b_south_1_2" />
+    <route id="route_e_b_north_0_0_to_i_0_0_to_e_i_0_0_to_b_west_0_0" edges="e_b_north_0_0_to_i_0_0 e_i_0_0_to_b_west_0_0" />
+    <route id="route_e_b_north_0_0_to_i_0_0_to_e_i_1_0_to_b_west_1_0" edges="e_b_north_0_0_to_i_0_0 e_i_0_0_to_i_1_0 e_i_1_0_to_b_west_1_0" />
+    <route id="route_e_b_north_0_1_to_i_0_1_to_e_i_0_0_to_b_west_0_0" edges="e_b_north_0_1_to_i_0_1 e_i_0_1_to_i_0_0 e_i_0_0_to_b_west_0_0" />
+    <route id="route_e_b_north_0_1_to_i_0_1_to_e_i_1_0_to_b_west_1_0" edges="e_b_north_0_1_to_i_0_1 e_i_0_1_to_i_0_0 e_i_0_0_to_i_1_0 e_i_1_0_to_b_west_1_0" />
+    <route id="route_e_b_north_0_2_to_i_0_2_to_e_i_0_0_to_b_west_0_0" edges="e_b_north_0_2_to_i_0_2 e_i_0_2_to_i_0_1 e_i_0_1_to_i_0_0 e_i_0_0_to_b_west_0_0" />
+    <route id="route_e_b_north_0_2_to_i_0_2_to_e_i_1_0_to_b_west_1_0" edges="e_b_north_0_2_to_i_0_2 e_i_0_2_to_i_0_1 e_i_0_1_to_i_0_0 e_i_0_0_to_i_1_0 e_i_1_0_to_b_west_1_0" />
+    <route id="route_e_b_north_0_0_to_i_0_0_to_e_i_0_2_to_b_east_0_2" edges="e_b_north_0_0_to_i_0_0 e_i_0_0_to_i_0_1 e_i_0_1_to_i_0_2 e_i_0_2_to_b_east_0_2" />
+    <route id="route_e_b_north_0_0_to_i_0_0_to_e_i_1_2_to_b_east_1_2" edges="e_b_north_0_0_to_i_0_0 e_i_0_0_to_i_0_1 e_i_0_1_to_i_0_2 e_i_0_2_to_i_1_2 e_i_1_2_to_b_east_1_2" />
+    <route id="route_e_b_north_0_1_to_i_0_1_to_e_i_0_2_to_b_east_0_2" edges="e_b_north_0_1_to_i_0_1 e_i_0_1_to_i_0_2 e_i_0_2_to_b_east_0_2" />
+    <route id="route_e_b_north_0_1_to_i_0_1_to_e_i_1_2_to_b_east_1_2" edges="e_b_north_0_1_to_i_0_1 e_i_0_1_to_i_0_2 e_i_0_2_to_i_1_2 e_i_1_2_to_b_east_1_2" />
+    <route id="route_e_b_north_0_2_to_i_0_2_to_e_i_0_2_to_b_east_0_2" edges="e_b_north_0_2_to_i_0_2 e_i_0_2_to_b_east_0_2" />
+    <route id="route_e_b_north_0_2_to_i_0_2_to_e_i_1_2_to_b_east_1_2" edges="e_b_north_0_2_to_i_0_2 e_i_0_2_to_i_1_2 e_i_1_2_to_b_east_1_2" />
+    <route id="route_e_b_south_1_0_to_i_1_0_to_e_i_0_0_to_b_north_0_0" edges="e_b_south_1_0_to_i_1_0 e_i_1_0_to_i_0_0 e_i_0_0_to_b_north_0_0" />
+    <route id="route_e_b_south_1_0_to_i_1_0_to_e_i_0_1_to_b_north_0_1" edges="e_b_south_1_0_to_i_1_0 e_i_1_0_to_i_1_1 e_i_1_1_to_i_0_1 e_i_0_1_to_b_north_0_1" />
+    <route id="route_e_b_south_1_0_to_i_1_0_to_e_i_0_2_to_b_north_0_2" edges="e_b_south_1_0_to_i_1_0 e_i_1_0_to_i_1_1 e_i_1_1_to_i_1_2 e_i_1_2_to_i_0_2 e_i_0_2_to_b_north_0_2" />
+    <route id="route_e_b_south_1_1_to_i_1_1_to_e_i_0_0_to_b_north_0_0" edges="e_b_south_1_1_to_i_1_1 e_i_1_1_to_i_1_0 e_i_1_0_to_i_0_0 e_i_0_0_to_b_north_0_0" />
+    <route id="route_e_b_south_1_1_to_i_1_1_to_e_i_0_1_to_b_north_0_1" edges="e_b_south_1_1_to_i_1_1 e_i_1_1_to_i_0_1 e_i_0_1_to_b_north_0_1" />
+    <route id="route_e_b_south_1_1_to_i_1_1_to_e_i_0_2_to_b_north_0_2" edges="e_b_south_1_1_to_i_1_1 e_i_1_1_to_i_1_2 e_i_1_2_to_i_0_2 e_i_0_2_to_b_north_0_2" />
+    <route id="route_e_b_south_1_2_to_i_1_2_to_e_i_0_0_to_b_north_0_0" edges="e_b_south_1_2_to_i_1_2 e_i_1_2_to_i_1_1 e_i_1_1_to_i_1_0 e_i_1_0_to_i_0_0 e_i_0_0_to_b_north_0_0" />
+    <route id="route_e_b_south_1_2_to_i_1_2_to_e_i_0_1_to_b_north_0_1" edges="e_b_south_1_2_to_i_1_2 e_i_1_2_to_i_1_1 e_i_1_1_to_i_0_1 e_i_0_1_to_b_north_0_1" />
+    <route id="route_e_b_south_1_2_to_i_1_2_to_e_i_0_2_to_b_north_0_2" edges="e_b_south_1_2_to_i_1_2 e_i_1_2_to_i_0_2 e_i_0_2_to_b_north_0_2" />
+    <route id="route_e_b_south_1_0_to_i_1_0_to_e_i_0_0_to_b_west_0_0" edges="e_b_south_1_0_to_i_1_0 e_i_1_0_to_i_0_0 e_i_0_0_to_b_west_0_0" />
+    <route id="route_e_b_south_1_0_to_i_1_0_to_e_i_1_0_to_b_west_1_0" edges="e_b_south_1_0_to_i_1_0 e_i_1_0_to_b_west_1_0" />
+    <route id="route_e_b_south_1_1_to_i_1_1_to_e_i_0_0_to_b_west_0_0" edges="e_b_south_1_1_to_i_1_1 e_i_1_1_to_i_1_0 e_i_1_0_to_i_0_0 e_i_0_0_to_b_west_0_0" />
+    <route id="route_e_b_south_1_1_to_i_1_1_to_e_i_1_0_to_b_west_1_0" edges="e_b_south_1_1_to_i_1_1 e_i_1_1_to_i_1_0 e_i_1_0_to_b_west_1_0" />
+    <route id="route_e_b_south_1_2_to_i_1_2_to_e_i_0_0_to_b_west_0_0" edges="e_b_south_1_2_to_i_1_2 e_i_1_2_to_i_1_1 e_i_1_1_to_i_1_0 e_i_1_0_to_i_0_0 e_i_0_0_to_b_west_0_0" />
+    <route id="route_e_b_south_1_2_to_i_1_2_to_e_i_1_0_to_b_west_1_0" edges="e_b_south_1_2_to_i_1_2 e_i_1_2_to_i_1_1 e_i_1_1_to_i_1_0 e_i_1_0_to_b_west_1_0" />
+    <route id="route_e_b_south_1_0_to_i_1_0_to_e_i_0_2_to_b_east_0_2" edges="e_b_south_1_0_to_i_1_0 e_i_1_0_to_i_1_1 e_i_1_1_to_i_1_2 e_i_1_2_to_i_0_2 e_i_0_2_to_b_east_0_2" />
+    <route id="route_e_b_south_1_0_to_i_1_0_to_e_i_1_2_to_b_east_1_2" edges="e_b_south_1_0_to_i_1_0 e_i_1_0_to_i_1_1 e_i_1_1_to_i_1_2 e_i_1_2_to_b_east_1_2" />
+    <route id="route_e_b_south_1_1_to_i_1_1_to_e_i_0_2_to_b_east_0_2" edges="e_b_south_1_1_to_i_1_1 e_i_1_1_to_i_1_2 e_i_1_2_to_i_0_2 e_i_0_2_to_b_east_0_2" />
+    <route id="route_e_b_south_1_1_to_i_1_1_to_e_i_1_2_to_b_east_1_2" edges="e_b_south_1_1_to_i_1_1 e_i_1_1_to_i_1_2 e_i_1_2_to_b_east_1_2" />
+    <route id="route_e_b_south_1_2_to_i_1_2_to_e_i_0_2_to_b_east_0_2" edges="e_b_south_1_2_to_i_1_2 e_i_1_2_to_i_0_2 e_i_0_2_to_b_east_0_2" />
+    <route id="route_e_b_south_1_2_to_i_1_2_to_e_i_1_2_to_b_east_1_2" edges="e_b_south_1_2_to_i_1_2 e_i_1_2_to_b_east_1_2" />
+    <route id="route_e_b_west_0_0_to_i_0_0_to_e_i_0_0_to_b_north_0_0" edges="e_b_west_0_0_to_i_0_0 e_i_0_0_to_b_north_0_0" />
+    <route id="route_e_b_west_0_0_to_i_0_0_to_e_i_0_1_to_b_north_0_1" edges="e_b_west_0_0_to_i_0_0 e_i_0_0_to_i_0_1 e_i_0_1_to_b_north_0_1" />
+    <route id="route_e_b_west_0_0_to_i_0_0_to_e_i_0_2_to_b_north_0_2" edges="e_b_west_0_0_to_i_0_0 e_i_0_0_to_i_0_1 e_i_0_1_to_i_0_2 e_i_0_2_to_b_north_0_2" />
+    <route id="route_e_b_west_1_0_to_i_1_0_to_e_i_0_0_to_b_north_0_0" edges="e_b_west_1_0_to_i_1_0 e_i_1_0_to_i_0_0 e_i_0_0_to_b_north_0_0" />
+    <route id="route_e_b_west_1_0_to_i_1_0_to_e_i_0_1_to_b_north_0_1" edges="e_b_west_1_0_to_i_1_0 e_i_1_0_to_i_1_1 e_i_1_1_to_i_0_1 e_i_0_1_to_b_north_0_1" />
+    <route id="route_e_b_west_1_0_to_i_1_0_to_e_i_0_2_to_b_north_0_2" edges="e_b_west_1_0_to_i_1_0 e_i_1_0_to_i_1_1 e_i_1_1_to_i_1_2 e_i_1_2_to_i_0_2 e_i_0_2_to_b_north_0_2" />
+    <route id="route_e_b_west_0_0_to_i_0_0_to_e_i_1_0_to_b_south_1_0" edges="e_b_west_0_0_to_i_0_0 e_i_0_0_to_i_1_0 e_i_1_0_to_b_south_1_0" />
+    <route id="route_e_b_west_0_0_to_i_0_0_to_e_i_1_1_to_b_south_1_1" edges="e_b_west_0_0_to_i_0_0 e_i_0_0_to_i_0_1 e_i_0_1_to_i_1_1 e_i_1_1_to_b_south_1_1" />
+    <route id="route_e_b_west_0_0_to_i_0_0_to_e_i_1_2_to_b_south_1_2" edges="e_b_west_0_0_to_i_0_0 e_i_0_0_to_i_0_1 e_i_0_1_to_i_0_2 e_i_0_2_to_i_1_2 e_i_1_2_to_b_south_1_2" />
+    <route id="route_e_b_west_1_0_to_i_1_0_to_e_i_1_0_to_b_south_1_0" edges="e_b_west_1_0_to_i_1_0 e_i_1_0_to_b_south_1_0" />
+    <route id="route_e_b_west_1_0_to_i_1_0_to_e_i_1_1_to_b_south_1_1" edges="e_b_west_1_0_to_i_1_0 e_i_1_0_to_i_1_1 e_i_1_1_to_b_south_1_1" />
+    <route id="route_e_b_west_1_0_to_i_1_0_to_e_i_1_2_to_b_south_1_2" edges="e_b_west_1_0_to_i_1_0 e_i_1_0_to_i_1_1 e_i_1_1_to_i_1_2 e_i_1_2_to_b_south_1_2" />
+    <route id="route_e_b_west_0_0_to_i_0_0_to_e_i_0_2_to_b_east_0_2" edges="e_b_west_0_0_to_i_0_0 e_i_0_0_to_i_0_1 e_i_0_1_to_i_0_2 e_i_0_2_to_b_east_0_2" />
+    <route id="route_e_b_west_0_0_to_i_0_0_to_e_i_1_2_to_b_east_1_2" edges="e_b_west_0_0_to_i_0_0 e_i_0_0_to_i_0_1 e_i_0_1_to_i_0_2 e_i_0_2_to_i_1_2 e_i_1_2_to_b_east_1_2" />
+    <route id="route_e_b_west_1_0_to_i_1_0_to_e_i_0_2_to_b_east_0_2" edges="e_b_west_1_0_to_i_1_0 e_i_1_0_to_i_1_1 e_i_1_1_to_i_1_2 e_i_1_2_to_i_0_2 e_i_0_2_to_b_east_0_2" />
+    <route id="route_e_b_west_1_0_to_i_1_0_to_e_i_1_2_to_b_east_1_2" edges="e_b_west_1_0_to_i_1_0 e_i_1_0_to_i_1_1 e_i_1_1_to_i_1_2 e_i_1_2_to_b_east_1_2" />
+    <route id="route_e_b_east_0_2_to_i_0_2_to_e_i_0_0_to_b_north_0_0" edges="e_b_east_0_2_to_i_0_2 e_i_0_2_to_i_0_1 e_i_0_1_to_i_0_0 e_i_0_0_to_b_north_0_0" />
+    <route id="route_e_b_east_0_2_to_i_0_2_to_e_i_0_1_to_b_north_0_1" edges="e_b_east_0_2_to_i_0_2 e_i_0_2_to_i_0_1 e_i_0_1_to_b_north_0_1" />
+    <route id="route_e_b_east_0_2_to_i_0_2_to_e_i_0_2_to_b_north_0_2" edges="e_b_east_0_2_to_i_0_2 e_i_0_2_to_b_north_0_2" />
+    <route id="route_e_b_east_1_2_to_i_1_2_to_e_i_0_0_to_b_north_0_0" edges="e_b_east_1_2_to_i_1_2 e_i_1_2_to_i_1_1 e_i_1_1_to_i_1_0 e_i_1_0_to_i_0_0 e_i_0_0_to_b_north_0_0" />
+    <route id="route_e_b_east_1_2_to_i_1_2_to_e_i_0_1_to_b_north_0_1" edges="e_b_east_1_2_to_i_1_2 e_i_1_2_to_i_1_1 e_i_1_1_to_i_0_1 e_i_0_1_to_b_north_0_1" />
+    <route id="route_e_b_east_1_2_to_i_1_2_to_e_i_0_2_to_b_north_0_2" edges="e_b_east_1_2_to_i_1_2 e_i_1_2_to_i_0_2 e_i_0_2_to_b_north_0_2" />
+    <route id="route_e_b_east_0_2_to_i_0_2_to_e_i_1_0_to_b_south_1_0" edges="e_b_east_0_2_to_i_0_2 e_i_0_2_to_i_0_1 e_i_0_1_to_i_0_0 e_i_0_0_to_i_1_0 e_i_1_0_to_b_south_1_0" />
+    <route id="route_e_b_east_0_2_to_i_0_2_to_e_i_1_1_to_b_south_1_1" edges="e_b_east_0_2_to_i_0_2 e_i_0_2_to_i_0_1 e_i_0_1_to_i_1_1 e_i_1_1_to_b_south_1_1" />
+    <route id="route_e_b_east_0_2_to_i_0_2_to_e_i_1_2_to_b_south_1_2" edges="e_b_east_0_2_to_i_0_2 e_i_0_2_to_i_1_2 e_i_1_2_to_b_south_1_2" />
+    <route id="route_e_b_east_1_2_to_i_1_2_to_e_i_1_0_to_b_south_1_0" edges="e_b_east_1_2_to_i_1_2 e_i_1_2_to_i_1_1 e_i_1_1_to_i_1_0 e_i_1_0_to_b_south_1_0" />
+    <route id="route_e_b_east_1_2_to_i_1_2_to_e_i_1_1_to_b_south_1_1" edges="e_b_east_1_2_to_i_1_2 e_i_1_2_to_i_1_1 e_i_1_1_to_b_south_1_1" />
+    <route id="route_e_b_east_1_2_to_i_1_2_to_e_i_1_2_to_b_south_1_2" edges="e_b_east_1_2_to_i_1_2 e_i_1_2_to_b_south_1_2" />
+    <route id="route_e_b_east_0_2_to_i_0_2_to_e_i_0_0_to_b_west_0_0" edges="e_b_east_0_2_to_i_0_2 e_i_0_2_to_i_0_1 e_i_0_1_to_i_0_0 e_i_0_0_to_b_west_0_0" />
+    <route id="route_e_b_east_0_2_to_i_0_2_to_e_i_1_0_to_b_west_1_0" edges="e_b_east_0_2_to_i_0_2 e_i_0_2_to_i_0_1 e_i_0_1_to_i_0_0 e_i_0_0_to_i_1_0 e_i_1_0_to_b_west_1_0" />
+    <route id="route_e_b_east_1_2_to_i_1_2_to_e_i_0_0_to_b_west_0_0" edges="e_b_east_1_2_to_i_1_2 e_i_1_2_to_i_1_1 e_i_1_1_to_i_1_0 e_i_1_0_to_i_0_0 e_i_0_0_to_b_west_0_0" />
+    <route id="route_e_b_east_1_2_to_i_1_2_to_e_i_1_0_to_b_west_1_0" edges="e_b_east_1_2_to_i_1_2 e_i_1_2_to_i_1_1 e_i_1_1_to_i_1_0 e_i_1_0_to_b_west_1_0" />
+</routes>

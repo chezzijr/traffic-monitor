@@ -1,0 +1,19 @@
+<?xml version='1.0' encoding='utf-8'?>
+<nodes>
+    <node id="i_0_0" x="0" y="100" type="traffic_light" />
+    <node id="i_0_1" x="100" y="100" type="traffic_light" />
+    <node id="i_0_2" x="200" y="100" type="traffic_light" />
+    <node id="i_1_0" x="0" y="0" type="traffic_light" />
+    <node id="i_1_1" x="100" y="0" type="traffic_light" />
+    <node id="i_1_2" x="200" y="0" type="traffic_light" />
+    <node id="b_north_0_0" x="0" y="200" type="priority" />
+    <node id="b_north_0_1" x="100" y="200" type="priority" />
+    <node id="b_north_0_2" x="200" y="200" type="priority" />
+    <node id="b_south_1_0" x="0" y="-100" type="priority" />
+    <node id="b_south_1_1" x="100" y="-100" type="priority" />
+    <node id="b_south_1_2" x="200" y="-100" type="priority" />
+    <node id="b_west_0_0" x="-100" y="100" type="priority" />
+    <node id="b_west_1_0" x="-100" y="0" type="priority" />
+    <node id="b_east_0_2" x="300" y="100" type="priority" />
+    <node id="b_east_1_2" x="300" y="0" type="priority" />
+</nodes>
