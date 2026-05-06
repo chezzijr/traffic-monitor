@@ -92,10 +92,7 @@ services:
     ports:
       - "8001:8001"
     environment:
-      - SUMO_HOME=/usr/share/sumo
-      - PORT=8001
-      - RL_MODEL_DIR=/simulation/models
-    volumes:
+
       - ./services/digital_twin/data:/app/data
       - ./services/digital_twin/model:/app/model:ro
       - ./simulation:/simulation
