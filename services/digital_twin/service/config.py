@@ -52,14 +52,9 @@ SUMO_EDGE_LENGTH = float(os.getenv("SUMO_EDGE_LENGTH", "15.0"))
 SUMO_NUM_LANES = int(os.getenv("SUMO_NUM_LANES", "2"))
 SUMO_GUI = os.getenv("SUMO_GUI", "0") == "1"
 
-# Steps per action — must match the training env's steps_per_action
-STEPS_PER_ACTION = int(os.getenv("STEPS_PER_ACTION", "5"))
 
-# Directory containing trained RL models
-RL_MODEL_DIR = Path(os.getenv(
-    "RL_MODEL_DIR",
-    str(BASE_DIR.parent.parent / "simulation" / "models"),
-))
+
+
 
 # Fixed-time baseline durations (seconds)
 FIXED_GREEN_DURATION = int(os.getenv("FIXED_GREEN_DURATION", "35"))

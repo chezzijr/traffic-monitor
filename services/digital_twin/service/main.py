@@ -155,25 +155,15 @@ from service.sync_loop import (
     stop_sync,
     get_sync_status,
     get_sync_vehicles,
-    get_evaluation,
     get_snapshot,
 )
 
 
-class SyncStartRequest(BaseModel):
-    model_path: str | None = None
-
-
 @app.post("/sync/start")
-def sync_start(req: SyncStartRequest | None = None):
-    """Start the video-to-SUMO sync pipeline.
-
-    If ``model_path`` is provided, the RL model controls the traffic
-    light.  Otherwise runs with fixed-time baseline.
-    """
-    model_path = req.model_path if req else None
+def sync_start():
+    """Start the video-to-SUMO sync pipeline."""
     try:
-        return start_sync(model_path)
+        return start_sync()
     except Exception as exc:
         logger.exception("Failed to start sync")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -197,72 +187,11 @@ def sync_vehicles():
     return get_sync_vehicles()
 
 
-@app.get("/sync/evaluation")
-def sync_evaluation():
-    """Return RL vs fixed-time baseline comparison."""
-    result = get_evaluation()
-    if result is None:
-        return {"status": "not_ready", "detail": "Evaluation not yet complete"}
-    return result
-
-
 @app.get("/sync/snapshot")
 def sync_snapshot():
     """Return combined snapshot for live monitoring page.
 
-    Includes video frame, vehicle positions, TL states and metrics
-    from both RL and baseline SUMO instances.
+    Includes video frame, vehicle positions, TL states and metrics.
     """
     return get_snapshot()
-
-
-@app.get("/sync/models")
-def sync_models():
-    """List available RL models in the models directory."""
-    from service.config import RL_MODEL_DIR
-    models = []
-    model_dir = RL_MODEL_DIR
-    if model_dir.exists():
-        for f in sorted(model_dir.iterdir()):
-            if f.suffix in (".pt", ".zip"):
-                models.append({
-                    "name": f.name,
-                    "path": str(f),
-                    "size_mb": round(f.stat().st_size / 1024 / 1024, 2),
-                })
-    return models
-
-
-@app.get("/sync/videos")
-def sync_videos():
-    """List available video files for evaluation."""
-    from service.config import BASE_DIR
-    video_dir = BASE_DIR / "data" / "traffic_video"
-    videos = []
-    if video_dir.exists():
-        for subdir in sorted(video_dir.iterdir()):
-            if subdir.is_dir():
-                for f in sorted(subdir.iterdir()):
-                    if f.suffix.lower() in (".mov", ".mp4", ".avi", ".mkv"):
-                        videos.append({
-                            "name": f.name,
-                            "path": str(f),
-                            "folder": subdir.name,
-                            "size_mb": round(f.stat().st_size / 1024 / 1024, 2),
-                        })
-    return videos
-
-
-@app.post("/sync/traffic_light")
-def sync_traffic_light(phase: int = Query(..., description="Phase index")):
-    """Manually set the traffic light phase in the RL SUMO simulation."""
-    from service.sync_loop import _sumo_rl
-
-    if not _sumo_rl.running:
-        raise HTTPException(status_code=400, detail="Sync not running")
-    try:
-        _sumo_rl.set_traffic_light_phase(phase)
-        return _sumo_rl.get_traffic_light_state()
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
