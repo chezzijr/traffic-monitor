@@ -21,7 +21,9 @@ export function DeploymentSnapshotModal({ tlId, onClose }: DeploymentSnapshotMod
         setSnapshot(data);
         setError(null);
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : 'Failed to load snapshot';
+        const anyErr = err as { response?: { data?: { detail?: string } } };
+        const detail = anyErr?.response?.data?.detail;
+        const msg = detail || (err instanceof Error ? err.message : 'Failed to load snapshot');
         setError(msg);
       }
     };

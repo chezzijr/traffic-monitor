@@ -22,6 +22,7 @@ export function ModelsPanel() {
   const intersections = useMapStore((s) => s.intersections);
   const sumoTrafficLights = useMapStore((s) => s.sumoTrafficLights);
   const selectedJunctionIds = useMapStore((s) => s.selectedJunctionIds);
+  const currentNetworkId = useMapStore((s) => s.currentNetworkId);
 
   useEffect(() => {
     modelService.listModels()
@@ -69,6 +70,10 @@ export function ModelsPanel() {
       toast.error('Select a model first');
       return;
     }
+    if (currentNetworkId && selectedModel.network_id !== currentNetworkId) {
+      toast.error('Model network does not match the selected map network');
+      return;
+    }
     const isMulti = selectedModel.type === 'multi' || (selectedModel.tl_ids && selectedModel.tl_ids.length > 1);
     if (isMulti) {
       toast.error('Multi-agent models are not supported for deploy in this flow');
@@ -109,6 +114,10 @@ export function ModelsPanel() {
     }
   };
 
+  const canDeploy = !!selectedModel
+    && (selectedJunctionIds.length > 0 || !!selectedDeployTlId)
+    && (!currentNetworkId || selectedModel?.network_id === currentNetworkId);
+
   const handleDelete = async (modelId: string) => {
     try {
       await modelService.deleteModel(modelId);
@@ -142,6 +151,11 @@ export function ModelsPanel() {
               <div className="text-xs text-gray-600">
                 Selected model: <span className="font-mono text-gray-800">{selectedModel?.model_id || 'None'}</span>
               </div>
+              {selectedModel && currentNetworkId && selectedModel.network_id !== currentNetworkId && (
+                <div className="text-[10px] text-red-500">
+                  Model network does not match current map network.
+                </div>
+              )}
               <div>
                 <label className="text-xs text-gray-500">Map selection</label>
                 <div className="mt-1 text-xs text-gray-700">
@@ -175,7 +189,7 @@ export function ModelsPanel() {
               <button
                 onClick={handleDeploySelected}
                 className="w-full text-xs py-1.5 rounded bg-green-600 text-white hover:bg-green-700 transition-colors disabled:opacity-50"
-                disabled={!selectedModel || (selectedJunctionIds.length === 0 && !selectedDeployTlId)}
+                disabled={!canDeploy}
               >
                 {selectedJunctionIds.length > 0
                   ? `Deploy Selected (${selectedJunctionIds.length})`
