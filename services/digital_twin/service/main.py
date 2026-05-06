@@ -56,8 +56,16 @@ class TrafficLightStateResponse(BaseModel):
 def waiting_count(
     id_camera: str = Query(..., description="Camera identifier"),
 ) -> WaitingCountResponse:
-    """Analyse ~1 second of traffic video and return waiting vehicle counts."""
+    """Return waiting vehicle counts, auto-starting the video stream if needed.
+
+    The video analysis stream starts on the first call and stays alive as
+    long as this endpoint keeps being polled (each call acts as a
+    keepalive).  When polling stops the stream auto-stops after an idle
+    timeout.
+    """
     try:
+        # Ensure the stream is running (idempotent / acts as keepalive)
+        start_stream()
         result = get_waiting_count(id_camera)
     except Exception as exc:
         logger.exception("Video processing failed for camera %s", id_camera)
@@ -96,6 +104,8 @@ def frame():
 def traffic_light_state() -> TrafficLightStateResponse:
     """Infer traffic light states from waiting vehicle behaviour.
 
+    Auto-starts the video stream if not already running.
+
     Logic:
       - North & East are observed from the camera.
       - If waiting vehicles >= threshold → RED, otherwise GREEN.
@@ -103,6 +113,7 @@ def traffic_light_state() -> TrafficLightStateResponse:
       - Duration is always -1 (unknown).
     """
     try:
+        start_stream()
         result = get_traffic_light_state()
     except Exception as exc:
         logger.exception("Traffic light inference failed")
