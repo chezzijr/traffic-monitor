@@ -455,6 +455,74 @@ def get_traffic_light(tl_id: str) -> Optional[dict]:
             return None
 
 
+def get_tl_snapshot(tl_id: str) -> dict:
+    """Return a per-intersection snapshot.
+
+    Includes traffic light state, vehicle count and vehicle list
+    for lanes controlled by this traffic light.
+    """
+    _check_sumo_available()
+
+    with _state._lock:
+        if not _state.is_running:
+            raise RuntimeError("No simulation running")
+
+        try:
+            tl_ids = traci.trafficlight.getIDList()
+            if tl_id not in tl_ids:
+                raise ValueError(f"Traffic light '{tl_id}' not found")
+
+            controlled_lanes = list(traci.trafficlight.getControlledLanes(tl_id))
+            tl_info = {
+                "id": tl_id,
+                "phase": traci.trafficlight.getPhase(tl_id),
+                "program": traci.trafficlight.getProgram(tl_id),
+                "state": traci.trafficlight.getRedYellowGreenState(tl_id),
+                "phase_duration": traci.trafficlight.getPhaseDuration(tl_id),
+            }
+        except TraCIException as e:
+            raise RuntimeError(f"Failed to get traffic light {tl_id}: {e}")
+        vehicle_ids: set[str] = set()
+
+        for lane_id in controlled_lanes:
+            try:
+                lane_ids = traci.lane.getLastStepVehicleIDs(lane_id)
+                for vid in lane_ids:
+                    vehicle_ids.add(vid)
+            except TraCIException:
+                continue
+
+        vehicles: list[dict] = []
+        waiting_count = 0
+        for vid in vehicle_ids:
+            try:
+                speed = traci.vehicle.getSpeed(vid)
+                waiting_time = traci.vehicle.getWaitingTime(vid)
+                lane_id = traci.vehicle.getLaneID(vid)
+                if waiting_time > 0 or speed < 0.1:
+                    waiting_count += 1
+                vehicles.append({
+                    "id": vid,
+                    "speed": speed,
+                    "waiting_time": waiting_time,
+                    "lane_id": lane_id,
+                })
+            except TraCIException:
+                continue
+
+        return {
+            "tl_id": tl_info["id"],
+            "phase": tl_info["phase"],
+            "program": tl_info["program"],
+            "state": tl_info["state"],
+            "phase_duration": tl_info["phase_duration"],
+            "controlled_lanes": controlled_lanes,
+            "vehicle_count": len(vehicle_ids),
+            "waiting_count": waiting_count,
+            "vehicles": vehicles,
+        }
+
+
 def get_vehicles() -> list[dict]:
     """Get all vehicles and their current states.
 

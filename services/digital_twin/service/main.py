@@ -52,6 +52,11 @@ class TrafficLightStateResponse(BaseModel):
     west: DirectionLightState
 
 
+class DeployStartRequest(BaseModel):
+    model_path: str
+    tl_id: str | None = None
+
+
 @app.get("/waiting_count", response_model=WaitingCountResponse)
 def waiting_count(
     id_camera: str = Query(..., description="Camera identifier"),
@@ -169,6 +174,15 @@ from service.sync_loop import (
     get_snapshot,
 )
 
+from service.deploy_loop import (
+    start_deploy,
+    stop_deploy,
+    get_deploy_status,
+    get_deploy_snapshot,
+    list_models as list_deploy_models,
+    list_videos as list_deploy_videos,
+)
+
 
 @app.post("/sync/start")
 def sync_start():
@@ -205,4 +219,47 @@ def sync_snapshot():
     Includes video frame, vehicle positions, TL states and metrics.
     """
     return get_snapshot()
+
+
+# ── Deploy (AI control) endpoints ───────────────────────────────────
+
+
+@app.get("/deploy/models")
+def deploy_models():
+    """List available trained models for deploy."""
+    return list_deploy_models()
+
+
+@app.get("/deploy/videos")
+def deploy_videos():
+    """List available videos for deploy."""
+    return list_deploy_videos()
+
+
+@app.post("/deploy/start")
+def deploy_start(request: DeployStartRequest):
+    """Start the deploy loop with the selected model."""
+    try:
+        return start_deploy(request.model_path, request.tl_id)
+    except Exception as exc:
+        logger.exception("Failed to start deploy")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/deploy/stop")
+def deploy_stop():
+    """Stop the deploy loop."""
+    return stop_deploy()
+
+
+@app.get("/deploy/status")
+def deploy_status():
+    """Return deploy loop status."""
+    return get_deploy_status()
+
+
+@app.get("/deploy/snapshot")
+def deploy_snapshot():
+    """Return deploy loop snapshot for the frontend."""
+    return get_deploy_snapshot()
 

@@ -191,6 +191,11 @@ class SumoManager:
         conn = self._conn()
         return list(conn.vehicle.getIDList())
 
+    def get_traffic_light_ids(self) -> list[str]:
+        """Return all traffic light IDs in the network."""
+        conn = self._conn()
+        return list(conn.trafficlight.getIDList())
+
     def get_vehicles(self) -> list[dict]:
         """Return detailed state of all vehicles."""
         conn = self._conn()
@@ -218,10 +223,13 @@ class SumoManager:
             raise RuntimeError("No traffic lights in the network")
         return tls[0]
 
-    def get_traffic_light_state(self) -> dict:
+    def _resolve_tl_id(self, tl_id: str | None) -> str:
+        return tl_id or self.get_tl_id()
+
+    def get_traffic_light_state(self, tl_id: str | None = None) -> dict:
         """Query current TL state."""
         conn = self._conn()
-        tl_id = self.get_tl_id()
+        tl_id = self._resolve_tl_id(tl_id)
         return {
             "tl_id": tl_id,
             "phase": conn.trafficlight.getPhase(tl_id),
@@ -229,22 +237,22 @@ class SumoManager:
             "program": conn.trafficlight.getProgram(tl_id),
         }
 
-    def set_traffic_light_phase(self, phase_index: int) -> None:
+    def set_traffic_light_phase(self, phase_index: int, tl_id: str | None = None) -> None:
         """Set the traffic light to a specific phase."""
         conn = self._conn()
-        tl_id = self.get_tl_id()
+        tl_id = self._resolve_tl_id(tl_id)
         conn.trafficlight.setPhase(tl_id, phase_index)
 
-    def get_controlled_lanes(self) -> list[str]:
+    def get_controlled_lanes(self, tl_id: str | None = None) -> list[str]:
         """Return the list of lanes controlled by the traffic light."""
         conn = self._conn()
-        tl_id = self.get_tl_id()
+        tl_id = self._resolve_tl_id(tl_id)
         return list(conn.trafficlight.getControlledLanes(tl_id))
 
-    def get_num_phases(self) -> int:
+    def get_num_phases(self, tl_id: str | None = None) -> int:
         """Return the number of phases in the TL program."""
         conn = self._conn()
-        tl_id = self.get_tl_id()
+        tl_id = self._resolve_tl_id(tl_id)
         logic = conn.trafficlight.getAllProgramLogics(tl_id)
         if logic:
             return len(logic[0].phases)
@@ -254,6 +262,7 @@ class SumoManager:
         self,
         green_duration: int = 35,
         yellow_duration: int = 3,
+        tl_id: str | None = None,
     ) -> None:
         """Install a fixed-time TLS program for baseline comparison.
 
@@ -264,7 +273,7 @@ class SumoManager:
           Phase 3: NS red, EW yellow (yellow_duration s)
         """
         conn = self._conn()
-        tl_id = self.get_tl_id()
+        tl_id = self._resolve_tl_id(tl_id)
 
         # Get current program to understand the link count
         current = conn.trafficlight.getAllProgramLogics(tl_id)
@@ -308,6 +317,10 @@ class SumoManager:
             green_duration,
             yellow_duration,
         )
+
+    def get_connection(self):
+        """Expose the active TraCI connection (advanced usage)."""
+        return self._conn()
 
     # ── Internal ──────────────────────────────────────────────────────
 

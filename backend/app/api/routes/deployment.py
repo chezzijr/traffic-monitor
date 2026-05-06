@@ -50,3 +50,14 @@ def toggle_ai_control(tl_id: str, request: ToggleAIControlRequest) -> dict:
         return deployment_service.toggle_ai_control(tl_id=tl_id, enabled=request.enabled)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/{tl_id}/snapshot")
+def get_deployment_snapshot(tl_id: str) -> dict:
+    """Get a live snapshot for a deployed traffic light."""
+    try:
+        return deployment_service.get_deployment_snapshot(tl_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))

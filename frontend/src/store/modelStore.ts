@@ -5,6 +5,8 @@ interface ModelState {
   models: TrainedModel[];
   deployments: Deployment[];
   isPanelOpen: boolean;
+  selectedDeployModelId: string | null;
+  selectedDeployTlId: string | null;
 
   // Actions
   setModels: (models: TrainedModel[]) => void;
@@ -16,12 +18,16 @@ interface ModelState {
   togglePanel: () => void;
   expandedModelId: string | null;
   toggleExpandedModel: (modelId: string) => void;
+  setSelectedDeployModelId: (modelId: string | null) => void;
+  setSelectedDeployTlId: (tlId: string | null) => void;
 }
 
 export const useModelStore = create<ModelState>((set) => ({
   models: [],
   deployments: [],
   isPanelOpen: false,
+  selectedDeployModelId: null,
+  selectedDeployTlId: null,
 
   setModels: (models) => set({ models }),
   addModel: (model) =>
@@ -44,4 +50,6 @@ export const useModelStore = create<ModelState>((set) => ({
     set((state) => ({
       expandedModelId: state.expandedModelId === modelId ? null : modelId,
     })),
+  setSelectedDeployModelId: (modelId) => set({ selectedDeployModelId: modelId }),
+  setSelectedDeployTlId: (tlId) => set({ selectedDeployTlId: tlId }),
 }));

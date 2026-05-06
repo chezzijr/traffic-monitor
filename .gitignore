@@ -16,3 +16,5 @@ simulation/data
 .agents
 digital_twin.log
 *.pt
+*.MOV
+services/digital_twin/service/__pycache__/

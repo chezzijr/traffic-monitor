@@ -3,11 +3,14 @@
 import logging
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from app.services import ml_service
+from app.config import settings
+from app.models.schemas import TrafficScenario
+from app.services import ml_service, sumo_service, route_service
 
 logger = logging.getLogger(__name__)
 
@@ -197,3 +200,69 @@ def get_deployment(tl_id: str) -> dict[str, Any] | None:
         "network_id": d.network_id,
         "ai_control_enabled": d.ai_control_enabled,
     }
+
+
+def get_deployment_snapshot(tl_id: str) -> dict[str, Any]:
+    """Return a live snapshot for a deployed traffic light."""
+    deployment = _state.get(tl_id)
+    if deployment is None:
+        raise ValueError(f"No model deployed to {tl_id}")
+
+    _ensure_simulation_running(deployment.network_id)
+
+    snapshot = sumo_service.get_tl_snapshot(tl_id)
+    snapshot.update({
+        "model_id": deployment.model_id,
+        "model_path": deployment.model_path,
+        "network_id": deployment.network_id,
+        "ai_control_enabled": deployment.ai_control_enabled,
+    })
+    return snapshot
+
+
+def _find_route_file(network_path: Path) -> str | None:
+    parent = network_path.parent
+    network_stem = network_path.stem.replace(".net", "")
+    for candidate in sorted(parent.glob(f"{network_stem}_*.rou.xml")):
+        return str(candidate)
+    return None
+
+
+def _ensure_simulation_running(network_id: str) -> None:
+    status = sumo_service.get_status()
+    if status["status"] in {"running", "paused"}:
+        if status.get("network_id") == network_id:
+            return
+        raise RuntimeError("Simulation is running for another network")
+
+    network_path = settings.simulation_networks_dir / f"{network_id}.net.xml"
+    if not network_path.exists():
+        raise RuntimeError(f"Network not found: {network_path}")
+
+    routes_path = _find_route_file(network_path)
+    if routes_path is None:
+        try:
+            result = route_service.generate_routes(
+                network_path=str(network_path),
+                output_dir=str(network_path.parent),
+                scenario=TrafficScenario.MODERATE,
+                duration=3600,
+                seed=None,
+            )
+            routes_path = result["routes_path"]
+        except Exception as exc:
+            logger.warning("Route generation failed: %s", exc)
+            routes_path = None
+
+    additional_files: list[str] | None = None
+    vtypes_file = settings.simulation_vtypes_dir / "vietnamese_vtypes.add.xml"
+    if vtypes_file.exists():
+        additional_files = [str(vtypes_file)]
+
+    sumo_service.start_simulation(
+        network_path=str(network_path),
+        network_id=network_id,
+        routes_path=routes_path,
+        additional_files=additional_files,
+        gui=False,
+    )

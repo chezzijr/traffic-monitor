@@ -1,14 +1,16 @@
-import { useEffect } from 'react';
-import { Zap, ZapOff, XCircle } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Zap, ZapOff, XCircle, Eye } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useModelStore } from '../../store/modelStore';
 import { deploymentService } from '../../services/deploymentService';
 import { modelService } from '../../services/modelService';
+import { DeploymentSnapshotModal } from './DeploymentSnapshotModal';
 
 export function DeploymentsPanel() {
   const deployments = useModelStore((s) => s.deployments);
   const setDeployments = useModelStore((s) => s.setDeployments);
   const removeDeployment = useModelStore((s) => s.removeDeployment);
+  const [viewTlId, setViewTlId] = useState<string | null>(null);
 
   useEffect(() => {
     deploymentService.listDeployments()
@@ -78,6 +80,15 @@ export function DeploymentsPanel() {
                   {dep.ai_control_enabled ? 'AI On' : 'AI Off'}
                 </button>
 
+                <button
+                  onClick={() => setViewTlId(dep.tl_id)}
+                  className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors"
+                  title="View"
+                >
+                  <Eye size={12} />
+                  View
+                </button>
+
                 {/* Undeploy button */}
                 <button
                   onClick={() => handleUndeploy(dep.tl_id)}
@@ -92,6 +103,8 @@ export function DeploymentsPanel() {
           ))}
         </div>
       )}
+
+      <DeploymentSnapshotModal tlId={viewTlId} onClose={() => setViewTlId(null)} />
     </div>
   );
 }

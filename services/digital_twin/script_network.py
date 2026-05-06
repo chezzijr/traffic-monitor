@@ -21,6 +21,7 @@ import argparse
 import time as _time
 import threading
 import queue
+from pathlib import Path
 import numpy as np
 import xml.etree.ElementTree as ET
 from ultralytics import YOLO
@@ -139,6 +140,14 @@ def load_regions_from_json(json_file_path):
 # ============================================================
 # Constants
 # ============================================================
+
+BASE_DIR = Path(__file__).resolve().parent
+SIM_REALTIME_DIR = BASE_DIR / "simulate_real_traffic"
+DEFAULT_VIDEO_PATH = SIM_REALTIME_DIR / "data" / "tphcm" / "output-2p-light.MOV"
+DEFAULT_REGIONS_DIR = SIM_REALTIME_DIR / "regions" / "tphcm"
+DEFAULT_SUMO_DIR = SIM_REALTIME_DIR / "sumo"
+DEFAULT_MODEL_DIR = SIM_REALTIME_DIR / "model"
+DEFAULT_BOTSORT_CFG = SIM_REALTIME_DIR / "botsort.yaml"
 
 # Map YOLO class indices to vehicle class names
 VEHICLE_CLASSES = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
@@ -488,6 +497,24 @@ def setup_sumo_network(output_dir):
     if ret != 0:
         raise RuntimeError(f"netconvert failed with return code {ret}")
     print("3×2 grid SUMO network files generated successfully!")
+
+
+def ensure_sumo_network(output_dir, rebuild=False):
+    """Return SUMO config path, generating files only when requested.
+
+    By default we reuse the pre-generated network in simulate_real_traffic/sumo.
+    """
+    output_dir = Path(output_dir)
+    config_path = output_dir / "sumo_config.sumocfg"
+    net_path = output_dir / "grid_network.net.xml"
+    route_path = output_dir / "route.rou.xml"
+
+    if not rebuild and config_path.exists() and net_path.exists() and route_path.exists():
+        return config_path
+
+    setup_sumo_network(str(output_dir))
+    generate_realtime_config(str(config_path))
+    return config_path
 
 
 class VehicleManager:
@@ -933,7 +960,14 @@ class TraCIWorker:
         self._thread.join(timeout=3.0)
 
 
-def process_video_realtime(video_path, regions_dir, output_dir, use_gui=True, sumo_port=None):
+def process_video_realtime(
+    video_path,
+    regions_dir,
+    output_dir,
+    use_gui=True,
+    sumo_port=None,
+    rebuild_network=False,
+):
     """
     3-thread real-time pipeline:
       Thread 1 (FrameReader):  CPU video decode → queue
@@ -947,8 +981,8 @@ def process_video_realtime(video_path, regions_dir, output_dir, use_gui=True, su
     # --- Load YOLO model ---
     # Prefer TensorRT engine if available (3-5× faster), fall back to .pt
     # Engine must be exported at imgsz=1280 to match inference size
-    engine_path = "model/yolo11x_1280.engine"
-    pt_path = "model/yolo11x.pt"
+    engine_path = DEFAULT_MODEL_DIR / "yolo11x_1280.engine"
+    pt_path = DEFAULT_MODEL_DIR / "yolo11x.pt"
     if os.path.exists(engine_path):
         model_name = engine_path
         print(f"Using TensorRT engine: {engine_path} (optimized for imgsz=1280)")
@@ -976,7 +1010,7 @@ def process_video_realtime(video_path, regions_dir, output_dir, use_gui=True, su
     # --- Initialize standalone BoTSORT tracker ---
     # We manage the tracker ourselves because SAHI replaces model.track().
     # Load the same botsort.yaml config to keep behavior identical.
-    with open("botsort.yaml", "r") as f:
+    with open(DEFAULT_BOTSORT_CFG, "r") as f:
         tracker_cfg = yaml.safe_load(f)
     tracker_args = IterableSimpleNamespace(**tracker_cfg)
     # The tracker needs a 'model' attribute for ReID; set to 'auto' (disabled)
@@ -1013,14 +1047,11 @@ def process_video_realtime(video_path, regions_dir, output_dir, use_gui=True, su
     SAHI_OVERLAP_RATIO = 0.2
 
     # --- Setup SUMO network ---
-    setup_sumo_network(output_dir)
-
-    config_path = os.path.join(output_dir, "sumo_config.sumocfg")
-    generate_realtime_config(config_path, step_length=step_length)
+    config_path = ensure_sumo_network(output_dir, rebuild=rebuild_network)
 
     # --- Start SUMO ---
     sumo_binary = "sumo-gui" if use_gui else "sumo"
-    sumo_cmd = [sumo_binary, "-c", config_path, "--start"]
+    sumo_cmd = [sumo_binary, "-c", str(config_path), "--start"]
 
     if sumo_port:
         traci.start(sumo_cmd, port=sumo_port)
@@ -1597,11 +1628,11 @@ def main():
         description="Real-Time Video → SUMO Digital Twin via TraCI"
     )
     parser.add_argument(
-        "--video", type=str, default="data/tphcm/output-2p-light.MOV",
+        "--video", type=str, default=str(DEFAULT_VIDEO_PATH),
         help="Path to the input video file",
     )
     parser.add_argument(
-        "--regions-dir", type=str, default="regions/tphcm",
+        "--regions-dir", type=str, default=str(DEFAULT_REGIONS_DIR),
         help="Path to the directory containing the regions JSON files (regions.json, road_mask.json, sahi_zones.json)",
     )
     parser.add_argument(
@@ -1613,8 +1644,12 @@ def main():
         help="Run SUMO headless (no GUI)",
     )
     parser.add_argument(
-        "--output-dir", type=str, default="sumo_files/realtime",
-        help="Directory for generated SUMO files (default: sumo_files/realtime)",
+        "--output-dir", type=str, default=str(DEFAULT_SUMO_DIR),
+        help="Directory for SUMO files (default: simulate_real_traffic/sumo)",
+    )
+    parser.add_argument(
+        "--rebuild-network", action="store_true",
+        help="Regenerate SUMO network files in the output directory",
     )
     parser.add_argument(
         "--sumo-port", type=int, default=None,
@@ -1634,6 +1669,7 @@ def main():
         output_dir=args.output_dir,
         use_gui=use_gui,
         sumo_port=args.sumo_port,
+        rebuild_network=args.rebuild_network,
     )
 
 
