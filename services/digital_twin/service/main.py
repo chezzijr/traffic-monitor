@@ -55,6 +55,9 @@ class TrafficLightStateResponse(BaseModel):
 class DeployStartRequest(BaseModel):
     model_path: str
     tl_id: str | None = None
+    grid_rows: int = 2
+    grid_cols: int = 3
+    network_id: str | None = None
 
 
 @app.get("/waiting_count", response_model=WaitingCountResponse)
@@ -240,7 +243,13 @@ def deploy_videos():
 def deploy_start(request: DeployStartRequest):
     """Start the deploy loop with the selected model."""
     try:
-        return start_deploy(request.model_path, request.tl_id)
+        return start_deploy(
+            request.model_path,
+            request.tl_id,
+            grid_rows=request.grid_rows,
+            grid_cols=request.grid_cols,
+            network_id=request.network_id,
+        )
     except Exception as exc:
         logger.exception("Failed to start deploy")
         raise HTTPException(status_code=500, detail=str(exc)) from exc

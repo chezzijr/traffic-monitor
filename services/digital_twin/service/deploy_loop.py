@@ -18,6 +18,7 @@ from service.config import (
     FIXED_GREEN_DURATION,
     FIXED_YELLOW_DURATION,
     SIM_REALTIME_DIR,
+    SAVED_NETWORKS_DIR,
 )
 from service.rl_model import RLModel
 from service.sumo_manager import SumoManager
@@ -28,6 +29,18 @@ from service.video_analyzer import (
     reset_video_complete_flag,
     start_background_loop,
 )
+
+# Import grid network generation from script_network.py (at parent level)
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from script_network import (
+    ensure_sumo_network,
+    get_boundary_entry_edges,
+    get_boundary_exit_edges,
+    OPPOSITE_DIRECTION,
+)
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +56,7 @@ _deploy_status: dict = {
     "video_complete": False,
     "model_path": None,
     "tl_id": None,
+    "network_id": None,
     "last_action": None,
 }
 _snapshot_data: dict = {}
@@ -103,14 +117,12 @@ def _build_observation(conn, tl_id: str, controlled_lanes: list[str], num_action
     return np.concatenate([np.array(lane_counts, dtype=np.float32), phase_one_hot])
 
 
-def _feed_vehicles(tracked: list[dict], vehicle_ids: set[str]) -> set[str]:
+def _feed_vehicles(tracked: list[dict], vehicle_ids: set[str], grid_rows: int, grid_cols: int) -> set[str]:
     visible_ids: set[str] = set()
 
     for veh in tracked:
         veh_id = f"v_{veh['id']}"
         region = veh.get("region")
-        speed = veh.get("speed", 0.0)
-
         if region is None:
             continue
 
@@ -118,29 +130,63 @@ def _feed_vehicles(tracked: list[dict], vehicle_ids: set[str]) -> set[str]:
         _direction_tracker.update(veh["id"], region)
 
         if veh_id not in vehicle_ids:
-            edge = get_incoming_edge(region)
-            if edge is None:
-                continue
-            route = STRAIGHT_ROUTES.get(region)
-            if route is None:
+            # New vehicle detected in video
+            # In the grid network, we spawn at ALL entry points for this direction
+            entry_region = region
+            exit_region = OPPOSITE_DIRECTION.get(entry_region, "south")
+            
+            # Use the logic from script_network: spawn at all boundary entry edges
+            entry_edges = get_boundary_entry_edges(grid_rows, grid_cols).get(entry_region, [])
+            exit_edges_list = get_boundary_exit_edges(grid_rows, grid_cols).get(exit_region, [])
+            
+            if not entry_edges:
                 continue
 
-            if _sumo.add_vehicle(veh_id, route, pos=0.1, speed=max(speed, 1.0)):
-                vehicle_ids.add(veh_id)
-                _sumo.update_vehicle_speed(veh_id, -1)
+            # We'll spawn at the first entry edge for the primary ID, 
+            # and others as clones (consistent with script_network.py)
+            spawned_any = False
+            for idx, (_, _, entry_eid) in enumerate(entry_edges):
+                if not exit_edges_list:
+                    continue
+                _, _, exit_eid = random.choice(exit_edges_list)
+                
+                # In TraCI, routes must exist. ensure_sumo_network should have created them.
+                route_id = f"route_{entry_eid}_to_{exit_eid}"
+                vid = veh_id if idx == 0 else f"{veh_id}_g{idx}"
+                
+                if _sumo.add_vehicle(vid, route_id, pos=0.1, speed=max(veh.get("speed", 0.0), 1.0)):
+                    _sumo.update_vehicle_speed(vid, -1)
+                    vehicle_ids.add(vid)
+                    spawned_any = True
+            
+            if not spawned_any:
+                visible_ids.discard(veh_id)
         else:
-            updated_route = _direction_tracker.get_route(veh["id"])
-            if updated_route and _direction_tracker.is_route_updated(veh["id"]):
-                _sumo.reroute_vehicle(veh_id, updated_route)
+            # Known vehicle: check for turns and reroute in SUMO
+            if _direction_tracker.is_route_updated(veh["id"]):
+                new_exit_region = _direction_tracker.get_exit_direction(veh["id"]) # I need to check if this exists
+                if new_exit_region:
+                    exit_edges_list = get_boundary_exit_edges(grid_rows, grid_cols).get(new_exit_region, [])
+                    if exit_edges_list:
+                        _, _, exit_eid = random.choice(exit_edges_list)
+                        _sumo.reroute_vehicle(veh_id, exit_eid)
+                        # Also reroute clones
+                        for idx in range(1, 10): # assuming max grid size isn't huge
+                            clone_id = f"{veh_id}_g{idx}"
+                            if clone_id in vehicle_ids:
+                                _sumo.reroute_vehicle(clone_id, exit_eid)
 
     departed = vehicle_ids - visible_ids
+    # Filter out clones from departed list for cleanup
     for vid in departed:
         _sumo.remove_vehicle(vid)
-        try:
-            orig_id = int(vid.split("_")[1])
-            _direction_tracker.remove(orig_id)
-        except Exception:
-            pass
+        # Only remove from tracker if it's the primary ID
+        if vid.startswith("v_") and "_g" not in vid:
+            try:
+                orig_id = int(vid.split("_")[1])
+                _direction_tracker.remove(orig_id)
+            except Exception:
+                pass
     vehicle_ids -= departed
 
     return vehicle_ids
@@ -149,7 +195,7 @@ def _feed_vehicles(tracked: list[dict], vehicle_ids: set[str]) -> set[str]:
 # ── Public API ───────────────────────────────────────────────────────
 
 
-def start_deploy(model_path: str, tl_id: str | None = None) -> dict:
+def start_deploy(model_path: str, tl_id: str | None = None, grid_rows: int = 2, grid_cols: int = 3, network_id: str | None = None) -> dict:
     global _deploy_active, _deploy_thread, _snapshot_data
 
     with _deploy_lock:
@@ -166,6 +212,9 @@ def start_deploy(model_path: str, tl_id: str | None = None) -> dict:
             "video_complete": False,
             "model_path": model_path,
             "tl_id": tl_id,
+            "network_id": network_id,
+            "grid_rows": grid_rows,
+            "grid_cols": grid_cols,
             "last_action": None,
         })
 
@@ -173,7 +222,7 @@ def start_deploy(model_path: str, tl_id: str | None = None) -> dict:
 
     _deploy_thread = threading.Thread(
         target=_deploy_loop,
-        args=(tl_id,),
+        args=(tl_id, grid_rows, grid_cols, network_id),
         daemon=True,
         name="deploy-loop",
     )
@@ -241,11 +290,26 @@ def list_videos() -> list[dict]:
 # ── Internal loop ─────────────────────────────────────────────────────
 
 
-def _deploy_loop(tl_id: str | None) -> None:
+def _deploy_loop(tl_id: str | None, grid_rows: int, grid_cols: int, network_id: str | None = None) -> None:
     global _deploy_active, _snapshot_data
 
     try:
-        net_path = DEPLOY_SUMO_DIR / "grid_network.net.xml"
+        # Resolve network path
+        net_path = None
+        if network_id:
+            # Look for saved network in SAVED_NETWORKS_DIR
+            saved_path = SAVED_NETWORKS_DIR / f"{network_id}.net.xml"
+            if saved_path.exists():
+                net_path = saved_path
+                logger.info("Using saved network: %s", net_path)
+            else:
+                logger.warning("Saved network not found: %s. Falling back to grid.", saved_path)
+
+        if net_path is None:
+            # Generate the network with the specified dimensions
+            ensure_sumo_network(DEPLOY_SUMO_DIR, rows=grid_rows, cols=grid_cols, rebuild=True)
+            net_path = DEPLOY_SUMO_DIR / "grid_network.net.xml"
+        
         if not net_path.exists():
             raise FileNotFoundError(f"SUMO network not found: {net_path}")
 
@@ -278,7 +342,7 @@ def _deploy_loop(tl_id: str | None) -> None:
             # Keep the video stream alive (start_stream is idempotent)
             start_background_loop()
             tracked = get_tracked_vehicles()
-            veh_ids = _feed_vehicles(tracked, veh_ids)
+            veh_ids = _feed_vehicles(tracked, veh_ids, grid_rows, grid_cols)
 
             metrics = _sumo.step()
 

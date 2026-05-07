@@ -72,6 +72,11 @@ DEPLOY_VIDEO_DIR = Path(os.getenv(
     str(SIM_REALTIME_DIR / "data"),
 ))
 
+SAVED_NETWORKS_DIR = Path(os.getenv(
+    "SAVED_NETWORKS_DIR",
+    str(BASE_DIR.parent.parent / "simulation" / "networks"),
+))
+
 # Deploy loop timing
 DEPLOY_DECISION_INTERVAL_STEPS = int(os.getenv("DEPLOY_DECISION_INTERVAL_STEPS", "5"))
 

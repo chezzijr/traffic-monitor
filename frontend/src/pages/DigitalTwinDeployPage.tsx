@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Play, Square, Gauge, Cpu, Video, AlertTriangle } from 'lucide-react';
-import { digitalTwinDeployService, type DeployModelInfo, type DeploySnapshot, type DeployStatus } from '../services/digitalTwinDeployService';
+import { ArrowLeft, Play, Square, Gauge, Cpu, Video, AlertTriangle, Map, Layers } from 'lucide-react';
+import { digitalTwinDeployService, type DeploySnapshot, type DeployStatus } from '../services/digitalTwinDeployService';
+import { mapService } from '../services/mapService';
+import { modelService } from '../services/modelService';
+import type { TrainedModel } from '../types';
 
 export function DigitalTwinDeployPage() {
   const navigate = useNavigate();
-  const [models, setModels] = useState<DeployModelInfo[]>([]);
+  const [trainedModels, setTrainedModels] = useState<TrainedModel[]>([]);
+  const [networks, setNetworks] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
+  const [selectedNetwork, setSelectedNetwork] = useState<string>('');
   const [tlId, setTlId] = useState('');
   const [snapshot, setSnapshot] = useState<DeploySnapshot | null>(null);
   const [status, setStatus] = useState<DeployStatus | null>(null);
@@ -17,12 +22,19 @@ export function DigitalTwinDeployPage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    digitalTwinDeployService.listModels()
-      .then((data) => {
-        setModels(data);
-        if (data.length > 0) setSelectedModel(data[0].path);
+    Promise.all([
+      modelService.listModels(),
+      mapService.getNetworks(),
+    ])
+      .then(([models, nets]) => {
+        setTrainedModels(models);
+        setNetworks(nets);
+        if (models.length > 0) {
+          setSelectedModel(models[0].model_path);
+          setSelectedNetwork(models[0].network_id);
+        }
       })
-      .catch((err) => setError(err.message || 'Failed to load models'));
+      .catch((err) => setError(err.message || 'Failed to load data'));
   }, []);
 
   useEffect(() => {
@@ -52,12 +64,20 @@ export function DigitalTwinDeployPage() {
     setStarting(true);
     setError(null);
     try {
-      await digitalTwinDeployService.startDeploy(selectedModel, tlId || undefined);
+      await digitalTwinDeployService.startDeploy(selectedModel, tlId || undefined, selectedNetwork || undefined);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to start deploy';
       setError(msg);
     } finally {
       setStarting(false);
+    }
+  };
+
+  const handleModelSelect = (model: TrainedModel) => {
+    setSelectedModel(model.model_path);
+    setSelectedNetwork(model.network_id);
+    if (model.tl_id) {
+      setTlId(model.tl_id);
     }
   };
 
@@ -125,16 +145,16 @@ export function DigitalTwinDeployPage() {
             <h2 className="text-sm font-semibold uppercase tracking-widest text-slate-300">Deploy Control</h2>
           </div>
 
-          <label className="text-xs text-slate-400">Model</label>
-          <div className="mt-2 space-y-2">
-            {models.length === 0 ? (
-              <div className="text-sm text-slate-400">No models found.</div>
+          <label className="text-xs text-slate-400">Model (Trained Models)</label>
+          <div className="mt-2 space-y-2 max-h-[160px] overflow-y-auto pr-1 custom-scrollbar">
+            {trainedModels.length === 0 ? (
+              <div className="text-sm text-slate-400">No trained models found.</div>
             ) : (
-              models.map((model) => (
+              trainedModels.map((model) => (
                 <label
-                  key={model.path}
+                  key={model.model_id}
                   className={`flex items-center justify-between px-3 py-2 rounded-xl border transition-colors cursor-pointer ${
-                    selectedModel === model.path
+                    selectedModel === model.model_path
                       ? 'border-cyan-400/60 bg-cyan-400/10'
                       : 'border-white/10 hover:border-white/20'
                   }`}
@@ -143,19 +163,41 @@ export function DigitalTwinDeployPage() {
                     <input
                       type="radio"
                       name="model"
-                      value={model.path}
-                      checked={selectedModel === model.path}
-                      onChange={() => setSelectedModel(model.path)}
+                      value={model.model_path}
+                      checked={selectedModel === model.model_path}
+                      onChange={() => handleModelSelect(model)}
                       className="accent-cyan-400"
                     />
                     <div>
-                      <div className="text-sm text-slate-200">{model.name}</div>
-                      <div className="text-xs text-slate-500">{model.size_mb} MB</div>
+                      <div className="text-sm text-slate-200">{model.model_id}</div>
+                      <div className="text-[10px] text-slate-500 uppercase tracking-tight">{model.algorithm} • {model.network_id}</div>
                     </div>
                   </div>
                 </label>
               ))
             )}
+          </div>
+
+          <div className="mt-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Map size={14} className="text-cyan-400" />
+              <label className="text-xs text-slate-400">Target Network</label>
+            </div>
+            <select
+              value={selectedNetwork}
+              onChange={(e) => setSelectedNetwork(e.target.value)}
+              className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-400/60"
+            >
+              <option value="">Dynamic Grid (Default)</option>
+              {networks.map((net) => (
+                <option key={net} value={net}>
+                  {net}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1.5 text-[10px] text-slate-500 italic">
+              {selectedNetwork ? `Using saved network layout: ${selectedNetwork}` : 'Map will be generated as a dynamic grid.'}
+            </p>
           </div>
 
           <div className="mt-4">

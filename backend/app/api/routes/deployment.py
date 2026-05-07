@@ -29,9 +29,13 @@ def deploy_model(request: DeployModelRequest) -> dict:
             tl_id=request.tl_id,
             model_path=request.model_path,
             network_id=request.network_id,
+            grid_rows=request.grid_rows,
+            grid_cols=request.grid_cols,
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/undeploy")

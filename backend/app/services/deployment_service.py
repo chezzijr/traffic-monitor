@@ -58,14 +58,25 @@ _state = _DeploymentState()
 def deploy_model(
     tl_id: str,
     model_path: str,
-    network_id: str,
+    network_id: str | None,
     controlled_lanes: list[str] | None = None,
     num_phases: int = 4,
+    grid_rows: int = 2,
+    grid_cols: int = 3,
 ) -> dict[str, Any]:
     """Deploy a trained model to a traffic light."""
     from pathlib import Path
 
     model_id = Path(model_path).stem
+
+    metadata = ml_service.get_model_metadata(model_path)
+    resolved_network_id = network_id or metadata.get("network_id")
+    if not resolved_network_id or resolved_network_id == "unknown":
+        raise ValueError("Network ID is required or missing from model metadata")
+
+    trained_tl_ids = metadata.get("tl_ids") or []
+    if trained_tl_ids and tl_id not in trained_tl_ids:
+        raise ValueError("Traffic light is not part of the trained junction set")
 
     # Load the model
     ml_service.load_model(model_path)
@@ -74,7 +85,7 @@ def deploy_model(
         tl_id=tl_id,
         model_id=model_id,
         model_path=model_path,
-        network_id=network_id,
+        network_id=resolved_network_id,
         ai_control_enabled=True,
         controlled_lanes=controlled_lanes,
         num_phases=num_phases,

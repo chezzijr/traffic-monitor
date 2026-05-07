@@ -245,6 +245,8 @@ class CoLightTrainer:
             "phase_lengths": agent.phase_lengths,
             "edge_index": self.env.edge_index,
             "tl_ids": self.env.tl_ids,
+            "network_id": getattr(self.env, "network_id", None),
+            "scenario": getattr(self.env, "scenario", None),
             "model_state": agent.q_network.state_dict(),
             "target_state": agent.target_network.state_dict(),
             "network_params": {

@@ -65,10 +65,11 @@ export const digitalTwinDeployService = {
     return res.data;
   },
 
-  async startDeploy(modelPath: string, tlId?: string): Promise<{ status: string }>{
+  async startDeploy(modelPath: string, tlId?: string, networkId?: string): Promise<{ status: string }>{
     const res = await axios.post(`${DIGITAL_TWIN_BASE}/deploy/start`, {
       model_path: modelPath,
       tl_id: tlId || null,
+      network_id: networkId || null,
     });
     return res.data;
   },

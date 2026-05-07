@@ -331,6 +331,9 @@ class TrafficLightTrainer:
             "algorithm": self.algorithm.value,
             "ob_length": self._ob_length,
             "num_actions": self._num_actions,
+            "network_id": getattr(self.env, "network_id", None),
+            "tl_id": getattr(self.env, "tl_id", None),
+            "scenario": getattr(self.env, "scenario", None),
         }
         if self.algorithm == Algorithm.DQN:
             dqn_agent: DQNAgent = self.agent  # type: ignore[assignment]

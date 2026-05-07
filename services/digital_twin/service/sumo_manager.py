@@ -119,7 +119,7 @@ class SumoManager:
     def add_vehicle(
         self,
         veh_id: str,
-        route_edges: list[str],
+        route: list[str] | str,
         lane_index: int = 0,
         pos: float = 0.1,
         speed: float = 0.0,
@@ -127,15 +127,17 @@ class SumoManager:
         """Add a vehicle to the simulation. Returns True on success."""
         conn = self._conn()
 
-        # Ensure a route exists for this edge sequence
-        route_id = "_".join(route_edges)
-        if route_id not in self._defined_routes:
-            try:
-                conn.route.add(route_id, route_edges)
-                self._defined_routes.add(route_id)
-            except TraCIException:
-                # Route may already exist from a previous run
-                self._defined_routes.add(route_id)
+        if isinstance(route, list):
+            # Ensure a route exists for this edge sequence
+            route_id = "_".join(route)
+            if route_id not in self._defined_routes:
+                try:
+                    conn.route.add(route_id, route)
+                    self._defined_routes.add(route_id)
+                except TraCIException:
+                    self._defined_routes.add(route_id)
+        else:
+            route_id = route
 
         try:
             conn.vehicle.add(
@@ -158,25 +160,34 @@ class SumoManager:
         except TraCIException:
             pass  # vehicle may have left
 
-    def reroute_vehicle(self, veh_id: str, new_route_edges: list[str]) -> bool:
-        """Change a vehicle's route. Returns True on success."""
+    def reroute_vehicle(self, veh_id: str, route_or_edge: list[str] | str) -> bool:
+        """Change a vehicle's route or target edge. Returns True on success."""
         conn = self._conn()
 
-        # Ensure route is defined
-        route_id = "_".join(new_route_edges)
-        if route_id not in self._defined_routes:
-            try:
-                conn.route.add(route_id, new_route_edges)
-                self._defined_routes.add(route_id)
-            except TraCIException:
-                self._defined_routes.add(route_id)
+        if isinstance(route_or_edge, list):
+            # Ensure route is defined
+            route_id = "_".join(route_or_edge)
+            if route_id not in self._defined_routes:
+                try:
+                    conn.route.add(route_id, route_or_edge)
+                    self._defined_routes.add(route_id)
+                except TraCIException:
+                    self._defined_routes.add(route_id)
 
-        try:
-            conn.vehicle.setRoute(veh_id, new_route_edges)
-            return True
-        except TraCIException as exc:
-            logger.debug("Failed to reroute %s: %s", veh_id, exc)
-            return False
+            try:
+                conn.vehicle.setRoute(veh_id, route_or_edge)
+                return True
+            except TraCIException as exc:
+                logger.debug("Failed to setRoute for %s: %s", veh_id, exc)
+                return False
+        else:
+            # Single edge ID -> changeTarget
+            try:
+                conn.vehicle.changeTarget(veh_id, route_or_edge)
+                return True
+            except TraCIException as exc:
+                logger.debug("Failed to changeTarget for %s: %s", veh_id, exc)
+                return False
 
     def remove_vehicle(self, veh_id: str) -> None:
         """Remove a vehicle from the simulation."""

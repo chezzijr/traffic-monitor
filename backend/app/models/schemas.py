@@ -255,7 +255,9 @@ class DeployModelRequest(BaseModel):
 
     tl_id: str = Field(..., description="Traffic light to control")
     model_path: str = Field(..., description="Path to the trained model")
-    network_id: str = Field(..., description="Network the model was trained on")
+    network_id: str | None = Field(None, description="Network the model was trained on")
+    grid_rows: int = Field(default=2, description="Number of rows in the grid")
+    grid_cols: int = Field(default=3, description="Number of columns in the grid")
 
 
 class DeployedModelInfo(BaseModel):

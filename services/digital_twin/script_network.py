@@ -264,140 +264,149 @@ def _edge_id(from_node, to_node):
 # Network Setup Functions (3×2 Grid)
 # ============================================================
 
-def _build_all_edge_ids():
-    """Return a list of all edge IDs in the 3×2 grid."""
+def _build_all_edge_ids(rows=GRID_ROWS, cols=GRID_COLS):
+    """Return a list of all edge IDs in the grid."""
     edges = []
     # Internal horizontal
-    for r in range(GRID_ROWS):
-        for c in range(GRID_COLS - 1):
+    for r in range(rows):
+        for c in range(cols - 1):
             n1, n2 = _node_id(r, c), _node_id(r, c + 1)
             edges.extend([_edge_id(n1, n2), _edge_id(n2, n1)])
     # Internal vertical
-    for r in range(GRID_ROWS - 1):
-        for c in range(GRID_COLS):
+    for r in range(rows - 1):
+        for c in range(cols):
             n1, n2 = _node_id(r, c), _node_id(r + 1, c)
             edges.extend([_edge_id(n1, n2), _edge_id(n2, n1)])
     # Boundary edges
-    for c in range(GRID_COLS):
+    for c in range(cols):
         bn, inode = _boundary_node_id("north", 0, c), _node_id(0, c)
         edges.extend([_edge_id(bn, inode), _edge_id(inode, bn)])
-    for c in range(GRID_COLS):
-        bn, inode = _boundary_node_id("south", GRID_ROWS - 1, c), _node_id(GRID_ROWS - 1, c)
+    for c in range(cols):
+        bn, inode = _boundary_node_id("south", rows - 1, c), _node_id(rows - 1, c)
         edges.extend([_edge_id(bn, inode), _edge_id(inode, bn)])
-    for r in range(GRID_ROWS):
+    for r in range(rows):
         bn, inode = _boundary_node_id("west", r, 0), _node_id(r, 0)
         edges.extend([_edge_id(bn, inode), _edge_id(inode, bn)])
-    for r in range(GRID_ROWS):
-        bn, inode = _boundary_node_id("east", r, GRID_COLS - 1), _node_id(r, GRID_COLS - 1)
+    for r in range(rows):
+        bn, inode = _boundary_node_id("east", r, cols - 1), _node_id(r, cols - 1)
         edges.extend([_edge_id(bn, inode), _edge_id(inode, bn)])
     return edges
 
 
-def generate_grid_nod_file(output_file):
-    """Generate nodes for the 3×2 grid network."""
+def generate_grid_nod_file(output_file, rows=GRID_ROWS, cols=GRID_COLS):
+    """Generate nodes for the grid network."""
     root = ET.Element("nodes")
-    for r in range(GRID_ROWS):
-        for c in range(GRID_COLS):
+    for r in range(rows):
+        for c in range(cols):
             x = c * EDGE_LENGTH
-            y = (GRID_ROWS - 1 - r) * EDGE_LENGTH
+            y = (rows - 1 - r) * EDGE_LENGTH
             ET.SubElement(root, "node", id=_node_id(r, c),
                           x=str(x), y=str(y), type="traffic_light")
-    # Boundary nodes
-    for c in range(GRID_COLS):
+    # Boundary nodes (15m from the edge intersections as per user request)
+    BOUNDARY_LENGTH = 15.0
+    
+    for c in range(cols):
+        # North
         ET.SubElement(root, "node", id=_boundary_node_id("north", 0, c),
                       x=str(c * EDGE_LENGTH),
-                      y=str((GRID_ROWS - 1) * EDGE_LENGTH + EDGE_LENGTH), type="priority")
-    for c in range(GRID_COLS):
-        ET.SubElement(root, "node", id=_boundary_node_id("south", GRID_ROWS - 1, c),
-                      x=str(c * EDGE_LENGTH), y=str(-EDGE_LENGTH), type="priority")
-    for r in range(GRID_ROWS):
+                      y=str((rows - 1) * EDGE_LENGTH + BOUNDARY_LENGTH), type="priority")
+    for c in range(cols):
+        # South
+        ET.SubElement(root, "node", id=_boundary_node_id("south", rows - 1, c),
+                      x=str(c * EDGE_LENGTH), y=str(-BOUNDARY_LENGTH), type="priority")
+    for r in range(rows):
+        # West
         ET.SubElement(root, "node", id=_boundary_node_id("west", r, 0),
-                      x=str(-EDGE_LENGTH),
-                      y=str((GRID_ROWS - 1 - r) * EDGE_LENGTH), type="priority")
-    for r in range(GRID_ROWS):
-        ET.SubElement(root, "node", id=_boundary_node_id("east", r, GRID_COLS - 1),
-                      x=str((GRID_COLS - 1) * EDGE_LENGTH + EDGE_LENGTH),
-                      y=str((GRID_ROWS - 1 - r) * EDGE_LENGTH), type="priority")
+                      x=str(-BOUNDARY_LENGTH),
+                      y=str((rows - 1 - r) * EDGE_LENGTH), type="priority")
+    for r in range(rows):
+        # East
+        ET.SubElement(root, "node", id=_boundary_node_id("east", r, cols - 1),
+                      x=str((cols - 1) * EDGE_LENGTH + BOUNDARY_LENGTH),
+                      y=str((rows - 1 - r) * EDGE_LENGTH), type="priority")
     tree = ET.ElementTree(root)
     ET.indent(tree, space="    ")
     tree.write(output_file, encoding="utf-8", xml_declaration=True)
-    print(f"Generated 3×2 grid node file: {output_file}")
+    print(f"Generated {rows}x{cols} grid node file: {output_file}")
 
 
-def generate_grid_edg_file(output_file):
-    """Generate edges for the 3×2 grid (bidirectional internal + boundary)."""
+def generate_grid_edg_file(output_file, rows=GRID_ROWS, cols=GRID_COLS):
+    """Generate edges for the grid (bidirectional internal + boundary)."""
     root = ET.Element("edges")
-    for r in range(GRID_ROWS):
-        for c in range(GRID_COLS - 1):
+    # Internal horizontal
+    for r in range(rows):
+        for c in range(cols - 1):
             n1, n2 = _node_id(r, c), _node_id(r, c + 1)
             ET.SubElement(root, "edge", **{"from": n1, "to": n2, "id": _edge_id(n1, n2), "type": "2L45", "numLanes": "2"})
             ET.SubElement(root, "edge", **{"from": n2, "to": n1, "id": _edge_id(n2, n1), "type": "2L45", "numLanes": "2"})
-    for r in range(GRID_ROWS - 1):
-        for c in range(GRID_COLS):
+    # Internal vertical
+    for r in range(rows - 1):
+        for c in range(cols):
             n1, n2 = _node_id(r, c), _node_id(r + 1, c)
             ET.SubElement(root, "edge", **{"from": n1, "to": n2, "id": _edge_id(n1, n2), "type": "2L45", "numLanes": "2"})
             ET.SubElement(root, "edge", **{"from": n2, "to": n1, "id": _edge_id(n2, n1), "type": "2L45", "numLanes": "2"})
-    for c in range(GRID_COLS):
+    # Boundary edges
+    for c in range(cols):
         bn, inode = _boundary_node_id("north", 0, c), _node_id(0, c)
         ET.SubElement(root, "edge", **{"from": bn, "to": inode, "id": _edge_id(bn, inode), "type": "2L45", "numLanes": "2"})
         ET.SubElement(root, "edge", **{"from": inode, "to": bn, "id": _edge_id(inode, bn), "type": "2L45", "numLanes": "2"})
-    for c in range(GRID_COLS):
-        bn, inode = _boundary_node_id("south", GRID_ROWS - 1, c), _node_id(GRID_ROWS - 1, c)
+    for c in range(cols):
+        bn, inode = _boundary_node_id("south", rows - 1, c), _node_id(rows - 1, c)
         ET.SubElement(root, "edge", **{"from": bn, "to": inode, "id": _edge_id(bn, inode), "type": "2L45", "numLanes": "2"})
         ET.SubElement(root, "edge", **{"from": inode, "to": bn, "id": _edge_id(inode, bn), "type": "2L45", "numLanes": "2"})
-    for r in range(GRID_ROWS):
+    for r in range(rows):
         bn, inode = _boundary_node_id("west", r, 0), _node_id(r, 0)
         ET.SubElement(root, "edge", **{"from": bn, "to": inode, "id": _edge_id(bn, inode), "type": "2L45", "numLanes": "2"})
         ET.SubElement(root, "edge", **{"from": inode, "to": bn, "id": _edge_id(inode, bn), "type": "2L45", "numLanes": "2"})
-    for r in range(GRID_ROWS):
-        bn, inode = _boundary_node_id("east", r, GRID_COLS - 1), _node_id(r, GRID_COLS - 1)
+    for r in range(rows):
+        bn, inode = _boundary_node_id("east", r, cols - 1), _node_id(r, cols - 1)
         ET.SubElement(root, "edge", **{"from": bn, "to": inode, "id": _edge_id(bn, inode), "type": "2L45", "numLanes": "2"})
         ET.SubElement(root, "edge", **{"from": inode, "to": bn, "id": _edge_id(inode, bn), "type": "2L45", "numLanes": "2"})
     tree = ET.ElementTree(root)
     ET.indent(tree, space="    ")
     tree.write(output_file, encoding="utf-8", xml_declaration=True)
-    print(f"Generated 3×2 grid edge file: {output_file}")
+    print(f"Generated {rows}x{cols} grid edge file: {output_file}")
 
 
-def get_boundary_entry_edges():
+def get_boundary_entry_edges(rows=GRID_ROWS, cols=GRID_COLS):
     """Return dict: direction → list of (boundary_node, intersection_node, entry_edge_id)."""
     entries = {"north": [], "south": [], "west": [], "east": []}
-    for c in range(GRID_COLS):
+    for c in range(cols):
         bn, inode = _boundary_node_id("north", 0, c), _node_id(0, c)
         entries["north"].append((bn, inode, _edge_id(bn, inode)))
-    for c in range(GRID_COLS):
-        bn, inode = _boundary_node_id("south", GRID_ROWS - 1, c), _node_id(GRID_ROWS - 1, c)
+    for c in range(cols):
+        bn, inode = _boundary_node_id("south", rows - 1, c), _node_id(rows - 1, c)
         entries["south"].append((bn, inode, _edge_id(bn, inode)))
-    for r in range(GRID_ROWS):
+    for r in range(rows):
         bn, inode = _boundary_node_id("west", r, 0), _node_id(r, 0)
         entries["west"].append((bn, inode, _edge_id(bn, inode)))
-    for r in range(GRID_ROWS):
-        bn, inode = _boundary_node_id("east", r, GRID_COLS - 1), _node_id(r, GRID_COLS - 1)
+    for r in range(rows):
+        bn, inode = _boundary_node_id("east", r, cols - 1), _node_id(r, cols - 1)
         entries["east"].append((bn, inode, _edge_id(bn, inode)))
     return entries
 
 
-def get_boundary_exit_edges():
+def get_boundary_exit_edges(rows=GRID_ROWS, cols=GRID_COLS):
     """Return dict: direction → list of (intersection_node, boundary_node, exit_edge_id)."""
     exits = {"north": [], "south": [], "west": [], "east": []}
-    for c in range(GRID_COLS):
+    for c in range(cols):
         bn, inode = _boundary_node_id("north", 0, c), _node_id(0, c)
         exits["north"].append((inode, bn, _edge_id(inode, bn)))
-    for c in range(GRID_COLS):
-        bn, inode = _boundary_node_id("south", GRID_ROWS - 1, c), _node_id(GRID_ROWS - 1, c)
+    for c in range(cols):
+        bn, inode = _boundary_node_id("south", rows - 1, c), _node_id(rows - 1, c)
         exits["south"].append((inode, bn, _edge_id(inode, bn)))
-    for r in range(GRID_ROWS):
+    for r in range(rows):
         bn, inode = _boundary_node_id("west", r, 0), _node_id(r, 0)
         exits["west"].append((inode, bn, _edge_id(inode, bn)))
-    for r in range(GRID_ROWS):
-        bn, inode = _boundary_node_id("east", r, GRID_COLS - 1), _node_id(r, GRID_COLS - 1)
+    for r in range(rows):
+        bn, inode = _boundary_node_id("east", r, cols - 1), _node_id(r, cols - 1)
         exits["east"].append((inode, bn, _edge_id(inode, bn)))
     return exits
 
 
-def _find_route_edges(entry_edge_id, exit_edge_id):
+def _find_route_edges(entry_edge_id, exit_edge_id, rows=GRID_ROWS, cols=GRID_COLS):
     """BFS to find shortest route (edge list) between two boundary edges."""
-    all_edges = _build_all_edge_ids()
+    all_edges = _build_all_edge_ids(rows, cols)
     edge_to_nodes = {}
     node_to_outgoing = {}
     for eid in all_edges:
@@ -421,7 +430,7 @@ def _find_route_edges(entry_edge_id, exit_edge_id):
     return None
 
 
-def generate_grid_route_file(output_file):
+def generate_grid_route_file(output_file, rows=GRID_ROWS, cols=GRID_COLS):
     """Generate route file with vehicle types and all boundary-to-boundary routes."""
     root = ET.Element("routes")
     for cls_name, dims in VTYPE_DIMENSIONS.items():
@@ -429,8 +438,8 @@ def generate_grid_route_file(output_file):
         attrs.update(dims)
         ET.SubElement(root, "vType", **attrs)
 
-    entry_edges = get_boundary_entry_edges()
-    exit_edges = get_boundary_exit_edges()
+    entry_edges = get_boundary_entry_edges(rows, cols)
+    exit_edges = get_boundary_exit_edges(rows, cols)
     route_count = 0
     for entry_dir, entry_list in entry_edges.items():
         for exit_dir, exit_list in exit_edges.items():
@@ -438,7 +447,7 @@ def generate_grid_route_file(output_file):
                 continue
             for _, _, entry_eid in entry_list:
                 for _, _, exit_eid in exit_list:
-                    route_str = _find_route_edges(entry_eid, exit_eid)
+                    route_str = _find_route_edges(entry_eid, exit_eid, rows, cols)
                     if route_str:
                         route_id = f"route_{entry_eid}_to_{exit_eid}"
                         ET.SubElement(root, "route", id=route_id, edges=route_str)
@@ -472,8 +481,8 @@ def generate_realtime_config(output_file, step_length=0.033):
     print(f"Generated real-time config: {output_file}")
 
 
-def setup_sumo_network(output_dir):
-    """Generate all SUMO network files for the 3×2 grid and run netconvert."""
+def setup_sumo_network(output_dir, rows=GRID_ROWS, cols=GRID_COLS):
+    """Generate all SUMO network files for the grid and run netconvert."""
     os.makedirs(output_dir, exist_ok=True)
     nod_path = os.path.join(output_dir, "nod.xml")
     edg_path = os.path.join(output_dir, "edg.xml")
@@ -481,25 +490,26 @@ def setup_sumo_network(output_dir):
     route_path = os.path.join(output_dir, "route.rou.xml")
     net_path = os.path.join(output_dir, "grid_network.net.xml")
 
-    generate_grid_nod_file(nod_path)
-    generate_grid_edg_file(edg_path)
+    generate_grid_nod_file(nod_path, rows, cols)
+    generate_grid_edg_file(edg_path, rows, cols)
     generate_type_file(type_path)
-    generate_grid_route_file(route_path)
+    generate_grid_route_file(route_path, rows, cols)
 
     netconvert_cmd = (
         f'netconvert --node-files "{nod_path}" '
         f'--edge-files "{edg_path}" '
         f'--type-files "{type_path}" '
+        f'--no-turnarounds=true '
         f'-o "{net_path}"'
     )
     print(f"Running: {netconvert_cmd}")
     ret = os.system(netconvert_cmd)
     if ret != 0:
         raise RuntimeError(f"netconvert failed with return code {ret}")
-    print("3×2 grid SUMO network files generated successfully!")
+    print(f"{rows}x{cols} grid SUMO network files generated successfully!")
 
 
-def ensure_sumo_network(output_dir, rebuild=False):
+def ensure_sumo_network(output_dir, rows=GRID_ROWS, cols=GRID_COLS, rebuild=False):
     """Return SUMO config path, generating files only when requested.
 
     By default we reuse the pre-generated network in simulate_real_traffic/sumo.
@@ -512,7 +522,7 @@ def ensure_sumo_network(output_dir, rebuild=False):
     if not rebuild and config_path.exists() and net_path.exists() and route_path.exists():
         return config_path
 
-    setup_sumo_network(str(output_dir))
+    setup_sumo_network(str(output_dir), rows, cols)
     generate_realtime_config(str(config_path))
     return config_path
 
@@ -638,13 +648,10 @@ class VehicleManager:
 
         return True
 
-    def _spawn_vehicle(self, sumo_id, vehicle_class, entry_region):
+    def _spawn_vehicle(self, sumo_id, vehicle_class, entry_region, rows=GRID_ROWS, cols=GRID_COLS):
         """
         Spawn a vehicle at ALL boundary entry edges for the given direction
-        across the 3×2 grid, with ±10% variance per intersection.
-        
-        E.g., if entry_region="south", spawns at all 3 south boundary edges
-        (one per column), each with ~10% chance to skip or spawn an extra.
+        across the grid, with ±10% variance per intersection.
         """
         vtype_id = f"vType_{vehicle_class}"
         exit_region = OPPOSITE_DIRECTION.get(entry_region, "south")
@@ -652,12 +659,14 @@ class VehicleManager:
             entry_region = "north"
             exit_region = "south"
 
-        entry_edges = get_boundary_entry_edges()[entry_region]
-        exit_edges_list = get_boundary_exit_edges()[exit_region]
+        entry_edges = get_boundary_entry_edges(rows, cols)[entry_region]
+        exit_edges_list = get_boundary_exit_edges(rows, cols)[exit_region]
         preferred_lane = 0 if vehicle_class == "motorcycle" else 1
 
         spawned_any = False
         for idx, (_, _, entry_eid) in enumerate(entry_edges):
+            if not exit_edges_list:
+                continue
             _, _, exit_eid = random.choice(exit_edges_list)
             route_id = f"route_{entry_eid}_to_{exit_eid}"
 
@@ -686,37 +695,35 @@ class VehicleManager:
         # ~10% chance to spawn one extra clone at a random entry for this direction
         if random.random() < SPAWN_VARIANCE and entry_edges:
             _, _, entry_eid = random.choice(entry_edges)
-            _, _, exit_eid = random.choice(exit_edges_list)
-            route_id = f"route_{entry_eid}_to_{exit_eid}"
-            extra_vid = f"{sumo_id}_extra"
-            try:
-                traci.vehicle.add(
-                    vehID=extra_vid, routeID=route_id, typeID=vtype_id,
-                    depart="now", departLane=str(preferred_lane),
-                    departSpeed="max", departPos="0.1",
-                )
-                traci.vehicle.setSpeedMode(extra_vid, 31)
-                traci.vehicle.setLaneChangeMode(extra_vid, 1621)
-                traci.vehicle.setSpeed(extra_vid, -1)
-                print(f"  [+] Extra spawn {extra_vid} ({vehicle_class}) on {entry_eid}")
-            except traci.exceptions.TraCIException:
-                pass
+            if exit_edges_list:
+                _, _, exit_eid = random.choice(exit_edges_list)
+                route_id = f"route_{entry_eid}_to_{exit_eid}"
+                extra_vid = f"{sumo_id}_extra"
+                try:
+                    traci.vehicle.add(
+                        vehID=extra_vid, routeID=route_id, typeID=vtype_id,
+                        depart="now", departLane=str(preferred_lane),
+                        departSpeed="max", departPos="0.1",
+                    )
+                    traci.vehicle.setSpeedMode(extra_vid, 31)
+                    traci.vehicle.setLaneChangeMode(extra_vid, 1621)
+                    traci.vehicle.setSpeed(extra_vid, -1)
+                    print(f"  [+] Extra spawn {extra_vid} ({vehicle_class}) on {entry_eid}")
+                except traci.exceptions.TraCIException:
+                    pass
 
         return spawned_any
 
-    def _reroute_vehicle(self, info, new_exit_region):
+    def _reroute_vehicle(self, info, new_exit_region, rows=GRID_ROWS, cols=GRID_COLS):
         """
         Change a vehicle's route when a turn is detected in the video.
-
-        The vehicle entered from info['entry'] and is now observed in
-        new_exit_region, so we change its SUMO route accordingly.
         """
         sumo_id = info["sumo_id"]
         entry = info["entry"]
 
         # In the grid network, rerouting is done by changing the vehicle's target edge
         # to a random exit edge on the new exit direction
-        exit_edges_list = get_boundary_exit_edges().get(new_exit_region, [])
+        exit_edges_list = get_boundary_exit_edges(rows, cols).get(new_exit_region, [])
         if not exit_edges_list:
             return
 
