@@ -8,6 +8,9 @@ traffic scenarios.
 import logging
 import os
 import subprocess
+import sys
+import platform
+import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -49,14 +52,62 @@ JUNCTION_SCENARIO_RATES = {
 
 
 def _check_sumo_tools() -> None:
-    """Check if SUMO tools are available."""
-    random_trips_path = Path(SUMO_HOME) / "tools" / "randomTrips.py"
-    duarouter_path = Path(SUMO_HOME) / "bin" / "duarouter"
+    """Backward-compatible small helper kept for tests: call _locate_sumo_tools."""
+    _locate_sumo_tools()
 
-    if not random_trips_path.exists():
-        raise RuntimeError(f"randomTrips.py not found at {random_trips_path}")
-    if not duarouter_path.exists():
-        raise RuntimeError(f"duarouter not found at {duarouter_path}")
+
+def _locate_sumo_tools() -> tuple[Path, Path]:
+    """Locate SUMO's randomTrips.py and duarouter in a cross-platform way.
+
+    Returns (randomTrips_path, duarouter_path) as Path objects.
+    Raises RuntimeError with actionable message if not found.
+    """
+    sumo_home = Path(os.environ.get("SUMO_HOME", "/usr/share/sumo"))
+    tools_dir = sumo_home / "tools"
+    bin_dir = sumo_home / "bin"
+
+    # randomTrips.py candidate
+    random_trips = tools_dir / "randomTrips.py"
+    if not random_trips.exists():
+        # Try a PATH search (some installs put tools on PATH) or any matching file under tools
+        for p in Path(os.environ.get("PATH", "")).parts if isinstance(os.environ.get("PATH", ""), str) else []:
+            candidate = Path(p) / "randomTrips.py"
+            if candidate.exists():
+                random_trips = candidate
+                break
+        else:
+            # fallback: check for any file starting with randomTrips in tools_dir
+            if tools_dir.exists():
+                for f in tools_dir.glob("randomTrips*"):
+                    if f.is_file():
+                        random_trips = f
+                        break
+
+    # duarouter candidate (consider Windows .exe)
+    duarouter_name = "duarouter.exe" if platform.system() == "Windows" else "duarouter"
+    duarouter = bin_dir / duarouter_name
+    if not duarouter.exists():
+        # try PATH
+        duarouter_path = shutil.which("duarouter")
+        if duarouter_path:
+            duarouter = Path(duarouter_path)
+
+    # Final verification with helpful error messages
+    missing = []
+    if not random_trips.exists():
+        missing.append(f"randomTrips.py (expected under {tools_dir} or on PATH)")
+    if not duarouter.exists():
+        missing.append(f"duarouter{' (.exe on Windows)' if platform.system() == 'Windows' else ''} (expected under {bin_dir} or on PATH)")
+    if missing:
+        hint = (
+            f"SUMO tools not found: {', '.join(missing)}. "
+            "Set SUMO_HOME to your SUMO installation (example: "
+            "'C:\\Program Files (x86)\\Eclipse\\Sumo' on Windows or '/usr/share/sumo' on Linux), "
+            "or add the SUMO 'bin' and 'tools' directories to your PATH."
+        )
+        raise RuntimeError(hint)
+
+    return (random_trips, duarouter)
 
 
 def generate_routes(
@@ -90,7 +141,8 @@ def generate_routes(
         FileNotFoundError: If network file does not exist
         ValueError: If invalid scenario is provided
     """
-    _check_sumo_tools()
+    # Ensure SUMO tools are present and get their resolved paths
+    random_trips_path, duarouter_path = _locate_sumo_tools()
 
     network_file = Path(network_path)
     if not network_file.exists():
@@ -116,9 +168,8 @@ def generate_routes(
         f"(period={period:.2f}s, ~{estimated_trips} trips over {duration}s)"
     )
 
-    # SUMO tool paths
-    random_trips_path = Path(SUMO_HOME) / "tools" / "randomTrips.py"
-    duarouter_path = Path(SUMO_HOME) / "bin" / "duarouter"
+    # Use the located tool paths
+    # (already set by _locate_sumo_tools call above)
 
     # Track temp files for cleanup
     temp_trip_files: list[Path] = []
@@ -138,7 +189,7 @@ def generate_routes(
             temp_trip_files.append(type_trips_file)
 
             trips_cmd = [
-                "python3",
+                sys.executable,
                 str(random_trips_path),
                 "-n", str(network_path),
                 "-o", str(type_trips_file),
