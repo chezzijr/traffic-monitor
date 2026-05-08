@@ -55,6 +55,7 @@ class TrafficLightStateResponse(BaseModel):
 class DeployStartRequest(BaseModel):
     model_path: str
     tl_id: str | None = None
+    tl_ids: list[str] | None = None
     grid_rows: int = 2
     grid_cols: int = 3
     network_id: str | None = None

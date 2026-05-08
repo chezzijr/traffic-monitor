@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Play, Square, Gauge, Cpu, Video, AlertTriangle, Map, Layers } from 'lucide-react';
+import { ArrowLeft, Play, Square, Gauge, Cpu, Video, AlertTriangle, Map, Layers, Eye } from 'lucide-react';
 import { digitalTwinDeployService, type DeploySnapshot, type DeployStatus } from '../services/digitalTwinDeployService';
 import { mapService } from '../services/mapService';
 import { modelService } from '../services/modelService';
@@ -11,6 +11,7 @@ export function DigitalTwinDeployPage() {
   const [trainedModels, setTrainedModels] = useState<TrainedModel[]>([]);
   const [networks, setNetworks] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
+  const [selectedModelObj, setSelectedModelObj] = useState<TrainedModel | null>(null);
   const [selectedNetwork, setSelectedNetwork] = useState<string>('');
   const [tlId, setTlId] = useState('');
   const [snapshot, setSnapshot] = useState<DeploySnapshot | null>(null);
@@ -31,6 +32,7 @@ export function DigitalTwinDeployPage() {
         setNetworks(nets);
         if (models.length > 0) {
           setSelectedModel(models[0].model_path);
+          setSelectedModelObj(models[0]);
           setSelectedNetwork(models[0].network_id);
         }
       })
@@ -64,7 +66,13 @@ export function DigitalTwinDeployPage() {
     setStarting(true);
     setError(null);
     try {
-      await digitalTwinDeployService.startDeploy(selectedModel, tlId || undefined, selectedNetwork || undefined);
+      const tlIds = selectedModelObj?.tl_ids;
+      await digitalTwinDeployService.startDeploy(
+        selectedModel,
+        tlId || undefined,
+        selectedNetwork || undefined,
+        tlIds,
+      );
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to start deploy';
       setError(msg);
@@ -75,6 +83,7 @@ export function DigitalTwinDeployPage() {
 
   const handleModelSelect = (model: TrainedModel) => {
     setSelectedModel(model.model_path);
+    setSelectedModelObj(model);
     setSelectedNetwork(model.network_id);
     if (model.tl_id) {
       setTlId(model.tl_id);
@@ -90,17 +99,31 @@ export function DigitalTwinDeployPage() {
     }
   };
 
+  const isMultiAgent = status?.is_multi_agent || snapshot?.is_multi_agent;
+
   const phaseLabel = useMemo(() => {
     if (!snapshot?.tl_state) return '--';
-    return `Phase ${snapshot.tl_state.phase}`;
-  }, [snapshot?.tl_state]);
+    if (isMultiAgent && typeof snapshot.tl_state === 'object' && !('phase' in snapshot.tl_state)) {
+      const states = snapshot.tl_state as Record<string, { phase: number }>;
+      const keys = Object.keys(states);
+      if (keys.length === 0) return '--';
+      return `${keys.length} TLs active`;
+    }
+    const st = snapshot.tl_state as { phase: number };
+    return `Phase ${st.phase}`;
+  }, [snapshot?.tl_state, isMultiAgent]);
 
   const phaseColor = useMemo(() => {
-    const state = snapshot?.tl_state?.state || '';
+    if (!snapshot?.tl_state) return 'bg-slate-500';
+    if (isMultiAgent && typeof snapshot.tl_state === 'object' && !('state' in snapshot.tl_state)) {
+      return 'bg-cyan-500';
+    }
+    const st = snapshot.tl_state as { state?: string };
+    const state = st?.state || '';
     if (state.includes('G') || state.includes('g')) return 'bg-emerald-500';
     if (state.includes('y')) return 'bg-amber-400';
     return 'bg-red-500';
-  }, [snapshot?.tl_state?.state]);
+  }, [snapshot?.tl_state, isMultiAgent]);
 
   return (
     <div
@@ -237,15 +260,63 @@ export function DigitalTwinDeployPage() {
             </button>
           </div>
 
+          {status?.running && (
+            <button
+              onClick={() => navigate('/simulation/view')}
+              className="mt-3 w-full flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold bg-violet-500/30 hover:bg-violet-500/40 border border-violet-500/40 transition-colors"
+            >
+              <Eye size={14} />
+              View Simulation
+            </button>
+          )}
+
           <div className="mt-6 grid grid-cols-2 gap-3 text-xs text-slate-400">
             <div className="bg-white/5 border border-white/10 rounded-lg p-3">
-              <div className="text-[10px] uppercase tracking-widest text-slate-500">TL ID</div>
-              <div className="text-sm text-slate-200 mt-1">{status?.tl_id || '—'}</div>
+              <div className="text-[10px] uppercase tracking-widest text-slate-500">Mode</div>
+              <div className="text-sm text-slate-200 mt-1">
+                {isMultiAgent ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-violet-500" />
+                    Multi-Agent
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-cyan-500" />
+                    Single-Agent
+                  </span>
+                )}
+              </div>
             </div>
             <div className="bg-white/5 border border-white/10 rounded-lg p-3">
               <div className="text-[10px] uppercase tracking-widest text-slate-500">Last Action</div>
-              <div className="text-sm text-slate-200 mt-1">{status?.last_action ?? '—'}</div>
+              <div className="text-sm text-slate-200 mt-1">
+                {Array.isArray(status?.last_action)
+                  ? status.last_action.map((a, i) => `TL${i}:${a}`).join(', ')
+                  : status?.last_action ?? '—'}
+              </div>
             </div>
+            {isMultiAgent && (
+              <>
+                <div className="bg-white/5 border border-white/10 rounded-lg p-3">
+                  <div className="text-[10px] uppercase tracking-widest text-slate-500">AI-Controlled</div>
+                  <div className="text-sm text-emerald-300 mt-1">
+                    {status?.controlled_tl_ids?.length ?? snapshot?.controlled_tl_ids?.length ?? 0} intersections
+                  </div>
+                </div>
+                <div className="bg-white/5 border border-white/10 rounded-lg p-3">
+                  <div className="text-[10px] uppercase tracking-widest text-slate-500">Fixed-Time</div>
+                  <div className="text-sm text-amber-300 mt-1">
+                    {status?.fixed_tl_ids?.length ?? snapshot?.fixed_tl_ids?.length ?? 0} intersections
+                  </div>
+                </div>
+              </>
+            )}
+            {!isMultiAgent && (
+              <div className="bg-white/5 border border-white/10 rounded-lg p-3">
+                <div className="text-[10px] uppercase tracking-widest text-slate-500">TL ID</div>
+                <div className="text-sm text-slate-200 mt-1">{status?.tl_id || '—'}</div>
+              </div>
+            )}
           </div>
         </section>
 
@@ -272,12 +343,34 @@ export function DigitalTwinDeployPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="bg-white/5 border border-white/10 rounded-2xl p-4 shadow-lg shadow-black/30">
               <div className="text-xs uppercase tracking-widest text-slate-400 mb-3">Traffic Light State</div>
-              <div className="flex items-center gap-3">
-                <div className={`w-3 h-3 rounded-full ${phaseColor}`} />
-                <div className="text-sm text-slate-200">{phaseLabel}</div>
-              </div>
-              <div className="mt-2 text-xs text-slate-500">Program: {snapshot?.tl_state?.program || '—'}</div>
-              <div className="mt-2 text-xs text-slate-500">State: {snapshot?.tl_state?.state || '—'}</div>
+              {isMultiAgent && snapshot?.tl_state && typeof snapshot.tl_state === 'object' && !('phase' in snapshot.tl_state) ? (
+                <div className="space-y-2 max-h-[120px] overflow-y-auto pr-1">
+                  {Object.entries(snapshot.tl_state as Record<string, { tl_id: string; phase: number; state: string; program: string }>).map(([id, st]) => {
+                    const isControlled = snapshot.controlled_tl_ids?.includes(id);
+                    const stState = st.state || '';
+                    const color = stState.includes('G') || stState.includes('g') ? 'bg-emerald-500'
+                      : stState.includes('y') ? 'bg-amber-400' : 'bg-red-500';
+                    return (
+                      <div key={id} className="flex items-center gap-2 text-xs">
+                        <div className={`w-2 h-2 rounded-full ${color}`} />
+                        <span className="text-slate-300 font-mono text-[10px]">{id.slice(0, 12)}</span>
+                        <span className="text-slate-500">P{st.phase}</span>
+                        {isControlled && <span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-500/30 text-violet-300">AI</span>}
+                        {!isControlled && <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">Fixed</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center gap-3">
+                    <div className={`w-3 h-3 rounded-full ${phaseColor}`} />
+                    <div className="text-sm text-slate-200">{phaseLabel}</div>
+                  </div>
+                  <div className="mt-2 text-xs text-slate-500">Program: {(snapshot?.tl_state as { program?: string })?.program || '—'}</div>
+                  <div className="mt-2 text-xs text-slate-500">State: {(snapshot?.tl_state as { state?: string })?.state || '—'}</div>
+                </>
+              )}
             </div>
 
             <div className="bg-white/5 border border-white/10 rounded-2xl p-4 shadow-lg shadow-black/30">

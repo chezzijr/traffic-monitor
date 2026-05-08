@@ -29,7 +29,12 @@ export interface DeploySnapshot {
     lane: string;
     route: string[];
   }>;
-  tl_state?: {
+  tl_state?: Record<string, {
+    tl_id: string;
+    phase: number;
+    state: string;
+    program: string;
+  }> | {
     tl_id: string;
     phase: number;
     state: string;
@@ -41,7 +46,24 @@ export interface DeploySnapshot {
     avg_speed: number;
     arrived: number;
   };
-  ai_action?: number | null;
+  ai_action?: number | number[] | null;
+  is_multi_agent?: boolean;
+  controlled_tl_ids?: string[];
+  fixed_tl_ids?: string[];
+  network_geometry?: {
+    junctions: Array<{
+      id: string;
+      x: number;
+      y: number;
+    }>;
+    edges: Array<{
+      id: string;
+      lanes: Array<{
+        id: string;
+        shape: Array<{ x: number; y: number }>;
+      }>;
+    }>;
+  };
 }
 
 export interface DeployStatus {
@@ -51,7 +73,11 @@ export interface DeployStatus {
   video_complete: boolean;
   model_path?: string | null;
   tl_id?: string | null;
-  last_action?: number | null;
+  tl_ids?: string[];
+  last_action?: number | number[] | null;
+  is_multi_agent?: boolean;
+  controlled_tl_ids?: string[];
+  fixed_tl_ids?: string[];
 }
 
 export const digitalTwinDeployService = {
@@ -65,10 +91,11 @@ export const digitalTwinDeployService = {
     return res.data;
   },
 
-  async startDeploy(modelPath: string, tlId?: string, networkId?: string): Promise<{ status: string }>{
+  async startDeploy(modelPath: string, tlId?: string, networkId?: string, tlIds?: string[]): Promise<{ status: string }>{
     const res = await axios.post(`${DIGITAL_TWIN_BASE}/deploy/start`, {
       model_path: modelPath,
       tl_id: tlId || null,
+      tl_ids: tlIds || null,
       network_id: networkId || null,
     });
     return res.data;

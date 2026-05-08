@@ -1,0 +1,4 @@
+When I deploy it said multi-agent are not supported for this flow. I want to make it support. The deploy flow:
+1. When click deploy, it will generate the network like in frontend selected. If the intersection is at the edge, then what road is pointing to the edge will have length = 15m. If that road is connected  to another intersection then leave it
+2. The spawning logic: When tracking on video, it will apply the spawn logic to a single intersection, then other intersection will clone this intersection with deviation +- 20%. Make vehicle only spawn on the edge
+3. Deploy: After having the simulation, Agents will be deploy on those trained intersection and control those intersection. With the intersection that it doesn't control, apply fixed time control, with 33s green - 3s yellow - 30s red for each direction

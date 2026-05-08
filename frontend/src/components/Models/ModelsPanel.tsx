@@ -75,47 +75,57 @@ export function ModelsPanel() {
       return;
     }
     const isMulti = selectedModel.type === 'multi' || (selectedModel.tl_ids && selectedModel.tl_ids.length > 1);
-    if (isMulti) {
-      toast.error('Multi-agent models are not supported for deploy in this flow');
-      return;
-    }
-
-    const targetTlIds = selectedJunctionIds.length > 0
-      ? selectedJunctionIds
-      : (selectedDeployTlId ? [selectedDeployTlId] : []);
-
-    if (targetTlIds.length === 0) {
-      toast.error('Select intersections on the map or choose one in the list');
-      return;
-    }
 
     try {
-      const results = await Promise.allSettled(
-        targetTlIds.map((tlId) =>
-          modelService.deployModel({
-            tl_id: tlId,
-            model_path: selectedModel.model_path,
-            network_id: selectedModel.network_id,
-          })
-        )
-      );
-      const successes = results.filter((r) => r.status === 'fulfilled') as PromiseFulfilledResult<any>[];
-      const failures = results.length - successes.length;
-
-      successes.forEach((r) => addDeployment(r.value));
-
-      if (failures > 0) {
-        toast.error(`Deployed ${successes.length}, failed ${failures}`);
+      if (isMulti) {
+        // Multi-agent: single deploy call — Digital Twin handles all TLs
+        const primaryTlId = selectedModel.tl_ids?.[0] || selectedModel.tl_id || '';
+        const result = await modelService.deployModel({
+          tl_id: primaryTlId,
+          model_path: selectedModel.model_path,
+          network_id: selectedModel.network_id,
+        });
+        addDeployment(result);
+        toast.success(`Deployed multi-agent model to ${selectedModel.tl_ids?.length || 1} intersection(s)`);
       } else {
-        toast.success(`Deployed to ${successes.length} intersection(s)`);
+        // Single-agent: deploy per selected TL
+        const targetTlIds = selectedJunctionIds.length > 0
+          ? selectedJunctionIds
+          : (selectedDeployTlId ? [selectedDeployTlId] : []);
+
+        if (targetTlIds.length === 0) {
+          toast.error('Select intersections on the map or choose one in the list');
+          return;
+        }
+
+        const results = await Promise.allSettled(
+          targetTlIds.map((tlId) =>
+            modelService.deployModel({
+              tl_id: tlId,
+              model_path: selectedModel.model_path,
+              network_id: selectedModel.network_id,
+            })
+          )
+        );
+        const successes = results.filter((r) => r.status === 'fulfilled') as PromiseFulfilledResult<any>[];
+        const failures = results.length - successes.length;
+
+        successes.forEach((r) => addDeployment(r.value));
+
+        if (failures > 0) {
+          toast.error(`Deployed ${successes.length}, failed ${failures}`);
+        } else {
+          toast.success(`Deployed to ${successes.length} intersection(s)`);
+        }
       }
     } catch {
       toast.error('Failed to deploy model');
     }
   };
 
+  const isSelectedMulti = selectedModel && (selectedModel.type === 'multi' || (selectedModel.tl_ids && selectedModel.tl_ids.length > 1));
   const canDeploy = !!selectedModel
-    && (selectedJunctionIds.length > 0 || !!selectedDeployTlId)
+    && (selectedJunctionIds.length > 0 || !!selectedDeployTlId || (isSelectedMulti && (selectedModel.tl_ids?.length ?? 0) > 0))
     && (!currentNetworkId || selectedModel?.network_id === currentNetworkId);
 
   const handleDelete = async (modelId: string) => {

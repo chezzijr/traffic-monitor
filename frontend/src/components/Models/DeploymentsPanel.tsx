@@ -1,16 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Zap, ZapOff, XCircle, Eye } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useModelStore } from '../../store/modelStore';
 import { deploymentService } from '../../services/deploymentService';
 import { modelService } from '../../services/modelService';
-import { DeploymentSnapshotModal } from './DeploymentSnapshotModal';
 
 export function DeploymentsPanel() {
+  const navigate = useNavigate();
   const deployments = useModelStore((s) => s.deployments);
   const setDeployments = useModelStore((s) => s.setDeployments);
   const removeDeployment = useModelStore((s) => s.removeDeployment);
-  const [viewTlId, setViewTlId] = useState<string | null>(null);
 
   useEffect(() => {
     deploymentService.listDeployments()
@@ -41,6 +41,10 @@ export function DeploymentsPanel() {
     } catch {
       toast.error('Failed to undeploy model');
     }
+  };
+
+  const handleView = () => {
+    navigate('/simulation/view');
   };
 
   return (
@@ -81,9 +85,9 @@ export function DeploymentsPanel() {
                 </button>
 
                 <button
-                  onClick={() => setViewTlId(dep.tl_id)}
+                  onClick={handleView}
                   className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors"
-                  title="View"
+                  title="View simulation"
                 >
                   <Eye size={12} />
                   View
@@ -103,8 +107,7 @@ export function DeploymentsPanel() {
           ))}
         </div>
       )}
-
-      <DeploymentSnapshotModal tlId={viewTlId} onClose={() => setViewTlId(null)} />
     </div>
   );
 }
+

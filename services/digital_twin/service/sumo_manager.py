@@ -48,8 +48,8 @@ class SumoManager:
 
     # ── Lifecycle ─────────────────────────────────────────────────────
 
-    def start(self, network_path: str | Path) -> None:
-        """Start SUMO with the given network (no route file)."""
+    def start(self, network_path: str | Path, route_file: str | Path | None = None) -> None:
+        """Start SUMO with the given network and optional route file."""
         if not TRACI_AVAILABLE:
             raise RuntimeError("traci is not available")
         if self._running:
@@ -66,6 +66,9 @@ class SumoManager:
             "--step-length", "1",
             "--time-to-teleport", "-1",  # disable teleporting
         ]
+
+        if route_file and Path(route_file).exists():
+            cmd.extend(["-r", str(route_file)])
 
         logger.info("Starting SUMO [%s]: %s", self._label, " ".join(cmd))
         traci.start(cmd, label=self._label)
@@ -234,6 +237,133 @@ class SumoManager:
             raise RuntimeError("No traffic lights in the network")
         return tls[0]
 
+    def get_all_tl_ids(self) -> list[str]:
+        """Return all traffic light IDs in the network."""
+        conn = self._conn()
+        return list(conn.trafficlight.getIDList())
+
+    def get_all_traffic_light_states(self) -> dict[str, dict]:
+        """Query current TL state for ALL traffic lights in the network."""
+        conn = self._conn()
+        result = {}
+        for tl_id in conn.trafficlight.getIDList():
+            result[tl_id] = {
+                "tl_id": tl_id,
+                "phase": conn.trafficlight.getPhase(tl_id),
+                "state": conn.trafficlight.getRedYellowGreenState(tl_id),
+                "program": conn.trafficlight.getProgram(tl_id),
+            }
+        return result
+
+    def install_fixed_time_on_all(
+        self,
+        green_duration: int = 33,
+        yellow_duration: int = 3,
+        red_duration: int = 30,
+        exclude_tl_ids: list[str] | None = None,
+    ) -> list[str]:
+        """Install fixed-time TLS programs on ALL traffic lights, excluding specified ones.
+
+        Fixed timing: green_duration green - yellow_duration yellow - red_duration red per direction.
+        Returns list of TL IDs that were configured.
+        """
+        conn = self._conn()
+        exclude = set(exclude_tl_ids or [])
+        configured = []
+
+        for tl_id in conn.trafficlight.getIDList():
+            if tl_id in exclude:
+                continue
+
+            try:
+                current = conn.trafficlight.getAllProgramLogics(tl_id)
+                if not current:
+                    continue
+
+                num_links = len(current[0].phases[0].state)
+                half = num_links // 2
+
+                # Phase 0: first half green, second half red
+                ns_green = "G" * half + "r" * (num_links - half)
+                ns_yellow = "y" * half + "r" * (num_links - half)
+                # Phase 2: first half red, second half green
+                ew_green = "r" * half + "G" * (num_links - half)
+                ew_yellow = "r" * half + "y" * (num_links - half)
+
+                phases = [
+                    traci.trafficlight.Phase(green_duration, ns_green),
+                    traci.trafficlight.Phase(yellow_duration, ns_yellow),
+                    traci.trafficlight.Phase(red_duration, ew_green),
+                    traci.trafficlight.Phase(yellow_duration, ew_yellow),
+                ]
+
+                logic = traci.trafficlight.Logic(
+                    "fixed_baseline", 0, 0, phases=phases,
+                )
+
+                conn.trafficlight.setProgramLogic(tl_id, logic)
+                conn.trafficlight.setProgram(tl_id, "fixed_baseline")
+                configured.append(tl_id)
+            except Exception as exc:
+                logger.debug("Failed to install fixed-time on %s: %s", tl_id, exc)
+
+        logger.info(
+            "Installed fixed-time (%ds green / %ds yellow / %ds red) on %d TLs (excluded %d)",
+            green_duration, yellow_duration, red_duration,
+            len(configured), len(exclude),
+        )
+        return configured
+
+    def build_observation_for_tl(
+        self,
+        tl_id: str,
+        num_actions: int,
+    ) -> list[float]:
+        """Build an observation vector for a specific traffic light.
+
+        Observation = [lane_vehicle_counts... , current_phase_one_hot...]
+        Matches the training environment's observation format.
+        """
+        conn = self._conn()
+        controlled_lanes = list(conn.trafficlight.getControlledLanes(tl_id))
+
+        # Deduplicate while preserving order
+        seen = set()
+        unique_lanes = []
+        for lane in controlled_lanes:
+            if lane not in seen:
+                seen.add(lane)
+                unique_lanes.append(lane)
+
+        lane_counts = []
+        for lane in unique_lanes:
+            try:
+                lane_counts.append(float(conn.lane.getLastStepVehicleNumber(lane)))
+            except Exception:
+                lane_counts.append(0.0)
+
+        try:
+            sumo_phase = conn.trafficlight.getPhase(tl_id)
+        except Exception:
+            sumo_phase = 0
+
+        # Get green phase indices
+        logic = conn.trafficlight.getAllProgramLogics(tl_id)
+        green_indices = []
+        if logic:
+            phases = logic[0].phases
+            green_indices = [i for i, p in enumerate(phases) if "G" in p.state or "g" in p.state]
+
+        current_green_idx = 0
+        if green_indices and sumo_phase in green_indices:
+            current_green_idx = green_indices.index(sumo_phase)
+
+        phase_one_hot = [0.0] * num_actions
+        if 0 <= current_green_idx < num_actions:
+            phase_one_hot[current_green_idx] = 1.0
+
+        return lane_counts + phase_one_hot
+
     def _resolve_tl_id(self, tl_id: str | None) -> str:
         return tl_id or self.get_tl_id()
 
@@ -328,6 +458,51 @@ class SumoManager:
             green_duration,
             yellow_duration,
         )
+
+    def get_network_geometry(self) -> dict:
+        """Extract network geometry for frontend visualization.
+
+        Returns junction positions, edge shapes, and lane shapes so the
+        frontend can render the road network on a canvas.
+        """
+        conn = self._conn()
+
+        # Junctions
+        junctions = []
+        for jid in conn.junction.getIDList():
+            if jid.startswith(":"):
+                continue  # skip internal junctions
+            pos = conn.junction.getPosition(jid)
+            junctions.append({
+                "id": jid,
+                "x": pos[0],
+                "y": pos[1],
+            })
+
+        # Edges and lanes
+        edges = []
+        for eid in conn.edge.getIDList():
+            if eid.startswith(":"):
+                continue
+            num_lanes = conn.edge.getLaneNumber(eid)
+            lanes = []
+            for i in range(num_lanes):
+                lane_id = f"{eid}_{i}"
+                try:
+                    shape = conn.lane.getShape(lane_id)
+                    lanes.append({
+                        "id": lane_id,
+                        "shape": [{"x": p[0], "y": p[1]} for p in shape],
+                    })
+                except Exception:
+                    pass
+            if lanes:
+                edges.append({
+                    "id": eid,
+                    "lanes": lanes,
+                })
+
+        return {"junctions": junctions, "edges": edges}
 
     def get_connection(self):
         """Expose the active TraCI connection (advanced usage)."""
