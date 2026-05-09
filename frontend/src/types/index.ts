@@ -93,7 +93,7 @@ export interface IntersectionFrames {
 }
 
 // Algorithm enum
-export type Algorithm = 'dqn' | 'ppo' | 'colight';
+export type Algorithm = 'dqn' | 'colight';
 
 // Traffic scenarios
 export type TrafficScenario = 'light' | 'moderate' | 'heavy' | 'rush_hour';
