@@ -18,10 +18,16 @@ VIDEO_PATH = Path(os.getenv(
     str(SIM_REALTIME_DIR / "data" / "tphcm" / "output-2p-light.MOV"),
 ))
 
-# YOLO model weights
+# YOLO model weights (Prefer TensorRT engine if available)
+_PT_PATH = SIM_REALTIME_DIR / "model" / "yolo11x.pt"
+# Check for common engine names
+_ENGINE_PATH = SIM_REALTIME_DIR / "model" / "yolo11x.engine"
+if not _ENGINE_PATH.exists():
+    _ENGINE_PATH = SIM_REALTIME_DIR / "model" / "yolo11x_1280.engine"
+
 MODEL_PATH = Path(os.getenv(
     "MODEL_PATH",
-    str(SIM_REALTIME_DIR / "model" / "yolo11x.pt"),
+    str(_ENGINE_PATH if _ENGINE_PATH.exists() else _PT_PATH),
 ))
 
 # Region polygon definitions (sits next to the video file)
@@ -34,12 +40,12 @@ REGIONS_PATH = Path(os.getenv(
 PORT = int(os.getenv("PORT", "8001"))
 
 # YOLO tracking constants
-TRACKED_CLASS_IDS = {1, 2, 3, 5, 7}   # bicycle, car, motorcycle, bus, truck
+TRACKED_CLASS_IDS = {2, 3, 5, 7}   # car, motorcycle, bus, truck
 METERS_PER_PIXEL = 50 / 1420
 WAITING_SPEED_THRESHOLD = 2.0       # m/s — below this, vehicle is "waiting"
 YOLO_CONF = float(os.getenv("YOLO_CONF", "0.1"))  # detection confidence
 YOLO_VID_STRIDE = int(os.getenv("YOLO_VID_STRIDE", "3"))  # process every Nth frame
-YOLO_IMGSZ = int(os.getenv("YOLO_IMGSZ", "960"))
+YOLO_IMGSZ = int(os.getenv("YOLO_IMGSZ", "1280"))
 
 # Traffic light inference: if waiting vehicles >= this threshold, direction is RED
 WAITING_VEHICLE_RED_THRESHOLD = int(os.getenv("WAITING_VEHICLE_RED_THRESHOLD", "3"))

@@ -19,3 +19,6 @@ digital_twin.log
 *.MOV
 services/digital_twin/service/__pycache__/
 report
+services\digital_twin\simulate_real_traffic\model
+*.onnx
+*.engine

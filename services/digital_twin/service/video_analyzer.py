@@ -17,6 +17,7 @@ import threading
 import time
 from collections import defaultdict
 
+import torch
 import cv2
 
 from service.config import (
@@ -118,10 +119,17 @@ def _background_loop():
     global _stream_active, _video_complete, _vehicle_snapshot
     from ultralytics import YOLO
 
-    logger.info("Stream: loading YOLO model from %s …", MODEL_PATH)
+    logger.info("Stream: loading YOLO model from %s (imgsz=%s) …", MODEL_PATH, YOLO_IMGSZ)
     model = YOLO(str(MODEL_PATH))
     model.verbose = False
-    logger.info("Stream: YOLO model loaded.")
+    
+    # Use GPU if available
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Note: .to(device) is only for .pt models. For .engine, we pass device to track()
+    if str(MODEL_PATH).endswith(".pt"):
+        model.to(device)
+    
+    logger.info("Stream: YOLO model loaded on %s.", device)
 
     video_path = str(VIDEO_PATH)
 
@@ -131,7 +139,7 @@ def _background_loop():
     else:
         regions = None
 
-    MAX_SKIP_FRAMES = 10  # Never skip more than this many frames at once
+    MAX_SKIP_FRAMES = 300  # Skip up to 10 seconds (at 30fps) to catch up
 
     while True:
         # ── Check if we should keep running ───────────────────────────
@@ -196,29 +204,39 @@ def _background_loop():
                 video_time = frame_idx / fps
                 wall_elapsed = time.monotonic() - start_wall
 
-                if video_time < wall_elapsed - 0.5:
+                if video_time < wall_elapsed - 0.2:
                     lag_seconds = wall_elapsed - video_time
                     frames_behind = int(lag_seconds * fps)
 
-                    if frames_behind > MAX_SKIP_FRAMES:
+                    if frames_behind > 0:
+                        # Skip up to MAX_SKIP_FRAMES using grab() (faster than read())
+                        to_skip = min(frames_behind, MAX_SKIP_FRAMES)
                         logger.warning(
-                            "Stream: %.1fs behind real-time (%d frames), "
-                            "capping skip at %d",
-                            lag_seconds, frames_behind, MAX_SKIP_FRAMES,
+                            "Stream: %.1fs behind real-time (%d frames) — skipping %d to catch up.",
+                            lag_seconds, frames_behind, to_skip
                         )
-                        # Skip up to MAX_SKIP_FRAMES by reading & discarding
-                        for _ in range(MAX_SKIP_FRAMES - 1):
-                            ret, frame = cap.read()
-                            if not ret:
-                                break
+                        for _ in range(to_skip):
+                            cap.grab()
                             frame_idx += 1
+                        
+                        # After skipping, we MUST read the next frame
+                        ret, frame = cap.read()
+                        if not ret:
+                            break
+                        frame_idx += 1
+                        video_time = frame_idx / fps
+                        
+                        # FORCE inference on this frame after a skip
+                        do_force_inference = True
                     else:
-                        continue  # Skip this single frame
+                        do_force_inference = False
+                else:
+                    do_force_inference = False
 
                 # ── Only process every YOLO_VID_STRIDE-th frame ───────
-                if frame_idx % YOLO_VID_STRIDE != 0:
+                if frame_idx % YOLO_VID_STRIDE != 0 and not do_force_inference:
                     continue
-
+                
                 # ── YOLO inference on this single frame ───────────────
                 results_list = model.track(
                     frame,
@@ -228,11 +246,18 @@ def _background_loop():
                     verbose=False,
                     persist=True,
                     tracker="botsort.yaml",
+                    half=(device == "cuda"),
+                    device=device,
                 )
 
                 if not results_list:
+                    logger.warning("Stream: YOLO returned no results for frame %d", frame_idx)
                     continue
                 results = results_list[0]
+                
+                num_detected = len(results.boxes) if results.boxes is not None else 0
+                logger.info("Stream: frame %d processed (lag=%.2fs, detections=%d)", 
+                            frame_idx, time.monotonic() - start_wall - video_time, num_detected)
                 frame_img = results.orig_img
 
                 box_annotations: list[tuple[int,int,int,int,bool,int]] = []
@@ -240,6 +265,8 @@ def _background_loop():
                 frame_vehicles: list[dict] = []
 
                 for box in results.boxes:
+                    if box.cls is None or len(box.cls) == 0:
+                        continue
                     cls = int(box.cls[0])
                     if cls not in TRACKED_CLASS_IDS:
                         continue
@@ -249,7 +276,13 @@ def _background_loop():
                     region = detect_region(cx, cy, fallback_regions)
 
                     # Tracking ID is needed for speed / waiting state
-                    object_id = int(box.id[0]) if box.id is not None else None
+                    object_id = None
+                    if box.id is not None:
+                        try:
+                            object_id = int(box.id[0])
+                        except (IndexError, TypeError):
+                            pass
+
                     is_waiting = False
                     speed_ms = 0.0
 
