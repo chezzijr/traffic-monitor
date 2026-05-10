@@ -21,6 +21,13 @@ export const amberIcon = L.divIcon({
   iconAnchor: [10, 10],
 });
 
+export const smallAmberIcon = L.divIcon({
+  className: 'selectable-intersection-marker',
+  html: '<div style="width:12px;height:12px;background:#f59e0b;border-radius:50%;border:1px solid white;"></div>',
+  iconSize: [12, 12],
+  iconAnchor: [6, 6],
+});
+
 export const purpleIcon = L.divIcon({
   className: 'selectable-intersection-marker',
   html: '<div style="width:20px;height:20px;background:#a855f7;border-radius:50%;border:2px solid white;box-shadow:0 0 8px rgba(168,85,247,0.6);cursor:pointer;"></div>',

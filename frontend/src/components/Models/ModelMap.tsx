@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { MapContainer, TileLayer, Marker, useMap } from 'react-leaflet';
-import { grayIcon, amberIcon } from '../Map/markerIcons';
+import { grayIcon, smallAmberIcon } from '../Map/markerIcons';
 import type { NetworkMetadata } from '../../types';
 import { api } from '../../services/api';
 
@@ -81,7 +81,7 @@ export function ModelMap({ networkId, trainedJunctionIds }: ModelMapProps) {
           {metadata.junctions.map((junction) => {
             if (!junction.tl_id) return null;
             const icon = trainedJunctionIds.includes(junction.tl_id)
-              ? amberIcon
+              ? smallAmberIcon
               : grayIcon;
             return (
               <Marker
