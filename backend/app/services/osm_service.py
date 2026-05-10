@@ -184,7 +184,7 @@ def _generate_network_id(bbox: tuple[float, float, float, float]) -> str:
 
 
 def _expand_bbox(
-    south: float, west: float, north: float, east: float, buffer_meters: float = 300
+    south: float, west: float, north: float, east: float, buffer_meters: float = 50
 ) -> tuple[float, float, float, float]:
     """Expand bounding box by buffer in all directions (meters → degrees)."""
     lat_buffer = buffer_meters / 111320
@@ -372,7 +372,7 @@ def extract_network(bbox: tuple[float, float, float, float]) -> dict:
 
     logger.info(f"Extracting network for bbox: {bbox}")
 
-    # Expand bbox by 300 m so boundary roads are fully included
+    # Expand bbox by 50 m so boundary roads are fully included
     exp_south, exp_west, exp_north, exp_east = _expand_bbox(south, west, north, east)
     logger.info(
         f"Expanded bbox: ({exp_south:.6f}, {exp_west:.6f}, {exp_north:.6f}, {exp_east:.6f})"

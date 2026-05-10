@@ -30,8 +30,8 @@ VTYPES_FILE = settings.simulation_vtypes_dir / "vietnamese_vtypes.add.xml"
 SCENARIO_PERIODS = {
     TrafficScenario.LIGHT: 1.0 / 0.3,      # ~3.33 seconds
     TrafficScenario.MODERATE: 1.0 / 0.8,   # ~1.25 seconds
-    TrafficScenario.HEAVY: 1.0 / 1.5,      # ~0.67 seconds
-    TrafficScenario.RUSH_HOUR: 1.0 / 2.0,  # 0.5 seconds
+    TrafficScenario.HEAVY: 1.0 / 1.0,      # 1.0 seconds
+    TrafficScenario.RUSH_HOUR: 1.0 / 1.3,  # ~0.77 seconds
 }
 
 # Vietnamese vehicle type distribution: 80% motorbikes, 15% cars, 5% buses
@@ -183,8 +183,8 @@ def generate_routes(
             # Adjust period for this vehicle type's proportion
             # E.g., for MODERATE (period=1.25s) and motorbike (80%):
             # type_period = 1.25 / 0.80 = 1.5625s between motorbikes
-            # Quarter period to compensate for ~65% route validation drop on OSM networks
-            type_period = (period / proportion) * 0.25
+            # Halve period to compensate for ~50% route validation drop on OSM networks
+            type_period = (period / proportion) * 0.5
             type_trips_file = output_path / f"{network_name}_{scenario.value}_{vtype}.trips.xml"
             temp_trip_files.append(type_trips_file)
 
@@ -592,7 +592,7 @@ def _get_scenario_description(scenario: TrafficScenario) -> str:
     descriptions = {
         TrafficScenario.LIGHT: "Light traffic - 0.3 vehicles/second, typical late night",
         TrafficScenario.MODERATE: "Moderate traffic - 0.8 vehicles/second, typical daytime",
-        TrafficScenario.HEAVY: "Heavy traffic - 1.5 vehicles/second, busy periods",
-        TrafficScenario.RUSH_HOUR: "Rush hour - 2.0 vehicles/second, peak congestion",
+        TrafficScenario.HEAVY: "Heavy traffic - 1.0 vehicles/second, busy periods",
+        TrafficScenario.RUSH_HOUR: "Rush hour - 1.3 vehicles/second, peak congestion",
     }
     return descriptions.get(scenario, "Unknown scenario")
