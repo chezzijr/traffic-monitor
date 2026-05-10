@@ -87,6 +87,8 @@ def list_models() -> list[dict[str, Any]]:
                 pass
 
         stat = model_file.stat()
+        meta_tl_ids = metadata.get("tl_ids")
+        is_multi = isinstance(meta_tl_ids, list) and len(meta_tl_ids) > 0
         models.append({
             "model_id": model_file.stem,
             "model_path": str(model_file),
@@ -94,11 +96,12 @@ def list_models() -> list[dict[str, Any]]:
             "filename": model_file.name,
             "network_id": metadata.get("network_id", network_id),
             "tl_id": metadata.get("tl_id", tl_id),
+            "tl_ids": meta_tl_ids if is_multi else None,
             "algorithm": metadata.get("algorithm", algorithm),
             "timestamp": timestamp,
             "size_bytes": stat.st_size,
             "created_at": metadata.get("created_at", datetime.fromtimestamp(stat.st_ctime).isoformat()),
-            "type": "single",
+            "type": "multi" if is_multi else "single",
             "results": results,
         })
 

@@ -27,9 +27,12 @@ export function ModelCard({ model, isExpanded, onToggleExpand, onDeploy, onDelet
   const isMulti = model.type === 'multi' || (model.tl_ids && model.tl_ids.length > 1);
   const trainedJunctionIds = model.tl_ids ?? [model.tl_id];
 
-  const waitDelta = results ? deltaPercent(results.baseline.avg_waiting_time, results.trained.avg_waiting_time, true) : null;
-  const queueDelta = results ? deltaPercent(results.baseline.avg_queue_length, results.trained.avg_queue_length, true) : null;
-  const throughputDelta = results ? deltaPercent(results.baseline.throughput, results.trained.throughput) : null;
+  const display = results?.eval ?? results?.trained;
+  const isEval = Boolean(results?.eval);
+
+  const waitDelta = results && display ? deltaPercent(results.baseline.avg_waiting_time, display.avg_waiting_time, true) : null;
+  const queueDelta = results && display ? deltaPercent(results.baseline.avg_queue_length, display.avg_queue_length, true) : null;
+  const throughputDelta = results && display ? deltaPercent(results.baseline.throughput, display.throughput) : null;
 
   const chartData: TrainingProgressEvent[] = results
     ? results.progress_history.map((p) => ({
@@ -127,7 +130,11 @@ export function ModelCard({ model, isExpanded, onToggleExpand, onDeploy, onDelet
           {results ? (
             <>
               <ModelMap networkId={model.network_id} trainedJunctionIds={trainedJunctionIds} />
-              <MetricsComparisonTable baseline={results.baseline} trained={results.trained} />
+              <MetricsComparisonTable
+                baseline={results.baseline}
+                model={display!}
+                variant={isEval ? 'eval' : 'trained'}
+              />
               <div className="h-40">
                 <TrainingChart data={chartData} />
               </div>

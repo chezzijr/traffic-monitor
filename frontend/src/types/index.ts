@@ -199,6 +199,7 @@ export interface ModelProgressPoint {
 export interface ModelResults {
   baseline: ModelBaselineMetrics;
   trained: ModelTrainedMetrics;
+  eval?: ModelTrainedMetrics;
   training_config: ModelTrainingConfig;
   progress_history: ModelProgressPoint[];
 }

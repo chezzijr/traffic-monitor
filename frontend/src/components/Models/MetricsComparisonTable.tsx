@@ -2,15 +2,16 @@ import type { ModelBaselineMetrics, ModelTrainedMetrics } from '../../types';
 
 interface MetricsComparisonTableProps {
   baseline: ModelBaselineMetrics;
-  trained: ModelTrainedMetrics;
+  model: ModelTrainedMetrics;
+  variant?: 'eval' | 'trained';
 }
 
-function formatDelta(baseline: number, trained: number, higherIsBetter: boolean): { text: string; colorClass: string } {
+function formatDelta(baseline: number, model: number, higherIsBetter: boolean): { text: string; colorClass: string } {
   if (baseline === 0 || (!higherIsBetter && baseline < 1.0)) {
     return { text: 'N/A', colorClass: 'text-gray-400' };
   }
 
-  const delta = ((trained - baseline) / baseline) * 100;
+  const delta = ((model - baseline) / baseline) * 100;
   const isIncrease = delta > 0;
   const arrow = isIncrease ? '▲' : '▼';
   const isImprovement = higherIsBetter ? isIncrease : !isIncrease;
@@ -22,35 +23,41 @@ function formatDelta(baseline: number, trained: number, higherIsBetter: boolean)
   };
 }
 
-export function MetricsComparisonTable({ baseline, trained }: MetricsComparisonTableProps) {
+export function MetricsComparisonTable({ baseline, model, variant = 'trained' }: MetricsComparisonTableProps) {
+  if (!model) {
+    return <p className="text-xs text-gray-400">No comparison data</p>;
+  }
+
+  const headerLabel = variant === 'eval' ? 'AI Model (eval, ε=0)' : 'AI Model (last 5 ep)';
+
   const rows: {
     label: string;
     baselineValue: string;
-    trainedValue: string;
+    modelValue: string;
     delta: { text: string; colorClass: string } | null;
   }[] = [
     {
       label: 'Avg Wait Time',
       baselineValue: `${baseline.avg_waiting_time.toFixed(1)}s`,
-      trainedValue: `${trained.avg_waiting_time.toFixed(1)}s`,
-      delta: formatDelta(baseline.avg_waiting_time, trained.avg_waiting_time, false),
+      modelValue: `${model.avg_waiting_time.toFixed(1)}s`,
+      delta: formatDelta(baseline.avg_waiting_time, model.avg_waiting_time, false),
     },
     {
       label: 'Avg Queue Length',
       baselineValue: baseline.avg_queue_length.toFixed(1),
-      trainedValue: trained.avg_queue_length.toFixed(1),
-      delta: formatDelta(baseline.avg_queue_length, trained.avg_queue_length, false),
+      modelValue: model.avg_queue_length.toFixed(1),
+      delta: formatDelta(baseline.avg_queue_length, model.avg_queue_length, false),
     },
     {
       label: 'Throughput',
       baselineValue: String(baseline.throughput),
-      trainedValue: String(trained.throughput),
-      delta: formatDelta(baseline.throughput, trained.throughput, true),
+      modelValue: String(model.throughput),
+      delta: formatDelta(baseline.throughput, model.throughput, true),
     },
     {
       label: 'Mean Reward',
       baselineValue: '—',
-      trainedValue: trained.mean_reward.toFixed(2),
+      modelValue: model.mean_reward.toFixed(2),
       delta: null,
     },
   ];
@@ -61,7 +68,7 @@ export function MetricsComparisonTable({ baseline, trained }: MetricsComparisonT
         <tr className="text-left text-gray-500 border-b border-gray-200">
           <th className="py-1 pr-2 font-medium">Metric</th>
           <th className="py-1 pr-2 font-medium">Baseline</th>
-          <th className="py-1 font-medium">AI Model</th>
+          <th className="py-1 font-medium">{headerLabel}</th>
         </tr>
       </thead>
       <tbody>
@@ -70,7 +77,7 @@ export function MetricsComparisonTable({ baseline, trained }: MetricsComparisonT
             <td className="py-1 pr-2 text-gray-600">{row.label}</td>
             <td className="py-1 pr-2 text-gray-700 font-mono">{row.baselineValue}</td>
             <td className="py-1 font-mono">
-              <span className="text-gray-700">{row.trainedValue}</span>
+              <span className="text-gray-700">{row.modelValue}</span>
               {row.delta && (
                 <span className={`ml-1 text-[10px] ${row.delta.colorClass}`}>
                   ({row.delta.text})
