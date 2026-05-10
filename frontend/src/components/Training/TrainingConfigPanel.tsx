@@ -87,7 +87,7 @@ export function TrainingConfigPanel({ onTrainingStarted }: TrainingConfigPanelPr
       <div>
         <label className="text-xs text-gray-500 mb-1 block">Algorithm</label>
         <div className="flex rounded-lg border border-gray-200 overflow-hidden">
-          {(['dqn', 'ppo', 'colight'] as Algorithm[]).map((alg) => (
+          {(['dqn', 'colight'] as Algorithm[]).map((alg) => (
             <button
               key={alg}
               onClick={() => setAlgorithm(alg)}
