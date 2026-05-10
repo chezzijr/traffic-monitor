@@ -11,11 +11,9 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 
 POLL_INTERVAL = float(os.getenv("POLL_INTERVAL", 10))
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-
-# Default to /data/dataset in Docker, fallback to project dataset folder
+# Docker sets DATASET_DIR=/data/dataset; host fallback is repo-relative ./dataset
 DATASET_DIR = Path(
-    os.getenv("DATASET_DIR", os.getenv("DATASET_PATH", PROJECT_ROOT / "dataset"))
+    os.getenv("DATASET_DIR") or os.getenv("DATASET_PATH") or "dataset"
 )
 
 CAMERA_IDS = list(CAM_TO_INTERSECTION.keys())
