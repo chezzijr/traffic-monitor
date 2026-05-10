@@ -49,6 +49,48 @@ class _ModelState:
 _state = _ModelState()
 
 
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _load_checkpoint_metadata(path: Path) -> dict[str, Any]:
+    if path.suffix.lower() != ".pt":
+        return {}
+    try:
+        checkpoint = torch.load(str(path), map_location="cpu", weights_only=False)
+    except Exception:
+        return {}
+
+    return {
+        "network_id": checkpoint.get("network_id"),
+        "tl_id": checkpoint.get("tl_id"),
+        "tl_ids": checkpoint.get("tl_ids"),
+        "algorithm": checkpoint.get("algorithm"),
+        "num_intersections": checkpoint.get("num_intersections"),
+        "scenario": checkpoint.get("scenario"),
+    }
+
+
+def get_model_metadata(model_path: str) -> dict[str, Any]:
+    """Load model metadata from sidecar JSON or PyTorch checkpoint."""
+    path = Path(model_path)
+    if path.is_dir():
+        meta_path = path / "metadata.json"
+        if meta_path.exists():
+            return _read_json(meta_path)
+        return {}
+
+    meta_path = Path(str(path) + ".metadata.json")
+    if meta_path.exists():
+        return _read_json(meta_path)
+
+    return _load_checkpoint_metadata(path)
+
+
 def list_models() -> list[dict[str, Any]]:
     """List all available trained models (single + multi-agent)."""
     models = []
@@ -66,15 +108,7 @@ def list_models() -> list[dict[str, Any]]:
         else:
             network_id, tl_id, algorithm, timestamp = "unknown", "unknown", "unknown", "unknown"
 
-        # Try to load metadata
-        meta_path = Path(str(model_file) + ".metadata.json")
-        metadata = {}
-        if meta_path.exists():
-            try:
-                with open(meta_path) as f:
-                    metadata = json.load(f)
-            except Exception:
-                pass
+        metadata = get_model_metadata(str(model_file))
 
         # Try to load results
         results_path = Path(str(model_file) + ".results.json")
@@ -86,22 +120,30 @@ def list_models() -> list[dict[str, Any]]:
             except Exception:
                 pass
 
+        network_id = metadata.get("network_id") or network_id
+        tl_id = metadata.get("tl_id") or tl_id
+        algorithm = metadata.get("algorithm") or algorithm
+        tl_ids = metadata.get("tl_ids")
+        if tl_ids is None and tl_id not in {None, "unknown"}:
+            tl_ids = [tl_id]
+
+        model_type = "multi" if tl_ids and len(tl_ids) > 1 else "single"
+
         stat = model_file.stat()
-        meta_tl_ids = metadata.get("tl_ids")
-        is_multi = isinstance(meta_tl_ids, list) and len(meta_tl_ids) > 0
         models.append({
             "model_id": model_file.stem,
             "model_path": str(model_file),
             "path": str(model_file),
             "filename": model_file.name,
-            "network_id": metadata.get("network_id", network_id),
-            "tl_id": metadata.get("tl_id", tl_id),
-            "tl_ids": meta_tl_ids if is_multi else None,
-            "algorithm": metadata.get("algorithm", algorithm),
+            "network_id": network_id,
+            "tl_id": tl_id,
+            "tl_ids": tl_ids or [],
+            "algorithm": algorithm,
             "timestamp": timestamp,
             "size_bytes": stat.st_size,
             "created_at": metadata.get("created_at", datetime.fromtimestamp(stat.st_ctime).isoformat()),
-            "type": "multi" if is_multi else "single",
+            "type": model_type,
+            "num_intersections": metadata.get("num_intersections"),
             "results": results,
         })
 

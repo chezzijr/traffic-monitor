@@ -1,0 +1,37 @@
+<?xml version='1.0' encoding='utf-8'?>
+<edges>
+    <edge from="i_0_0" to="i_0_1" id="e_i_0_0_to_i_0_1" type="2L45" numLanes="2" />
+    <edge from="i_0_1" to="i_0_0" id="e_i_0_1_to_i_0_0" type="2L45" numLanes="2" />
+    <edge from="i_0_1" to="i_0_2" id="e_i_0_1_to_i_0_2" type="2L45" numLanes="2" />
+    <edge from="i_0_2" to="i_0_1" id="e_i_0_2_to_i_0_1" type="2L45" numLanes="2" />
+    <edge from="i_1_0" to="i_1_1" id="e_i_1_0_to_i_1_1" type="2L45" numLanes="2" />
+    <edge from="i_1_1" to="i_1_0" id="e_i_1_1_to_i_1_0" type="2L45" numLanes="2" />
+    <edge from="i_1_1" to="i_1_2" id="e_i_1_1_to_i_1_2" type="2L45" numLanes="2" />
+    <edge from="i_1_2" to="i_1_1" id="e_i_1_2_to_i_1_1" type="2L45" numLanes="2" />
+    <edge from="i_0_0" to="i_1_0" id="e_i_0_0_to_i_1_0" type="2L45" numLanes="2" />
+    <edge from="i_1_0" to="i_0_0" id="e_i_1_0_to_i_0_0" type="2L45" numLanes="2" />
+    <edge from="i_0_1" to="i_1_1" id="e_i_0_1_to_i_1_1" type="2L45" numLanes="2" />
+    <edge from="i_1_1" to="i_0_1" id="e_i_1_1_to_i_0_1" type="2L45" numLanes="2" />
+    <edge from="i_0_2" to="i_1_2" id="e_i_0_2_to_i_1_2" type="2L45" numLanes="2" />
+    <edge from="i_1_2" to="i_0_2" id="e_i_1_2_to_i_0_2" type="2L45" numLanes="2" />
+    <edge from="b_north_0_0" to="i_0_0" id="e_b_north_0_0_to_i_0_0" type="2L45" numLanes="2" />
+    <edge from="i_0_0" to="b_north_0_0" id="e_i_0_0_to_b_north_0_0" type="2L45" numLanes="2" />
+    <edge from="b_north_0_1" to="i_0_1" id="e_b_north_0_1_to_i_0_1" type="2L45" numLanes="2" />
+    <edge from="i_0_1" to="b_north_0_1" id="e_i_0_1_to_b_north_0_1" type="2L45" numLanes="2" />
+    <edge from="b_north_0_2" to="i_0_2" id="e_b_north_0_2_to_i_0_2" type="2L45" numLanes="2" />
+    <edge from="i_0_2" to="b_north_0_2" id="e_i_0_2_to_b_north_0_2" type="2L45" numLanes="2" />
+    <edge from="b_south_1_0" to="i_1_0" id="e_b_south_1_0_to_i_1_0" type="2L45" numLanes="2" />
+    <edge from="i_1_0" to="b_south_1_0" id="e_i_1_0_to_b_south_1_0" type="2L45" numLanes="2" />
+    <edge from="b_south_1_1" to="i_1_1" id="e_b_south_1_1_to_i_1_1" type="2L45" numLanes="2" />
+    <edge from="i_1_1" to="b_south_1_1" id="e_i_1_1_to_b_south_1_1" type="2L45" numLanes="2" />
+    <edge from="b_south_1_2" to="i_1_2" id="e_b_south_1_2_to_i_1_2" type="2L45" numLanes="2" />
+    <edge from="i_1_2" to="b_south_1_2" id="e_i_1_2_to_b_south_1_2" type="2L45" numLanes="2" />
+    <edge from="b_west_0_0" to="i_0_0" id="e_b_west_0_0_to_i_0_0" type="2L45" numLanes="2" />
+    <edge from="i_0_0" to="b_west_0_0" id="e_i_0_0_to_b_west_0_0" type="2L45" numLanes="2" />
+    <edge from="b_west_1_0" to="i_1_0" id="e_b_west_1_0_to_i_1_0" type="2L45" numLanes="2" />
+    <edge from="i_1_0" to="b_west_1_0" id="e_i_1_0_to_b_west_1_0" type="2L45" numLanes="2" />
+    <edge from="b_east_0_2" to="i_0_2" id="e_b_east_0_2_to_i_0_2" type="2L45" numLanes="2" />
+    <edge from="i_0_2" to="b_east_0_2" id="e_i_0_2_to_b_east_0_2" type="2L45" numLanes="2" />
+    <edge from="b_east_1_2" to="i_1_2" id="e_b_east_1_2_to_i_1_2" type="2L45" numLanes="2" />
+    <edge from="i_1_2" to="b_east_1_2" id="e_i_1_2_to_b_east_1_2" type="2L45" numLanes="2" />
+</edges>

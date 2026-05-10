@@ -1,199 +1,208 @@
-"""Service for deploying trained models to traffic lights."""
+"""Service for deploying trained models to traffic lights.
 
+This is a thin proxy that forwards deploy requests to the Digital Twin service
+(services/digital_twin). The Digital Twin service handles:
+  - Camera/video detection
+  - Vehicle spawning into SUMO
+  - Traffic light control (AI + fixed-time)
+"""
+
+import json
 import logging
+import os
 import threading
-from dataclasses import dataclass
 from typing import Any
 
-import numpy as np
+import httpx
+import redis
 
-from app.services import ml_service
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass
-class DeployedModel:
-    """A model deployed to control a traffic light."""
-    tl_id: str
-    model_id: str
-    model_path: str
-    network_id: str
-    ai_control_enabled: bool = True
-    controlled_lanes: list[str] | None = None
-    num_phases: int = 4  # Number of green phases (action space)
-    green_phase_indices: list[int] | None = None  # SUMO phase indices that are green
+DIGITAL_TWIN_URL = os.getenv("DIGITAL_TWIN_URL", "http://localhost:8001")
+REDIS_HOST = settings.redis_host
+REDIS_PORT = settings.redis_port
 
 
-class _DeploymentState:
-    """Thread-safe deployment state."""
-
-    def __init__(self):
-        self._lock = threading.Lock()
-        self._deployments: dict[str, DeployedModel] = {}
-
-    def get(self, tl_id: str) -> DeployedModel | None:
-        with self._lock:
-            return self._deployments.get(tl_id)
-
-    def set(self, tl_id: str, deployment: DeployedModel) -> None:
-        with self._lock:
-            self._deployments[tl_id] = deployment
-
-    def remove(self, tl_id: str) -> DeployedModel | None:
-        with self._lock:
-            return self._deployments.pop(tl_id, None)
-
-    def list_all(self) -> list[DeployedModel]:
-        with self._lock:
-            return list(self._deployments.values())
+def _get_redis():
+    return redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
 
-_state = _DeploymentState()
+def _dt_url(path: str) -> str:
+    """Build full Digital Twin service URL."""
+    return f"{DIGITAL_TWIN_URL}{path}"
+
+
+# ── Deploy (proxy to Digital Twin) ───────────────────────────────────
 
 
 def deploy_model(
     tl_id: str,
     model_path: str,
-    network_id: str,
-    controlled_lanes: list[str] | None = None,
-    num_phases: int = 4,
+    network_id: str | None = None,
+    grid_rows: int = 2,
+    grid_cols: int = 3,
 ) -> dict[str, Any]:
-    """Deploy a trained model to a traffic light."""
-    from pathlib import Path
+    """Deploy a trained model by forwarding to the Digital Twin service.
 
-    model_id = Path(model_path).stem
+    The Digital Twin service runs the full pipeline:
+      - Loads the model (single or multi-agent)
+      - Starts SUMO with the correct network
+      - Applies AI control on trained intersections
+      - Applies fixed-time on uncontrolled intersections
+    """
+    from app.services import ml_service
 
-    # Load the model
-    ml_service.load_model(model_path)
+    # Read model metadata to determine tl_ids
+    metadata = ml_service.get_model_metadata(model_path)
+    resolved_network_id = network_id or metadata.get("network_id")
+    if not resolved_network_id or resolved_network_id == "unknown":
+        raise ValueError("Network ID is required or missing from model metadata")
 
-    deployment = DeployedModel(
-        tl_id=tl_id,
-        model_id=model_id,
-        model_path=model_path,
-        network_id=network_id,
-        ai_control_enabled=True,
-        controlled_lanes=controlled_lanes,
-        num_phases=num_phases,
-    )
-    _state.set(tl_id, deployment)
+    tl_ids = metadata.get("tl_ids") or []
+    if not tl_ids and tl_id:
+        tl_ids = [tl_id]
 
-    logger.info(f"Deployed model {model_id} to {tl_id}")
+    # Forward to Digital Twin service
+    payload = {
+        "model_path": model_path,
+        "tl_id": tl_id,
+        "tl_ids": tl_ids,
+        "network_id": resolved_network_id,
+        "grid_rows": grid_rows,
+        "grid_cols": grid_cols,
+    }
+
+    try:
+        resp = httpx.post(_dt_url("/deploy/start"), json=payload, timeout=30.0)
+        resp.raise_for_status()
+        result = resp.json()
+    except httpx.HTTPStatusError as e:
+        detail = e.response.text if e.response else str(e)
+        raise RuntimeError(f"Digital Twin deploy failed: {detail}")
+    except httpx.ConnectError:
+        raise RuntimeError("Cannot connect to Digital Twin service. Is it running?")
+    except Exception as e:
+        raise RuntimeError(f"Digital Twin deploy error: {e}")
+
+    # Store deployment info in Redis for quick lookups
+    r = _get_redis()
+    deploy_info = {
+        "tl_id": tl_id,
+        "tl_ids": tl_ids,
+        "model_path": model_path,
+        "network_id": resolved_network_id,
+        "model_id": os.path.basename(model_path).rsplit(".", 1)[0],
+        "status": "deployed",
+        "is_multi_agent": result.get("is_multi_agent", False),
+    }
+    r.hset("deployments", tl_id, json.dumps(deploy_info))
+    # Also store under all tl_ids for multi-agent
+    for tid in tl_ids:
+        r.hset("deployments", tid, json.dumps(deploy_info))
+
+    logger.info("Deployed model %s via Digital Twin (tl_ids=%s)", model_path, tl_ids)
     return {
         "tl_id": tl_id,
-        "model_id": model_id,
+        "model_id": deploy_info["model_id"],
         "status": "deployed",
+        "is_multi_agent": deploy_info["is_multi_agent"],
     }
 
 
 def undeploy_model(tl_id: str) -> dict[str, Any]:
-    """Remove a deployed model."""
-    deployment = _state.remove(tl_id)
-    if deployment is None:
+    """Stop deployment by calling Digital Twin stop."""
+    r = _get_redis()
+    deploy_json = r.hget("deployments", tl_id)
+    if not deploy_json:
         raise ValueError(f"No model deployed to {tl_id}")
 
-    # Unload model if no more deployments
-    if not _state.list_all():
-        ml_service.unload_model()
+    # Stop the Digital Twin deploy
+    try:
+        resp = httpx.post(_dt_url("/deploy/stop"), timeout=15.0)
+        resp.raise_for_status()
+    except Exception as e:
+        logger.warning("Failed to stop Digital Twin deploy: %s", e)
 
-    logger.info(f"Undeployed model from {tl_id}")
+    # Clean up Redis
+    deploy_info = json.loads(deploy_json)
+    tl_ids = deploy_info.get("tl_ids", [tl_id])
+    for tid in tl_ids:
+        r.hdel("deployments", tid)
+    r.hdel("deployments", tl_id)
+
+    logger.info("Undeployed model from %s", tl_id)
     return {"tl_id": tl_id, "status": "undeployed"}
 
 
 def toggle_ai_control(tl_id: str, enabled: bool) -> dict[str, Any]:
-    """Toggle AI control for a deployed model."""
-    deployment = _state.get(tl_id)
-    if deployment is None:
-        raise ValueError(f"No model deployed to {tl_id}")
-
-    deployment.ai_control_enabled = enabled
-    _state.set(tl_id, deployment)
-
-    logger.info(f"AI control for {tl_id}: {'enabled' if enabled else 'disabled'}")
+    """Toggle AI control — currently a no-op since DT controls everything."""
+    logger.info("AI control for %s: %s (note: DT manages control)", tl_id, enabled)
     return {"tl_id": tl_id, "ai_control_enabled": enabled}
 
 
-def apply_ai_action(tl_id: str, traci_conn) -> int | None:
-    """Build observation from TraCI and predict action.
+def get_deployment_snapshot(tl_id: str) -> dict[str, Any]:
+    """Get a live snapshot from the Digital Twin service."""
+    r = _get_redis()
+    deploy_json = r.hget("deployments", tl_id)
+    if not deploy_json:
+        raise ValueError(f"No model deployed to {tl_id}")
 
-    The model was trained with green-only phase indexing (0..N-1 for N green phases).
-    We map the current SUMO phase to a green phase index for the observation,
-    and map the predicted action (green index) back to a SUMO phase index.
+    deploy_info = json.loads(deploy_json)
 
-    Returns the predicted action (SUMO phase index), or None if AI control is disabled.
-    """
-    deployment = _state.get(tl_id)
-    if deployment is None or not deployment.ai_control_enabled:
-        return None
-
-    controlled_lanes = deployment.controlled_lanes or []
-    num_phases = deployment.num_phases  # Number of green phases
-    green_indices = deployment.green_phase_indices  # SUMO indices of green phases
-
-    # Build observation: [vehicle_counts, phase_one_hot]
-    vehicle_counts = []
-    for lane in controlled_lanes:
-        try:
-            count = traci_conn.lane.getLastStepVehicleNumber(lane)
-            vehicle_counts.append(float(count))
-        except Exception:
-            vehicle_counts.append(0.0)
-
-    # Map SUMO phase to green phase index
+    # Query Digital Twin for live snapshot
     try:
-        sumo_phase = traci_conn.trafficlight.getPhase(tl_id)
-    except Exception:
-        sumo_phase = 0
+        resp = httpx.get(_dt_url("/deploy/snapshot"), timeout=10.0)
+        resp.raise_for_status()
+        snapshot = resp.json()
+    except httpx.ConnectError:
+        raise RuntimeError("Cannot connect to Digital Twin service")
+    except Exception as e:
+        raise RuntimeError(f"Failed to get snapshot: {e}")
 
-    current_green_idx = 0
-    if green_indices and sumo_phase in green_indices:
-        current_green_idx = green_indices.index(sumo_phase)
-
-    phase_one_hot = np.zeros(num_phases, dtype=np.float32)
-    if 0 <= current_green_idx < num_phases:
-        phase_one_hot[current_green_idx] = 1.0
-
-    observation = np.concatenate([
-        np.array(vehicle_counts, dtype=np.float32),
-        phase_one_hot,
-    ])
-
-    result = ml_service.predict(observation, deterministic=True)
-    action_green_idx = result["action"]
-
-    # Map green index back to SUMO phase index
-    if green_indices and 0 <= action_green_idx < len(green_indices):
-        sumo_action = green_indices[action_green_idx]
-    else:
-        sumo_action = action_green_idx
-
-    traci_conn.trafficlight.setPhase(tl_id, sumo_action)
-    return sumo_action
+    # Merge deployment info into snapshot
+    snapshot.update({
+        "model_id": deploy_info.get("model_id"),
+        "model_path": deploy_info.get("model_path"),
+        "network_id": deploy_info.get("network_id"),
+        "ai_control_enabled": True,
+        "tl_id": tl_id,
+        "is_multi_agent": deploy_info.get("is_multi_agent", False),
+    })
+    return snapshot
 
 
 def list_deployments() -> list[dict[str, Any]]:
-    """List all active deployments."""
-    return [
-        {
-            "tl_id": d.tl_id,
-            "model_id": d.model_id,
-            "model_path": d.model_path,
-            "network_id": d.network_id,
-            "ai_control_enabled": d.ai_control_enabled,
-        }
-        for d in _state.list_all()
-    ]
+    """List all active deployments from Redis."""
+    r = _get_redis()
+    all_deploys = r.hgetall("deployments")
+
+    # Deduplicate by model_path (multi-agent stores under each tl_id)
+    seen_models = set()
+    deployments = []
+    for tl_id, deploy_json in all_deploys.items():
+        deploy_info = json.loads(deploy_json)
+        model_path = deploy_info.get("model_path", "")
+        if model_path in seen_models:
+            continue
+        seen_models.add(model_path)
+        deployments.append({
+            "tl_id": deploy_info.get("tl_id", tl_id),
+            "tl_ids": deploy_info.get("tl_ids", []),
+            "model_id": deploy_info.get("model_id"),
+            "model_path": model_path,
+            "network_id": deploy_info.get("network_id"),
+            "ai_control_enabled": True,
+            "is_multi_agent": deploy_info.get("is_multi_agent", False),
+        })
+    return deployments
 
 
 def get_deployment(tl_id: str) -> dict[str, Any] | None:
     """Get deployment info for a traffic light."""
-    d = _state.get(tl_id)
-    if d is None:
+    r = _get_redis()
+    deploy_json = r.hget("deployments", tl_id)
+    if not deploy_json:
         return None
-    return {
-        "tl_id": d.tl_id,
-        "model_id": d.model_id,
-        "model_path": d.model_path,
-        "network_id": d.network_id,
-        "ai_control_enabled": d.ai_control_enabled,
-    }
+    return json.loads(deploy_json)

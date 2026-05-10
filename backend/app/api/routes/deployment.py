@@ -1,4 +1,8 @@
-"""Deployment API routes."""
+"""Deployment API routes.
+
+All simulation control is delegated to the Digital Twin service.
+Backend acts as a thin proxy + stores deployment state in Redis.
+"""
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -23,15 +27,21 @@ def list_deployments() -> list[dict]:
 
 @router.post("/deploy")
 def deploy_model(request: DeployModelRequest) -> dict:
-    """Deploy a trained model to a traffic light."""
+    """Deploy a trained model — forwards to Digital Twin service."""
     try:
         return deployment_service.deploy_model(
             tl_id=request.tl_id,
             model_path=request.model_path,
             network_id=request.network_id,
+            grid_rows=request.grid_rows,
+            grid_cols=request.grid_cols,
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @router.post("/undeploy")
@@ -50,3 +60,14 @@ def toggle_ai_control(tl_id: str, request: ToggleAIControlRequest) -> dict:
         return deployment_service.toggle_ai_control(tl_id=tl_id, enabled=request.enabled)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/{tl_id}/snapshot")
+def get_deployment_snapshot(tl_id: str) -> dict:
+    """Get a live snapshot — proxied from Digital Twin service."""
+    try:
+        return deployment_service.get_deployment_snapshot(tl_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))

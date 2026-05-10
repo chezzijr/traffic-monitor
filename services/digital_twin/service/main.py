@@ -52,12 +52,29 @@ class TrafficLightStateResponse(BaseModel):
     west: DirectionLightState
 
 
+class DeployStartRequest(BaseModel):
+    model_path: str
+    tl_id: str | None = None
+    tl_ids: list[str] | None = None
+    grid_rows: int = 2
+    grid_cols: int = 3
+    network_id: str | None = None
+
+
 @app.get("/waiting_count", response_model=WaitingCountResponse)
 def waiting_count(
     id_camera: str = Query(..., description="Camera identifier"),
 ) -> WaitingCountResponse:
-    """Analyse ~1 second of traffic video and return waiting vehicle counts."""
+    """Return waiting vehicle counts, auto-starting the video stream if needed.
+
+    The video analysis stream starts on the first call and stays alive as
+    long as this endpoint keeps being polled (each call acts as a
+    keepalive).  When polling stops the stream auto-stops after an idle
+    timeout.
+    """
     try:
+        # Ensure the stream is running (idempotent / acts as keepalive)
+        start_stream()
         result = get_waiting_count(id_camera)
     except Exception as exc:
         logger.exception("Video processing failed for camera %s", id_camera)
@@ -96,6 +113,8 @@ def frame():
 def traffic_light_state() -> TrafficLightStateResponse:
     """Infer traffic light states from waiting vehicle behaviour.
 
+    Auto-starts the video stream if not already running.
+
     Logic:
       - North & East are observed from the camera.
       - If waiting vehicles >= threshold → RED, otherwise GREEN.
@@ -103,6 +122,7 @@ def traffic_light_state() -> TrafficLightStateResponse:
       - Duration is always -1 (unknown).
     """
     try:
+        start_stream()
         result = get_traffic_light_state()
     except Exception as exc:
         logger.exception("Traffic light inference failed")
@@ -155,25 +175,24 @@ from service.sync_loop import (
     stop_sync,
     get_sync_status,
     get_sync_vehicles,
-    get_evaluation,
     get_snapshot,
 )
 
-
-class SyncStartRequest(BaseModel):
-    model_path: str | None = None
+from service.deploy_loop import (
+    start_deploy,
+    stop_deploy,
+    get_deploy_status,
+    get_deploy_snapshot,
+    list_models as list_deploy_models,
+    list_videos as list_deploy_videos,
+)
 
 
 @app.post("/sync/start")
-def sync_start(req: SyncStartRequest | None = None):
-    """Start the video-to-SUMO sync pipeline.
-
-    If ``model_path`` is provided, the RL model controls the traffic
-    light.  Otherwise runs with fixed-time baseline.
-    """
-    model_path = req.model_path if req else None
+def sync_start():
+    """Start the video-to-SUMO sync pipeline."""
     try:
-        return start_sync(model_path)
+        return start_sync()
     except Exception as exc:
         logger.exception("Failed to start sync")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -197,72 +216,60 @@ def sync_vehicles():
     return get_sync_vehicles()
 
 
-@app.get("/sync/evaluation")
-def sync_evaluation():
-    """Return RL vs fixed-time baseline comparison."""
-    result = get_evaluation()
-    if result is None:
-        return {"status": "not_ready", "detail": "Evaluation not yet complete"}
-    return result
-
-
 @app.get("/sync/snapshot")
 def sync_snapshot():
     """Return combined snapshot for live monitoring page.
 
-    Includes video frame, vehicle positions, TL states and metrics
-    from both RL and baseline SUMO instances.
+    Includes video frame, vehicle positions, TL states and metrics.
     """
     return get_snapshot()
 
 
-@app.get("/sync/models")
-def sync_models():
-    """List available RL models in the models directory."""
-    from service.config import RL_MODEL_DIR
-    models = []
-    model_dir = RL_MODEL_DIR
-    if model_dir.exists():
-        for f in sorted(model_dir.iterdir()):
-            if f.suffix in (".pt", ".zip"):
-                models.append({
-                    "name": f.name,
-                    "path": str(f),
-                    "size_mb": round(f.stat().st_size / 1024 / 1024, 2),
-                })
-    return models
+# ── Deploy (AI control) endpoints ───────────────────────────────────
 
 
-@app.get("/sync/videos")
-def sync_videos():
-    """List available video files for evaluation."""
-    from service.config import BASE_DIR
-    video_dir = BASE_DIR / "data" / "traffic_video"
-    videos = []
-    if video_dir.exists():
-        for subdir in sorted(video_dir.iterdir()):
-            if subdir.is_dir():
-                for f in sorted(subdir.iterdir()):
-                    if f.suffix.lower() in (".mov", ".mp4", ".avi", ".mkv"):
-                        videos.append({
-                            "name": f.name,
-                            "path": str(f),
-                            "folder": subdir.name,
-                            "size_mb": round(f.stat().st_size / 1024 / 1024, 2),
-                        })
-    return videos
+@app.get("/deploy/models")
+def deploy_models():
+    """List available trained models for deploy."""
+    return list_deploy_models()
 
 
-@app.post("/sync/traffic_light")
-def sync_traffic_light(phase: int = Query(..., description="Phase index")):
-    """Manually set the traffic light phase in the RL SUMO simulation."""
-    from service.sync_loop import _sumo_rl
+@app.get("/deploy/videos")
+def deploy_videos():
+    """List available videos for deploy."""
+    return list_deploy_videos()
 
-    if not _sumo_rl.running:
-        raise HTTPException(status_code=400, detail="Sync not running")
+
+@app.post("/deploy/start")
+def deploy_start(request: DeployStartRequest):
+    """Start the deploy loop with the selected model."""
     try:
-        _sumo_rl.set_traffic_light_phase(phase)
-        return _sumo_rl.get_traffic_light_state()
+        return start_deploy(
+            request.model_path,
+            request.tl_id,
+            grid_rows=request.grid_rows,
+            grid_cols=request.grid_cols,
+            network_id=request.network_id,
+        )
     except Exception as exc:
+        logger.exception("Failed to start deploy")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/deploy/stop")
+def deploy_stop():
+    """Stop the deploy loop."""
+    return stop_deploy()
+
+
+@app.get("/deploy/status")
+def deploy_status():
+    """Return deploy loop status."""
+    return get_deploy_status()
+
+
+@app.get("/deploy/snapshot")
+def deploy_snapshot():
+    """Return deploy loop snapshot for the frontend."""
+    return get_deploy_snapshot()
 

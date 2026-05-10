@@ -6,22 +6,28 @@ import os
 # Base directory: services/digital_twin/
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Real-time digital twin assets
+SIM_REALTIME_DIR = Path(os.getenv(
+    "SIM_REALTIME_DIR",
+    str(BASE_DIR / "simulate_real_traffic"),
+))
+
 # Video file to loop (simulates a surveillance camera)
 VIDEO_PATH = Path(os.getenv(
     "VIDEO_PATH",
-    str(BASE_DIR / "data" / "traffic_video" / "tphcm-2p" / "tphcm-2p.MOV"),
+    str(SIM_REALTIME_DIR / "data" / "tphcm" / "output-2p-light.MOV"),
 ))
 
 # YOLO model weights
 MODEL_PATH = Path(os.getenv(
     "MODEL_PATH",
-    str(BASE_DIR / "model" / "yolo11x.pt"),
+    str(SIM_REALTIME_DIR / "model" / "yolo11x.pt"),
 ))
 
 # Region polygon definitions (sits next to the video file)
 REGIONS_PATH = Path(os.getenv(
     "REGIONS_PATH",
-    str(BASE_DIR / "data" / "traffic_video" / "tphcm-2p" / "regions.json"),
+    str(SIM_REALTIME_DIR / "regions" / "tphcm" / "regions.json"),
 ))
 
 # Service port
@@ -52,14 +58,31 @@ SUMO_EDGE_LENGTH = float(os.getenv("SUMO_EDGE_LENGTH", "15.0"))
 SUMO_NUM_LANES = int(os.getenv("SUMO_NUM_LANES", "2"))
 SUMO_GUI = os.getenv("SUMO_GUI", "0") == "1"
 
-# Steps per action — must match the training env's steps_per_action
-STEPS_PER_ACTION = int(os.getenv("STEPS_PER_ACTION", "5"))
-
-# Directory containing trained RL models
-RL_MODEL_DIR = Path(os.getenv(
-    "RL_MODEL_DIR",
-    str(BASE_DIR.parent.parent / "simulation" / "models"),
+# Deploy pipeline assets
+DEPLOY_SUMO_DIR = Path(os.getenv(
+    "DEPLOY_SUMO_DIR",
+    str(SIM_REALTIME_DIR / "sumo"),
 ))
+DEPLOY_MODEL_DIR = Path(os.getenv(
+    "DEPLOY_MODEL_DIR",
+    str(Path("/simulation/models")),
+))
+DEPLOY_VIDEO_DIR = Path(os.getenv(
+    "DEPLOY_VIDEO_DIR",
+    str(SIM_REALTIME_DIR / "data"),
+))
+
+SAVED_NETWORKS_DIR = Path(os.getenv(
+    "SAVED_NETWORKS_DIR",
+    str(BASE_DIR.parent.parent / "simulation" / "networks"),
+))
+
+# Deploy loop timing
+DEPLOY_DECISION_INTERVAL_STEPS = int(os.getenv("DEPLOY_DECISION_INTERVAL_STEPS", "5"))
+
+
+
+
 
 # Fixed-time baseline durations (seconds)
 FIXED_GREEN_DURATION = int(os.getenv("FIXED_GREEN_DURATION", "35"))

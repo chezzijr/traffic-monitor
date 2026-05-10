@@ -1,11 +1,13 @@
 import { useEffect } from 'react';
-import { Zap, ZapOff, XCircle } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Zap, ZapOff, XCircle, Eye } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useModelStore } from '../../store/modelStore';
 import { deploymentService } from '../../services/deploymentService';
 import { modelService } from '../../services/modelService';
 
 export function DeploymentsPanel() {
+  const navigate = useNavigate();
   const deployments = useModelStore((s) => s.deployments);
   const setDeployments = useModelStore((s) => s.setDeployments);
   const removeDeployment = useModelStore((s) => s.removeDeployment);
@@ -39,6 +41,10 @@ export function DeploymentsPanel() {
     } catch {
       toast.error('Failed to undeploy model');
     }
+  };
+
+  const handleView = () => {
+    navigate('/simulation/view');
   };
 
   return (
@@ -78,6 +84,15 @@ export function DeploymentsPanel() {
                   {dep.ai_control_enabled ? 'AI On' : 'AI Off'}
                 </button>
 
+                <button
+                  onClick={handleView}
+                  className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors"
+                  title="View simulation"
+                >
+                  <Eye size={12} />
+                  View
+                </button>
+
                 {/* Undeploy button */}
                 <button
                   onClick={() => handleUndeploy(dep.tl_id)}
@@ -95,3 +110,4 @@ export function DeploymentsPanel() {
     </div>
   );
 }
+

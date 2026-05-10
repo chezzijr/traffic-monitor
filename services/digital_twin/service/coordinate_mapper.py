@@ -102,6 +102,10 @@ class DirectionTracker:
             if len(recent) >= self.confirm_frames and all(r == region for r in recent):
                 self._exit_direction[vehicle_id] = region
 
+    def get_exit_direction(self, vehicle_id: int) -> str | None:
+        """Return the confirmed exit direction."""
+        return self._exit_direction.get(vehicle_id)
+
     def get_entry_direction(self, vehicle_id: int) -> str | None:
         """Return the confirmed entry direction."""
         return self._entry_direction.get(vehicle_id)

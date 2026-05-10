@@ -7,8 +7,9 @@ import { TrainingChart } from '../Training/TrainingChart';
 interface ModelCardProps {
   model: TrainedModel;
   isExpanded: boolean;
+  isSelected: boolean;
   onToggleExpand: () => void;
-  onDeploy: (model: TrainedModel) => void;
+  onSelect: (model: TrainedModel) => void;
   onDelete: (modelId: string) => void;
 }
 
@@ -17,7 +18,7 @@ function deltaPercent(baseline: number, trained: number, lowerIsBetter = false):
   return ((trained - baseline) / baseline) * 100;
 }
 
-export function ModelCard({ model, isExpanded, onToggleExpand, onDeploy, onDelete }: ModelCardProps) {
+export function ModelCard({ model, isExpanded, isSelected, onToggleExpand, onSelect, onDelete }: ModelCardProps) {
   const algColor = model.algorithm === 'dqn'
     ? 'bg-green-100 text-green-700'
     : model.algorithm === 'colight'
@@ -50,9 +51,19 @@ export function ModelCard({ model, isExpanded, onToggleExpand, onDeploy, onDelet
     : [];
 
   return (
-    <div className="border border-gray-200 rounded-lg bg-white">
+    <div className={`border rounded-lg bg-white ${isSelected ? 'border-blue-500 shadow-sm' : 'border-gray-200'}`}>
       {/* Collapsed state - always shown */}
-      <div className="p-3">
+      <div
+        className="p-3 cursor-pointer"
+        role="button"
+        tabIndex={0}
+        onClick={() => onSelect(model)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            onSelect(model);
+          }
+        }}
+      >
         <div className="flex items-start justify-between">
           <div className="flex-1 min-w-0">
             {/* Top row: algorithm badge + date */}
@@ -147,14 +158,24 @@ export function ModelCard({ model, isExpanded, onToggleExpand, onDeploy, onDelet
 
           <div className="flex gap-2 pt-1">
             <button
-              onClick={() => onDeploy(model)}
-              className="flex-1 flex items-center justify-center gap-1 text-xs py-1.5 rounded bg-green-50 text-green-700 hover:bg-green-100 transition-colors"
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelect(model);
+              }}
+              className={`flex-1 flex items-center justify-center gap-1 text-xs py-1.5 rounded transition-colors ${
+                isSelected
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-blue-50 text-blue-700 hover:bg-blue-100'
+              }`}
             >
               <Rocket size={12} />
-              Deploy
+              {isSelected ? 'Selected' : 'Select'}
             </button>
             <button
-              onClick={() => onDelete(model.model_id)}
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(model.model_id);
+              }}
               className="flex items-center justify-center px-2 py-1.5 rounded bg-red-50 text-red-500 hover:bg-red-100 transition-colors"
               title="Delete model"
             >
