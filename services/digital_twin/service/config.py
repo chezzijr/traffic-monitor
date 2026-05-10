@@ -36,6 +36,15 @@ REGIONS_PATH = Path(os.getenv(
     str(SIM_REALTIME_DIR / "regions" / "tphcm" / "regions.json"),
 ))
 
+# Tracker config (BoT-SORT)
+TRACKER_CONFIG = Path(os.getenv(
+    "TRACKER_CONFIG",
+    str(SIM_REALTIME_DIR / "botsort.yaml"),
+))
+
+# Video time annotation base (HH:MM:SS)
+VIDEO_START_TIME = os.getenv("VIDEO_START_TIME", "12:00:00")
+
 # Service port
 PORT = int(os.getenv("PORT", "8001"))
 
@@ -44,8 +53,10 @@ TRACKED_CLASS_IDS = {2, 3, 5, 7}   # car, motorcycle, bus, truck
 METERS_PER_PIXEL = 50 / 1420
 WAITING_SPEED_THRESHOLD = 2.0       # m/s — below this, vehicle is "waiting"
 YOLO_CONF = float(os.getenv("YOLO_CONF", "0.1"))  # detection confidence
-YOLO_VID_STRIDE = int(os.getenv("YOLO_VID_STRIDE", "3"))  # process every Nth frame
+YOLO_VID_STRIDE = int(os.getenv("YOLO_VID_STRIDE", "1"))  # process every Nth frame
 YOLO_IMGSZ = int(os.getenv("YOLO_IMGSZ", "1280"))
+DETECTION_MODE = os.getenv("DETECTION_MODE", "track").lower()  # track | predict
+COMPARE_PREDICT = os.getenv("COMPARE_PREDICT", "0") == "1"
 
 # Traffic light inference: if waiting vehicles >= this threshold, direction is RED
 WAITING_VEHICLE_RED_THRESHOLD = int(os.getenv("WAITING_VEHICLE_RED_THRESHOLD", "3"))

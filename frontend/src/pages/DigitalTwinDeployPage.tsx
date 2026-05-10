@@ -6,6 +6,16 @@ import { mapService } from '../services/mapService';
 import { modelService } from '../services/modelService';
 import type { TrainedModel } from '../types';
 
+const VIDEO_START_TIME = '12:00:00';
+
+const formatHms = (seconds: number): string => {
+  const total = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+};
+
 export function DigitalTwinDeployPage() {
   const navigate = useNavigate();
   const [trainedModels, setTrainedModels] = useState<TrainedModel[]>([]);
@@ -135,23 +145,24 @@ export function DigitalTwinDeployPage() {
       }}
     >
       {/* Header */}
-      <header className="border-b border-white/10 bg-black/40 backdrop-blur">
+      <header className="border-b border-white/10 bg-black/30 backdrop-blur-sm">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
-              onClick={() => navigate('/')}
+              onClick={() => navigate(-1)}
               className="p-2 rounded-lg hover:bg-white/10 transition-colors"
+              aria-label="Back"
             >
               <ArrowLeft size={18} />
             </button>
-            <div className="flex items-center gap-2">
-              <Cpu size={18} className="text-cyan-400" />
-              <h1 className="text-lg font-semibold tracking-wide">Digital Twin Deploy</h1>
-            </div>
+            <h1 className="text-lg font-semibold tracking-wide">Digital Twin Deploy</h1>
           </div>
           <div className="flex items-center gap-3 text-xs text-slate-300">
             <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full" style={{ background: status?.running ? '#22c55e' : '#64748b' }} />
+              <span
+                className="w-2 h-2 rounded-full"
+                style={{ background: status?.running ? '#22c55e' : '#64748b' }}
+              />
               {status?.running ? 'Running' : 'Idle'}
             </div>
             <div className="px-2.5 py-1 rounded-full bg-white/5 border border-white/10">

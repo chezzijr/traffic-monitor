@@ -2,9 +2,9 @@
 tracker_type: botsort
 
 # Detection thresholds
-track_high_thresh: 0.5      # High confidence detection threshold
+track_high_thresh: 0.25     # High confidence detection threshold
 track_low_thresh: 0.1       # Low confidence detection threshold
-new_track_thresh: 0.7       # Higher = less eager to create new tracks, prefer re-association
+new_track_thresh: 0.25      # Lower = more eager to create new tracks
 
 # Matching parameters
 match_thresh: 0.8           # IOU threshold for matching

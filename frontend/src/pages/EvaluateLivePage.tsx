@@ -59,6 +59,14 @@ export function EvaluateLivePage() {
     return `${m}:${sec.toString().padStart(2, '0')}`;
   };
 
+  const formatHms = (s: number) => {
+    const total = Math.max(0, Math.floor(s));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const sec = total % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+  };
+
   const isComplete = snapshot?.running === false && snapshot?.evaluation;
 
   return (
@@ -133,17 +141,19 @@ export function EvaluateLivePage() {
               )}
             </div>
             <div className="flex-1 flex items-center justify-center p-2 bg-black/30">
-              <style>{`
-                .video-flip {
-                  transform: scale(-1, -1) !important;
-                }
-              `}</style>
               {snapshot?.video_frame ? (
-                <img
-                  src={`data:image/jpeg;base64,${showAnnotated && snapshot.video_frame_annotated ? snapshot.video_frame_annotated : snapshot.video_frame}`}
-                  alt="Video feed"
-                  className="max-w-full max-h-full object-contain rounded-lg video-flip"
-                />
+                <div className="relative max-w-full max-h-full">
+                  <img
+                    src={`data:image/jpeg;base64,${showAnnotated && snapshot.video_frame_annotated ? snapshot.video_frame_annotated : snapshot.video_frame}`}
+                    alt="Video feed"
+                    className="max-w-full max-h-full object-contain rounded-lg"
+                  />
+                  {typeof snapshot.video_timestamp === 'number' && (
+                    <div className="absolute top-2 left-2 rounded bg-black/70 px-2 py-1 text-xs text-white">
+                      Time: 12:00:00 + {formatHms(snapshot.video_timestamp)}
+                    </div>
+                  )}
+                </div>
               ) : (
                 <div className="text-gray-600 text-sm flex flex-col items-center gap-2">
                   <Loader2 size={24} className="animate-spin text-gray-700" />

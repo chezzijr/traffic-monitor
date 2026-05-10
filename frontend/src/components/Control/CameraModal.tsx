@@ -361,12 +361,6 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
                             </label>
                         )}
 
-                        <style>{`
-                            .camera-flip {
-                                transform: scale(-1, -1) !important;
-                            }
-                        `}</style>
-
                         {frames && validFrames.length > 0 ? (
                             <div className={`grid gap-4 ${validFrames.length === 1 ? "grid-cols-1" : "grid-cols-2"}`}>
                                 {validFrames.map((f, index) => {
@@ -379,7 +373,7 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
                                         <div key={f.number ?? index}>
                                             <img
                                                 src={`data:image/jpeg;base64,${imgSrc}`}
-                                                className="w-full rounded camera-flip"
+                                                className="w-full rounded"
                                                 alt={`Camera feed ${directionName}`}
                                             />
                                             {dirLight ? (

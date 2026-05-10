@@ -93,6 +93,8 @@ def frame():
     Response format:
     ``{ frames: [{ number: 1, image: "<base64>", image_annotated: "<base64>" }] }``
     """
+    # Keep the stream alive when the frontend only polls /frame.
+    start_stream()
     data = get_latest_frame()
     img = data.get("image")
     img_ann = data.get("image_annotated")

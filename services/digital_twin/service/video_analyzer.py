@@ -30,10 +30,39 @@ from service.config import (
     YOLO_CONF,
     YOLO_VID_STRIDE,
     REGIONS_PATH,
+    TRACKER_CONFIG,
+    DETECTION_MODE,
+    COMPARE_PREDICT,
 )
 from service.region_helpers import detect_region, load_regions_from_json
 
 logger = logging.getLogger(__name__)
+
+
+def _run_track(model, frame, device: str):
+    return model.track(
+        frame,
+        imgsz=YOLO_IMGSZ,
+        conf=YOLO_CONF,
+        show=False,
+        verbose=False,
+        persist=True,
+        tracker=str(TRACKER_CONFIG),
+        half=(device == "cuda"),
+        device=device,
+    )
+
+
+def _run_predict(model, frame, device: str):
+    return model.predict(
+        frame,
+        imgsz=YOLO_IMGSZ,
+        conf=YOLO_CONF,
+        show=False,
+        verbose=False,
+        device=device,
+    )
+
 
 # ── Shared state (single atomic snapshot) ─────────────────────────────
 
@@ -107,6 +136,81 @@ class SpeedCalculator:
         return track["speed_ms"], track["entry_region"]
 
 
+class LatestFrameBuffer:
+    """Read video frames in a background thread and keep only the latest.
+
+    The reader paces itself to the video FPS, so it doesn't run ahead of
+    real-time. The main loop always consumes the newest frame available.
+    """
+
+    def __init__(self, video_path: str):
+        self.cap = cv2.VideoCapture(video_path)
+        if not self.cap.isOpened():
+            raise RuntimeError(f"Cannot open video {video_path}")
+
+        self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 30.0
+        self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+
+        self._lock = threading.Lock()
+        self._latest: tuple[int, any] | None = None
+        self._frame_idx = 0
+        self._seek_to: int | None = None
+        self._eof = False
+        self._start_wall: float | None = None
+        self._stop_event = threading.Event()
+
+        self._thread = threading.Thread(
+            target=self._reader_loop,
+            daemon=True,
+            name="video-reader",
+        )
+        self._thread.start()
+
+    def _reader_loop(self) -> None:
+        while not self._stop_event.is_set():
+            with self._lock:
+                seek_to = self._seek_to
+                if seek_to is not None:
+                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, seek_to)
+                    self._frame_idx = seek_to
+                    self._seek_to = None
+                    self._start_wall = time.monotonic()
+
+            ret, frame = self.cap.read()
+            if not ret:
+                with self._lock:
+                    self._eof = True
+                break
+
+            with self._lock:
+                self._frame_idx += 1
+                self._latest = (self._frame_idx, frame)
+                if self._start_wall is None:
+                    self._start_wall = time.monotonic()
+                start_wall = self._start_wall
+                frame_idx = self._frame_idx
+
+            if start_wall is not None:
+                target_delay = (frame_idx / self.fps) - (time.monotonic() - start_wall)
+                if target_delay > 0:
+                    time.sleep(min(target_delay, 0.5))
+
+    def get_latest(self) -> tuple[tuple[int, any] | None, bool]:
+        with self._lock:
+            return self._latest, self._eof
+
+    def seek(self, target_frame: int) -> None:
+        with self._lock:
+            self._seek_to = max(0, target_frame)
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        self._thread.join(timeout=3.0)
+        self.cap.release()
+
+
 # ── Background processing loop ───────────────────────────────────────
 
 def _background_loop():
@@ -130,6 +234,19 @@ def _background_loop():
         model.to(device)
     
     logger.info("Stream: YOLO model loaded on %s.", device)
+    logger.info(
+        "Stream: config model=%s tracker=%s imgsz=%s conf=%s stride=%s",
+        MODEL_PATH,
+        TRACKER_CONFIG,
+        YOLO_IMGSZ,
+        YOLO_CONF,
+        YOLO_VID_STRIDE,
+    )
+    logger.info(
+        "Stream: detection mode=%s compare_predict=%s",
+        DETECTION_MODE,
+        COMPARE_PREDICT,
+    )
 
     video_path = str(VIDEO_PATH)
 
@@ -140,6 +257,7 @@ def _background_loop():
         regions = None
 
     MAX_SKIP_FRAMES = 300  # Skip up to 10 seconds (at 30fps) to catch up
+    LAG_JUMP_THRESHOLD_FRAMES = 5  # If lag exceeds this, jump to wall time
 
     while True:
         # ── Check if we should keep running ───────────────────────────
@@ -156,17 +274,14 @@ def _background_loop():
                 _stream_active = False
                 return
 
+        buffer = None
         try:
-            cap = cv2.VideoCapture(video_path)
-            if not cap.isOpened():
-                logger.error("Stream: cannot open video %s — retrying in 5s", video_path)
-                time.sleep(5)
-                continue
+            buffer = LatestFrameBuffer(video_path)
 
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+            width = buffer.width
+            height = buffer.height
+            fps = buffer.fps
+            total_frames = buffer.total_frames
 
             fallback_regions = regions if regions is not None else (width, height)
 
@@ -177,14 +292,18 @@ def _background_loop():
 
             speed_calc = SpeedCalculator(fps)
             frame_idx = 0
-            start_wall = time.monotonic()
+            last_seen_frame = 0
+            start_wall = None
+            warmup_remaining = 5
+            seek_target: int | None = None
 
-            while cap.isOpened():
+            while True:
                 # ── Check stop/idle inside inner loop too ─────────────
                 with _stream_lock:
                     if not _stream_active:
                         logger.info("Stream: stop requested mid-video.")
-                        cap.release()
+                        if buffer is not None:
+                            buffer.stop()
                         return
                     idle_secs = time.monotonic() - _stream_last_keepalive
                     if idle_secs > STREAM_IDLE_TIMEOUT:
@@ -192,42 +311,67 @@ def _background_loop():
                             "Stream: idle %.0fs — auto-stopping mid-video.", idle_secs
                         )
                         _stream_active = False
-                        cap.release()
+                        if buffer is not None:
+                            buffer.stop()
                         return
 
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                frame_idx += 1
+                latest, eof = buffer.get_latest()
+                if latest is None:
+                    if eof:
+                        break
+                    time.sleep(0.01)
+                    continue
+
+                frame_idx, frame = latest
+                frame = cv2.flip(frame, -1)
+                if frame_idx == last_seen_frame:
+                    time.sleep(0.005)
+                    continue
+
+                last_seen_frame = frame_idx
+
+                if seek_target is not None:
+                    if frame_idx < seek_target:
+                        time.sleep(0.005)
+                        continue
+                    seek_target = None
+
+                if start_wall is None:
+                    start_wall = time.monotonic()
 
                 # ── Real-time sync: compare video time vs wall time ───
                 video_time = frame_idx / fps
                 wall_elapsed = time.monotonic() - start_wall
 
-                if video_time < wall_elapsed - 0.2:
+                if warmup_remaining > 0:
+                    warmup_remaining -= 1
+                    do_force_inference = True
+                elif video_time < wall_elapsed - 0.2:
                     lag_seconds = wall_elapsed - video_time
                     frames_behind = int(lag_seconds * fps)
 
-                    if frames_behind > 0:
+                    if frames_behind >= LAG_JUMP_THRESHOLD_FRAMES:
+                        target_frame = int(wall_elapsed * fps)
+                        if target_frame > frame_idx:
+                            logger.warning(
+                                "Stream: %.1fs behind (%d frames) — jumping to frame %d.",
+                                lag_seconds, frames_behind, target_frame,
+                            )
+                            buffer.seek(target_frame)
+                            seek_target = target_frame
+                            continue
+                        do_force_inference = True
+                    elif frames_behind > 0:
                         # Skip up to MAX_SKIP_FRAMES using grab() (faster than read())
                         to_skip = min(frames_behind, MAX_SKIP_FRAMES)
                         logger.warning(
                             "Stream: %.1fs behind real-time (%d frames) — skipping %d to catch up.",
                             lag_seconds, frames_behind, to_skip
                         )
-                        for _ in range(to_skip):
-                            cap.grab()
-                            frame_idx += 1
-                        
-                        # After skipping, we MUST read the next frame
-                        ret, frame = cap.read()
-                        if not ret:
-                            break
-                        frame_idx += 1
-                        video_time = frame_idx / fps
-                        
-                        # FORCE inference on this frame after a skip
-                        do_force_inference = True
+                        target_frame = frame_idx + to_skip
+                        buffer.seek(target_frame)
+                        seek_target = target_frame
+                        continue
                     else:
                         do_force_inference = False
                 else:
@@ -238,17 +382,19 @@ def _background_loop():
                     continue
                 
                 # ── YOLO inference on this single frame ───────────────
-                results_list = model.track(
-                    frame,
-                    imgsz=YOLO_IMGSZ,
-                    conf=YOLO_CONF,
-                    show=False,
-                    verbose=False,
-                    persist=True,
-                    tracker="botsort.yaml",
-                    half=(device == "cuda"),
-                    device=device,
-                )
+                if DETECTION_MODE == "predict":
+                    results_list = _run_predict(model, frame, device)
+                else:
+                    results_list = _run_track(model, frame, device)
+
+                if COMPARE_PREDICT:
+                    compare_list = (
+                        _run_predict(model, frame, device)
+                        if DETECTION_MODE != "predict"
+                        else _run_track(model, frame, device)
+                    )
+                else:
+                    compare_list = None
 
                 if not results_list:
                     logger.warning("Stream: YOLO returned no results for frame %d", frame_idx)
@@ -256,11 +402,26 @@ def _background_loop():
                 results = results_list[0]
                 
                 num_detected = len(results.boxes) if results.boxes is not None else 0
-                logger.info("Stream: frame %d processed (lag=%.2fs, detections=%d)", 
-                            frame_idx, time.monotonic() - start_wall - video_time, num_detected)
+                if compare_list is not None:
+                    compare_boxes = compare_list[0].boxes if compare_list else None
+                    compare_count = len(compare_boxes) if compare_boxes is not None else 0
+                    logger.info(
+                        "Stream: frame %d compare_%s=%d",
+                        frame_idx,
+                        "predict" if DETECTION_MODE != "predict" else "track",
+                        compare_count,
+                    )
+                num_tracked = 0
+                logger.info(
+                    "Stream: frame %d processed (lag=%.2fs, mode=%s, detections=%d)",
+                    frame_idx,
+                    time.monotonic() - start_wall - video_time,
+                    DETECTION_MODE,
+                    num_detected,
+                )
                 frame_img = results.orig_img
 
-                box_annotations: list[tuple[int,int,int,int,bool,int]] = []
+                box_annotations: list[tuple[int,int,int,int,bool,int,str]] = []
                 frame_waiting: dict[str, int] = defaultdict(int)
                 frame_vehicles: list[dict] = []
 
@@ -268,8 +429,7 @@ def _background_loop():
                     if box.cls is None or len(box.cls) == 0:
                         continue
                     cls = int(box.cls[0])
-                    if cls not in TRACKED_CLASS_IDS:
-                        continue
+                    cls_name = model.names.get(cls, f"cls{cls}")
 
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
                     cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
@@ -286,21 +446,32 @@ def _background_loop():
                     is_waiting = False
                     speed_ms = 0.0
 
-                    if object_id is not None:
+                    if object_id is not None and cls in TRACKED_CLASS_IDS:
                         speed_ms, _ = speed_calc.update(object_id, cx, cy, frame_idx, region)
                         is_waiting = region is not None and speed_ms < WAITING_SPEED_THRESHOLD
                         if is_waiting:
                             frame_waiting[region] += 1
+                        num_tracked += 1
                     
                     # Add to annotations even if tracking ID is missing (show user that YOLO works)
-                    box_annotations.append((x1, y1, x2, y2, is_waiting, object_id if object_id is not None else -1))
+                    box_annotations.append(
+                        (x1, y1, x2, y2, is_waiting, object_id if object_id is not None else -1, cls_name)
+                    )
                     
-                    if object_id is not None:
+                    if object_id is not None and cls in TRACKED_CLASS_IDS:
                         frame_vehicles.append({
                             "id": object_id, "cx": cx, "cy": cy, "speed": speed_ms,
                             "region": region, "is_waiting": is_waiting,
                             "video_width": width, "video_height": height,
                         })
+
+                if num_detected > 0:
+                    logger.info(
+                        "Stream: frame %d tracked=%d total=%d",
+                        frame_idx,
+                        num_tracked,
+                        num_detected,
+                    )
 
                 directions = ["north", "south", "east", "west"]
                 counts = {d: frame_waiting.get(d, 0) for d in directions}
@@ -314,10 +485,10 @@ def _background_loop():
                         orig_b64 = base64.b64encode(buf_orig.tobytes()).decode()
 
                         annotated = frame_img.copy()
-                        for (bx1, by1, bx2, by2, bwait, bid) in box_annotations:
+                        for (bx1, by1, bx2, by2, bwait, bid, cls_name) in box_annotations:
                             color = _COLOR_WAITING if bwait else _COLOR_MOVING
                             cv2.rectangle(annotated, (bx1, by1), (bx2, by2), color, 2)
-                            label = f"#{bid} {'WAIT' if bwait else 'GO'}"
+                            label = f"{cls_name} #{bid} {'WAIT' if bwait else 'GO'}"
                             cv2.putText(
                                 annotated, label,
                                 (bx1, by1 - 6),
@@ -342,7 +513,8 @@ def _background_loop():
                 except Exception:
                     pass  # non-critical
 
-            cap.release()
+            if buffer is not None:
+                buffer.stop()
 
             # Mark video as complete (one full loop)
             with _snapshot_lock:
@@ -354,6 +526,9 @@ def _background_loop():
         except Exception:
             logger.exception("Stream: loop error — restarting in 3s")
             time.sleep(3)
+        finally:
+            if buffer is not None:
+                buffer.stop()
 
 
 # ── Stream lifecycle API ──────────────────────────────────────────────
