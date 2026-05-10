@@ -37,7 +37,7 @@ PORT = int(os.getenv("PORT", "8001"))
 TRACKED_CLASS_IDS = {1, 2, 3, 5, 7}   # bicycle, car, motorcycle, bus, truck
 METERS_PER_PIXEL = 50 / 1420
 WAITING_SPEED_THRESHOLD = 2.0       # m/s — below this, vehicle is "waiting"
-YOLO_CONF = float(os.getenv("YOLO_CONF", "0.25"))  # detection confidence
+YOLO_CONF = float(os.getenv("YOLO_CONF", "0.1"))  # detection confidence
 YOLO_VID_STRIDE = int(os.getenv("YOLO_VID_STRIDE", "3"))  # process every Nth frame
 YOLO_IMGSZ = int(os.getenv("YOLO_IMGSZ", "960"))
 

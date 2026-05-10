@@ -36,6 +36,7 @@ export interface SyncSnapshot {
   step: number;
   running: boolean;
   video_frame?: string;
+  video_frame_annotated?: string;
   video_timestamp?: number;
 
   rl_vehicles?: SumoVehicle[];

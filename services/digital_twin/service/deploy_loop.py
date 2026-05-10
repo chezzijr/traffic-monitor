@@ -738,7 +738,8 @@ def _deploy_loop(tl_id: str | None, grid_rows: int, grid_cols: int, network_id: 
             snapshot = {
                 "step": metrics["step"],
                 "running": True,
-                "video_frame": frame_data.get("image_annotated") or frame_data.get("image"),
+                "video_frame": frame_data.get("image"),
+                "video_frame_annotated": frame_data.get("image_annotated"),
                 "video_timestamp": frame_data.get("timestamp", 0.0),
                 "vehicles": _sumo.get_vehicles() if _sumo.running else [],
                 "tl_state": tl_states,

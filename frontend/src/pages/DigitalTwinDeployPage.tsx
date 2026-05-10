@@ -19,6 +19,7 @@ export function DigitalTwinDeployPage() {
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showAnnotated, setShowAnnotated] = useState(true);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -323,16 +324,34 @@ export function DigitalTwinDeployPage() {
         {/* Live panels */}
         <section className="space-y-6">
           <div className="bg-white/5 border border-white/10 rounded-2xl overflow-hidden shadow-lg shadow-black/30">
-            <div className="px-4 py-2 border-b border-white/10 text-xs uppercase tracking-widest text-slate-400 flex items-center gap-2">
-              <Video size={14} className="text-cyan-400" />
-              Live Video Feed
+            <div className="px-4 py-2.5 border-b border-white/10 text-xs uppercase tracking-widest text-slate-400 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Video size={14} className="text-cyan-400" />
+                Live Video Feed
+              </div>
+              {snapshot?.video_frame_annotated && (
+                <label className="flex items-center gap-2 cursor-pointer select-none text-[10px] text-slate-400 hover:text-slate-200 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={showAnnotated}
+                    onChange={(e) => setShowAnnotated(e.target.checked)}
+                    className="accent-cyan-400"
+                  />
+                  Show Bounding Boxes
+                </label>
+              )}
             </div>
             <div className="h-[420px] bg-black/40 flex items-center justify-center">
+              <style>{`
+                .dt-video-flip {
+                  transform: scale(-1, -1) !important;
+                }
+              `}</style>
               {snapshot?.video_frame ? (
                 <img
-                  src={`data:image/jpeg;base64,${snapshot.video_frame}`}
+                  src={`data:image/jpeg;base64,${showAnnotated && snapshot.video_frame_annotated ? snapshot.video_frame_annotated : snapshot.video_frame}`}
                   alt="Digital twin video"
-                  className="max-h-full max-w-full object-contain"
+                  className="max-h-full max-w-full object-contain dt-video-flip"
                 />
               ) : (
                 <div className="text-slate-500 text-sm">Waiting for frames…</div>

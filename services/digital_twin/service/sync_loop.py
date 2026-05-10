@@ -208,7 +208,8 @@ def _sync_loop() -> None:
             snapshot = {
                 "step": metrics["step"],
                 "running": True,
-                "video_frame": frame_data.get("image_annotated") or frame_data.get("image"),
+                "video_frame": frame_data.get("image"),
+                "video_frame_annotated": frame_data.get("image_annotated"),
                 "video_timestamp": frame_data.get("timestamp", 0.0),
                 "vehicles": _sumo.get_vehicles() if _sumo.running else [],
                 "tl_state": _sumo.get_traffic_light_state() if _sumo.running else {},

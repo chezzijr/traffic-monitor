@@ -11,6 +11,7 @@ export function EvaluateLivePage() {
   const [snapshot, setSnapshot] = useState<SyncSnapshot | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [stopping, setStopping] = useState(false);
+  const [showAnnotated, setShowAnnotated] = useState(true);
   const startTime = useRef(Date.now());
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -117,15 +118,31 @@ export function EvaluateLivePage() {
         {/* Panel 1: Video feed */}
         <div className="flex-1 flex flex-col min-w-0">
           <div className="bg-gray-900/60 border border-gray-800 rounded-xl flex-1 flex flex-col overflow-hidden">
-            <div className="px-4 py-2.5 border-b border-gray-800/50 text-xs font-semibold text-gray-400 uppercase tracking-wider">
-              Video Feed — Vehicle Tracking
+            <div className="px-4 py-2.5 border-b border-gray-800/50 text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center justify-between">
+              <span>Video Feed — Vehicle Tracking</span>
+              {snapshot?.video_frame_annotated && (
+                <label className="flex items-center gap-2 cursor-pointer select-none text-[10px] text-gray-500 hover:text-gray-300 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={showAnnotated}
+                    onChange={(e) => setShowAnnotated(e.target.checked)}
+                    className="accent-violet-500"
+                  />
+                  Show Bounding Boxes
+                </label>
+              )}
             </div>
             <div className="flex-1 flex items-center justify-center p-2 bg-black/30">
+              <style>{`
+                .video-flip {
+                  transform: scale(-1, -1) !important;
+                }
+              `}</style>
               {snapshot?.video_frame ? (
                 <img
-                  src={`data:image/jpeg;base64,${snapshot.video_frame}`}
+                  src={`data:image/jpeg;base64,${showAnnotated && snapshot.video_frame_annotated ? snapshot.video_frame_annotated : snapshot.video_frame}`}
                   alt="Video feed"
-                  className="max-w-full max-h-full object-contain rounded-lg"
+                  className="max-w-full max-h-full object-contain rounded-lg video-flip"
                 />
               ) : (
                 <div className="text-gray-600 text-sm flex flex-col items-center gap-2">

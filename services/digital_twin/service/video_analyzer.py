@@ -240,39 +240,34 @@ def _background_loop():
                 frame_vehicles: list[dict] = []
 
                 for box in results.boxes:
-                    if box.id is None:
-                        continue
-
-                    object_id = int(box.id[0])
                     cls = int(box.cls[0])
-
                     if cls not in TRACKED_CLASS_IDS:
                         continue
 
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    cx = (x1 + x2) / 2
-                    cy = (y1 + y2) / 2
-
+                    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
                     region = detect_region(cx, cy, fallback_regions)
-                    speed_ms, _ = speed_calc.update(
-                        object_id, cx, cy, frame_idx, region,
-                    )
 
-                    is_waiting = region is not None and speed_ms < WAITING_SPEED_THRESHOLD
-                    if is_waiting:
-                        frame_waiting[region] += 1
+                    # Tracking ID is needed for speed / waiting state
+                    object_id = int(box.id[0]) if box.id is not None else None
+                    is_waiting = False
+                    speed_ms = 0.0
 
-                    box_annotations.append((x1, y1, x2, y2, is_waiting, object_id))
-                    frame_vehicles.append({
-                        "id": object_id,
-                        "cx": cx,
-                        "cy": cy,
-                        "speed": speed_ms,
-                        "region": region,
-                        "is_waiting": is_waiting,
-                        "video_width": width,
-                        "video_height": height,
-                    })
+                    if object_id is not None:
+                        speed_ms, _ = speed_calc.update(object_id, cx, cy, frame_idx, region)
+                        is_waiting = region is not None and speed_ms < WAITING_SPEED_THRESHOLD
+                        if is_waiting:
+                            frame_waiting[region] += 1
+                    
+                    # Add to annotations even if tracking ID is missing (show user that YOLO works)
+                    box_annotations.append((x1, y1, x2, y2, is_waiting, object_id if object_id is not None else -1))
+                    
+                    if object_id is not None:
+                        frame_vehicles.append({
+                            "id": object_id, "cx": cx, "cy": cy, "speed": speed_ms,
+                            "region": region, "is_waiting": is_waiting,
+                            "video_width": width, "video_height": height,
+                        })
 
                 directions = ["north", "south", "east", "west"]
                 counts = {d: frame_waiting.get(d, 0) for d in directions}
