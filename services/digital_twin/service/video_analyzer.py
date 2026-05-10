@@ -26,17 +26,52 @@ from service.config import (
     TRACKED_CLASS_IDS,
     VIDEO_PATH,
     WAITING_SPEED_THRESHOLD,
+    WAITING_MIN_FRAMES,
+    WAITING_SPEED_THRESHOLD_NORTH,
     YOLO_IMGSZ,
     YOLO_CONF,
     YOLO_VID_STRIDE,
     REGIONS_PATH,
     TRACKER_CONFIG,
-    DETECTION_MODE,
-    COMPARE_PREDICT,
 )
 from service.region_helpers import detect_region, load_regions_from_json
 
 logger = logging.getLogger(__name__)
+
+
+def _format_hms_label(total_seconds: float) -> str:
+    seconds = max(0, int(total_seconds))
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    return f"{hours:02d}h{minutes:02d}m{secs:02d}s"
+
+
+def _build_time_label(video_time: float) -> str:
+    return f"12h00m00s + {_format_hms_label(video_time)}"
+
+
+def _draw_time_label(frame, text: str) -> None:
+    cv2.putText(
+        frame,
+        text,
+        (12, 24),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (0, 0, 0),
+        3,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame,
+        text,
+        (12, 24),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
 
 
 def _run_track(model, frame, device: str):
@@ -52,16 +87,6 @@ def _run_track(model, frame, device: str):
         device=device,
     )
 
-
-def _run_predict(model, frame, device: str):
-    return model.predict(
-        frame,
-        imgsz=YOLO_IMGSZ,
-        conf=YOLO_CONF,
-        show=False,
-        verbose=False,
-        device=device,
-    )
 
 
 # ── Shared state (single atomic snapshot) ─────────────────────────────
@@ -114,8 +139,10 @@ class SpeedCalculator:
                 "last_cy": cy,
                 "speed_ms": 0.0,
                 "entry_region": region,
+                "low_speed_frames": 0,
+                "seen_frames": 1,
             }
-            return 0.0, region
+            return 0.0, region, 0
 
         track = self.tracks[object_id]
         frame_diff = frame_count - track["last_frame"]
@@ -130,10 +157,16 @@ class SpeedCalculator:
                 + (1 - self.smoothing) * track["speed_ms"]
             )
 
+        track["seen_frames"] += 1
+        if track["speed_ms"] < WAITING_SPEED_THRESHOLD:
+            track["low_speed_frames"] += 1
+        else:
+            track["low_speed_frames"] = 0
+
         track["last_frame"] = frame_count
         track["last_cx"] = cx
         track["last_cy"] = cy
-        return track["speed_ms"], track["entry_region"]
+        return track["speed_ms"], track["entry_region"], track["low_speed_frames"]
 
 
 class LatestFrameBuffer:
@@ -242,11 +275,7 @@ def _background_loop():
         YOLO_CONF,
         YOLO_VID_STRIDE,
     )
-    logger.info(
-        "Stream: detection mode=%s compare_predict=%s",
-        DETECTION_MODE,
-        COMPARE_PREDICT,
-    )
+    logger.info("Stream: detection mode=track (forced)")
 
     video_path = str(VIDEO_PATH)
 
@@ -382,19 +411,7 @@ def _background_loop():
                     continue
                 
                 # ── YOLO inference on this single frame ───────────────
-                if DETECTION_MODE == "predict":
-                    results_list = _run_predict(model, frame, device)
-                else:
-                    results_list = _run_track(model, frame, device)
-
-                if COMPARE_PREDICT:
-                    compare_list = (
-                        _run_predict(model, frame, device)
-                        if DETECTION_MODE != "predict"
-                        else _run_track(model, frame, device)
-                    )
-                else:
-                    compare_list = None
+                results_list = _run_track(model, frame, device)
 
                 if not results_list:
                     logger.warning("Stream: YOLO returned no results for frame %d", frame_idx)
@@ -402,21 +419,11 @@ def _background_loop():
                 results = results_list[0]
                 
                 num_detected = len(results.boxes) if results.boxes is not None else 0
-                if compare_list is not None:
-                    compare_boxes = compare_list[0].boxes if compare_list else None
-                    compare_count = len(compare_boxes) if compare_boxes is not None else 0
-                    logger.info(
-                        "Stream: frame %d compare_%s=%d",
-                        frame_idx,
-                        "predict" if DETECTION_MODE != "predict" else "track",
-                        compare_count,
-                    )
                 num_tracked = 0
                 logger.info(
-                    "Stream: frame %d processed (lag=%.2fs, mode=%s, detections=%d)",
+                    "Stream: frame %d processed (lag=%.2fs, mode=track, detections=%d)",
                     frame_idx,
                     time.monotonic() - start_wall - video_time,
-                    DETECTION_MODE,
                     num_detected,
                 )
                 frame_img = results.orig_img
@@ -447,16 +454,26 @@ def _background_loop():
                     speed_ms = 0.0
 
                     if object_id is not None and cls in TRACKED_CLASS_IDS:
-                        speed_ms, _ = speed_calc.update(object_id, cx, cy, frame_idx, region)
-                        is_waiting = region is not None and speed_ms < WAITING_SPEED_THRESHOLD
+                        speed_ms, _, low_speed_frames = speed_calc.update(
+                            object_id, cx, cy, frame_idx, region
+                        )
+                        speed_threshold = WAITING_SPEED_THRESHOLD
+                        if region == "north":
+                            speed_threshold = WAITING_SPEED_THRESHOLD_NORTH
+                        is_waiting = (
+                            region is not None
+                            and speed_ms < speed_threshold
+                            and low_speed_frames >= WAITING_MIN_FRAMES
+                        )
                         if is_waiting:
                             frame_waiting[region] += 1
                         num_tracked += 1
                     
-                    # Add to annotations even if tracking ID is missing (show user that YOLO works)
-                    box_annotations.append(
-                        (x1, y1, x2, y2, is_waiting, object_id if object_id is not None else -1, cls_name)
-                    )
+                    # Only annotate vehicle classes to avoid rider/person duplicates.
+                    if cls in TRACKED_CLASS_IDS:
+                        box_annotations.append(
+                            (x1, y1, x2, y2, is_waiting, object_id if object_id is not None else -1, cls_name)
+                        )
                     
                     if object_id is not None and cls in TRACKED_CLASS_IDS:
                         frame_vehicles.append({
@@ -479,8 +496,11 @@ def _background_loop():
 
                 try:
                     if frame_img is not None:
+                        time_label = _build_time_label(video_time)
+                        frame_with_time = frame_img.copy()
+                        _draw_time_label(frame_with_time, time_label)
                         _, buf_orig = cv2.imencode(
-                            ".jpg", frame_img, [cv2.IMWRITE_JPEG_QUALITY, 70],
+                            ".jpg", frame_with_time, [cv2.IMWRITE_JPEG_QUALITY, 70],
                         )
                         orig_b64 = base64.b64encode(buf_orig.tobytes()).decode()
 
@@ -495,6 +515,7 @@ def _background_loop():
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1,
                                 cv2.LINE_AA,
                             )
+                        _draw_time_label(annotated, time_label)
                         _, buf_ann = cv2.imencode(
                             ".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 70],
                         )
