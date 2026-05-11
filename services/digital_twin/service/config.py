@@ -106,3 +106,6 @@ DEPLOY_DECISION_INTERVAL_STEPS = int(os.getenv("DEPLOY_DECISION_INTERVAL_STEPS",
 # Fixed-time baseline durations (seconds)
 FIXED_GREEN_DURATION = int(os.getenv("FIXED_GREEN_DURATION", "35"))
 FIXED_YELLOW_DURATION = int(os.getenv("FIXED_YELLOW_DURATION", "3"))
+
+# Result output directory
+RESULT_DIR = Path(os.getenv("RESULT_DIR", str(BASE_DIR / "result")))

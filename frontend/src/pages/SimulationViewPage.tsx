@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Cpu, Activity, Car, Gauge, Zap, Clock } from 'lucide-react';
+import { ArrowLeft, Cpu, Activity, Car, Gauge, Zap, Clock, BrainCircuit } from 'lucide-react';
 import {
   digitalTwinDeployService,
   type DeploySnapshot,
@@ -186,8 +186,16 @@ function drawJunctions(
   canvasH: number,
   controlledTlIds: string[],
   tlStates: Record<string, TLState>,
+  agentEnabled: boolean,
 ) {
   const controlledSet = new Set(controlledTlIds);
+
+  // Color scheme: purple when agent ON, light-red when agent OFF
+  const ctrlGlow    = agentEnabled ? '#a78bfa' : '#fca5a5';
+  const ctrlGlowBg  = agentEnabled ? 'rgba(167, 139, 250, 0.25)' : 'rgba(252, 165, 165, 0.20)';
+  const ctrlFill    = agentEnabled ? '#1e1b4b' : '#1c0505';
+  const ctrlBorder  = agentEnabled ? '#a78bfa' : '#f87171';
+  const ctrlBadge   = agentEnabled ? '#c4b5fd' : '#fca5a5';
 
   for (const junc of geometry.junctions) {
     const { cx, cy } = toCanvas(junc.x, junc.y, transform, canvasH);
@@ -198,13 +206,13 @@ function drawJunctions(
     const radius = isControlled ? 16 : isTL ? 13 : 8;
 
     if (isControlled) {
-      // AI-controlled glow
+      // Controlled intersection glow ring
       ctx.save();
-      ctx.shadowColor = '#a78bfa';
+      ctx.shadowColor = ctrlGlow;
       ctx.shadowBlur = 18;
       ctx.beginPath();
       ctx.arc(cx, cy, radius + 3, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(167, 139, 250, 0.25)';
+      ctx.fillStyle = ctrlGlowBg;
       ctx.fill();
       ctx.restore();
     }
@@ -212,9 +220,9 @@ function drawJunctions(
     // Base junction fill
     ctx.beginPath();
     ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-    ctx.fillStyle = isControlled ? '#1e1b4b' : isTL ? '#1e293b' : '#1e293b';
+    ctx.fillStyle = isControlled ? ctrlFill : '#1e293b';
     ctx.fill();
-    ctx.strokeStyle = isControlled ? '#a78bfa' : '#475569';
+    ctx.strokeStyle = isControlled ? ctrlBorder : '#475569';
     ctx.lineWidth = isControlled ? 2.5 : 1.5;
     ctx.stroke();
 
@@ -225,7 +233,6 @@ function drawJunctions(
       const indicatorR = 4;
       const offset = radius + 6;
 
-      // N/S indicators (vertical)
       ctx.beginPath();
       ctx.arc(cx, cy - offset, indicatorR, 0, Math.PI * 2);
       ctx.fillStyle = ns;
@@ -236,7 +243,6 @@ function drawJunctions(
       ctx.fillStyle = ns;
       ctx.fill();
 
-      // E/W indicators (horizontal)
       ctx.beginPath();
       ctx.arc(cx + offset, cy, indicatorR, 0, Math.PI * 2);
       ctx.fillStyle = ew;
@@ -248,13 +254,13 @@ function drawJunctions(
       ctx.fill();
     }
 
-    // AI badge
+    // AI/OFF badge
     if (isControlled) {
       ctx.font = 'bold 8px "Space Grotesk", sans-serif';
-      ctx.fillStyle = '#c4b5fd';
+      ctx.fillStyle = ctrlBadge;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('AI', cx, cy);
+      ctx.fillText(agentEnabled ? 'AI' : 'OFF', cx, cy);
     }
   }
 }
@@ -293,6 +299,7 @@ export function SimulationViewPage() {
   const [snapshot, setSnapshot] = useState<DeploySnapshot | null>(null);
   const [status, setStatus] = useState<DeployStatus | null>(null);
   const [canvasSize, setCanvasSize] = useState({ w: 800, h: 600 });
+  const [togglingAgent, setTogglingAgent] = useState(false);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -381,6 +388,19 @@ export function SimulationViewPage() {
     [snapshot?.vehicles],
   );
 
+  const isMultiAgent = status?.is_multi_agent || snapshot?.is_multi_agent;
+  const agentEnabled = status?.agent_enabled ?? snapshot?.agent_enabled ?? true;
+  const waitingVehicles = vehicles.filter((v) => v.speed < 0.5).length;
+
+  const handleToggleAgent = async () => {
+    setTogglingAgent(true);
+    try {
+      await digitalTwinDeployService.toggleAgent(!agentEnabled);
+    } finally {
+      setTogglingAgent(false);
+    }
+  };
+
   // Draw canvas
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -430,17 +450,14 @@ export function SimulationViewPage() {
     const transform = computeTransform(geometry, w, h);
 
     drawNetwork(ctx, geometry, transform, h);
-    drawJunctions(ctx, geometry, transform, h, controlledTlIds, tlStates);
+    drawJunctions(ctx, geometry, transform, h, controlledTlIds, tlStates, agentEnabled);
     drawVehicles(ctx, vehicles, transform, h);
-  }, [canvasSize, controlledTlIds, tlStates, vehicles]);
+  }, [canvasSize, controlledTlIds, tlStates, vehicles, agentEnabled]);
 
   useEffect(() => {
     const raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
   }, [draw]);
-
-  const isMultiAgent = status?.is_multi_agent || snapshot?.is_multi_agent;
-  const waitingVehicles = vehicles.filter((v) => v.speed < 0.5).length;
 
   return (
     <div
@@ -512,10 +529,13 @@ export function SimulationViewPage() {
             </div>
             <div className="flex items-center gap-2">
               <span
-                className="w-3 h-3 rounded-full border-2 border-violet-400"
-                style={{ background: '#1e1b4b' }}
+                className="w-3 h-3 rounded-full border-2"
+                style={{
+                  background: agentEnabled ? '#1e1b4b' : '#1c0505',
+                  borderColor: agentEnabled ? '#a78bfa' : '#f87171',
+                }}
               />
-              AI-controlled intersection
+              {agentEnabled ? 'AI-controlled intersection' : 'AI-controlled (disabled)'}
             </div>
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-[#22c55e]" />
@@ -572,6 +592,42 @@ export function SimulationViewPage() {
               </div>
             </div>
 
+            {/* Agent toggle */}
+            {status?.running && (
+              <div className="space-y-2">
+                <div className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold flex items-center gap-1.5">
+                  <BrainCircuit size={12} className={agentEnabled ? 'text-violet-400' : 'text-red-400'} />
+                  AI Agent Control
+                </div>
+                <button
+                  onClick={handleToggleAgent}
+                  disabled={togglingAgent}
+                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl border text-xs font-semibold transition-all disabled:opacity-40 ${
+                    agentEnabled
+                      ? 'bg-violet-500/15 border-violet-500/40 text-violet-300 hover:bg-violet-500/25'
+                      : 'bg-red-500/15 border-red-400/40 text-red-300 hover:bg-red-500/25'
+                  }`}
+                >
+                  <span className="flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${agentEnabled ? 'bg-violet-400' : 'bg-red-400'}`} />
+                    {togglingAgent ? 'Updating…' : agentEnabled ? 'Agent Enabled' : 'Agent Disabled'}
+                  </span>
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full border ${
+                    agentEnabled
+                      ? 'bg-violet-500/20 border-violet-500/30 text-violet-400'
+                      : 'bg-red-500/20 border-red-400/30 text-red-400'
+                  }`}>
+                    {agentEnabled ? 'Click to disable' : 'Click to enable'}
+                  </span>
+                </button>
+                <p className="text-[10px] text-slate-500 leading-relaxed">
+                  {agentEnabled
+                    ? 'AI is actively controlling the highlighted intersections.'
+                    : 'Controlled intersections have switched to fixed-time cycling.'}
+                </p>
+              </div>
+            )}
+
             {/* Traffic lights */}
             <div className="space-y-2">
               <div className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold">
@@ -585,9 +641,11 @@ export function SimulationViewPage() {
                     <div
                       key={id}
                       className={`flex items-center gap-2 text-xs px-3 py-2 rounded-lg border ${
-                        isAI
+                        isAI && agentEnabled
                           ? 'border-violet-500/40 bg-violet-500/10'
-                          : 'border-white/10 bg-white/5'
+                          : isAI && !agentEnabled
+                            ? 'border-red-400/40 bg-red-500/10'
+                            : 'border-white/10 bg-white/5'
                       }`}
                     >
                       <div className="flex gap-1">
@@ -608,9 +666,13 @@ export function SimulationViewPage() {
                       <span className="text-slate-500 text-[10px]">
                         P{st.phase}
                       </span>
-                      {isAI ? (
+                      {isAI && agentEnabled ? (
                         <span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-500/30 text-violet-300">
                           AI
+                        </span>
+                      ) : isAI && !agentEnabled ? (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-300">
+                          OFF
                         </span>
                       ) : (
                         <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">

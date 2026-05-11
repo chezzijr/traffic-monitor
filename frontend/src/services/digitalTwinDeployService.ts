@@ -18,6 +18,7 @@ export interface DeployVideoInfo {
 export interface DeploySnapshot {
   step: number;
   running: boolean;
+  agent_enabled?: boolean;
   video_frame?: string;
   video_frame_annotated?: string;
   video_timestamp?: number;
@@ -79,6 +80,7 @@ export interface DeployStatus {
   is_multi_agent?: boolean;
   controlled_tl_ids?: string[];
   fixed_tl_ids?: string[];
+  agent_enabled?: boolean;
 }
 
 export const digitalTwinDeployService = {
@@ -114,6 +116,15 @@ export const digitalTwinDeployService = {
 
   async getStatus(): Promise<DeployStatus> {
     const res = await axios.get<DeployStatus>(`${DIGITAL_TWIN_BASE}/deploy/status`);
+    return res.data;
+  },
+
+  async toggleAgent(enabled: boolean): Promise<{ agent_enabled: boolean }> {
+    const res = await axios.post<{ agent_enabled: boolean }>(
+      `${DIGITAL_TWIN_BASE}/deploy/agent/toggle`,
+      null,
+      { params: { enabled } },
+    );
     return res.data;
   },
 };

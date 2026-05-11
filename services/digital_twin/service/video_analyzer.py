@@ -17,6 +17,7 @@ import threading
 import time
 from collections import defaultdict
 
+import numpy as np
 import torch
 import cv2
 
@@ -105,6 +106,9 @@ _vehicle_snapshot: list[dict] = []
 # Video completion flag (set when one full loop ends)
 _video_complete = False
 
+# Waiting-count time-series: list of (video_time_sec, north, south, east, west)
+_waiting_history: list[tuple[float, int, int, int, int]] = []
+
 # ── Stream lifecycle ───────────────────────────────────────────────────
 
 # How long (seconds) the stream keeps running after the last keep-alive
@@ -118,6 +122,50 @@ _stream_last_keepalive: float = 0.0   # monotonic time of last start/keepalive
 # Colours for bounding boxes (BGR for OpenCV)
 _COLOR_MOVING = (144, 238, 144)   # light green
 _COLOR_WAITING = (128, 128, 255)  # light purple/red (BGR)
+
+# ── Debug mode ────────────────────────────────────────────────────────
+_debug_mode = False
+
+
+def set_debug_mode(enabled: bool) -> None:
+    global _debug_mode
+    _debug_mode = enabled
+
+
+def get_debug_mode() -> bool:
+    return _debug_mode
+
+
+def _draw_region_overlays(frame, regions) -> None:
+    """Draw semi-transparent filled polygons + outlines for each direction region."""
+    if not isinstance(regions, dict):
+        return
+
+    overlay = frame.copy()
+    for name, data in regions.items():
+        pts = np.array(data["points"], dtype=np.int32).reshape((-1, 1, 2))
+        color_rgb = data.get("color", [255, 255, 255])
+        # regions.json stores RGB; OpenCV needs BGR
+        color_bgr = (int(color_rgb[2]), int(color_rgb[1]), int(color_rgb[0]))
+
+        cv2.fillPoly(overlay, [pts], color_bgr)
+
+    cv2.addWeighted(overlay, 0.25, frame, 0.75, 0, frame)
+
+    for name, data in regions.items():
+        pts = np.array(data["points"], dtype=np.int32).reshape((-1, 1, 2))
+        color_rgb = data.get("color", [255, 255, 255])
+        color_bgr = (int(color_rgb[2]), int(color_rgb[1]), int(color_rgb[0]))
+
+        cv2.polylines(frame, [pts], isClosed=True, color=color_bgr, thickness=2)
+
+        # Label at centroid
+        cx = int(np.mean([p[0] for p in data["points"]]))
+        cy = int(np.mean([p[1] for p in data["points"]]))
+        cv2.putText(frame, name.upper(), (cx - 20, cy),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 4, cv2.LINE_AA)
+        cv2.putText(frame, name.upper(), (cx - 20, cy),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, color_bgr, 2, cv2.LINE_AA)
 
 
 # ── Speed calculator ──────────────────────────────────────────────────
@@ -505,6 +553,8 @@ def _background_loop():
                         orig_b64 = base64.b64encode(buf_orig.tobytes()).decode()
 
                         annotated = frame_img.copy()
+                        if _debug_mode:
+                            _draw_region_overlays(annotated, fallback_regions)
                         for (bx1, by1, bx2, by2, bwait, bid, cls_name) in box_annotations:
                             color = _COLOR_WAITING if bwait else _COLOR_MOVING
                             cv2.rectangle(annotated, (bx1, by1), (bx2, by2), color, 2)
@@ -531,6 +581,13 @@ def _background_loop():
                             _snapshot["west"] = counts["west"]
                             _snapshot["total"] = counts["total"]
                             _vehicle_snapshot = frame_vehicles
+                            _waiting_history.append((
+                                video_time,
+                                counts["north"],
+                                counts["south"],
+                                counts["east"],
+                                counts["west"],
+                            ))
                 except Exception:
                     pass  # non-critical
 
@@ -667,6 +724,22 @@ def reset_video_complete_flag() -> None:
     global _video_complete
     with _snapshot_lock:
         _video_complete = False
+
+
+def get_waiting_history() -> list[tuple[float, int, int, int, int]]:
+    """Return a copy of the accumulated waiting-count time-series.
+
+    Each entry is ``(video_time_sec, north, south, east, west)``.
+    """
+    with _snapshot_lock:
+        return list(_waiting_history)
+
+
+def reset_waiting_history() -> None:
+    """Clear the accumulated waiting-count history."""
+    global _waiting_history
+    with _snapshot_lock:
+        _waiting_history = []
 
 
 # ── Traffic light state machine ───────────────────────────────────────

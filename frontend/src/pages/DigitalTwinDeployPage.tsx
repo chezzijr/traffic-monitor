@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Play, Square, Gauge, Cpu, Video, AlertTriangle, Map, Layers, Eye } from 'lucide-react';
+import { ArrowLeft, Play, Square, Gauge, Cpu, Video, AlertTriangle, Map, Eye } from 'lucide-react';
 import { digitalTwinDeployService, type DeploySnapshot, type DeployStatus } from '../services/digitalTwinDeployService';
 import { mapService } from '../services/mapService';
 import { modelService } from '../services/modelService';
@@ -353,16 +353,11 @@ export function DigitalTwinDeployPage() {
               )}
             </div>
             <div className="h-[420px] bg-black/40 flex items-center justify-center">
-              <style>{`
-                .dt-video-flip {
-                  transform: scale(-1, -1) !important;
-                }
-              `}</style>
               {snapshot?.video_frame ? (
                 <img
                   src={`data:image/jpeg;base64,${showAnnotated && snapshot.video_frame_annotated ? snapshot.video_frame_annotated : snapshot.video_frame}`}
                   alt="Digital twin video"
-                  className="max-h-full max-w-full object-contain dt-video-flip"
+                  className="max-h-full max-w-full object-contain"
                 />
               ) : (
                 <div className="text-slate-500 text-sm">Waiting for frames…</div>

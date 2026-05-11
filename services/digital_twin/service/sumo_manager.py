@@ -318,11 +318,21 @@ class SumoManager:
         self,
         tl_id: str,
         num_actions: int,
+        max_lanes: int | None = None,
+        elapsed_in_green: int = 0,
+        max_bucket: float = 40.0,
     ) -> list[float]:
         """Build an observation vector for a specific traffic light.
 
-        Observation = [lane_vehicle_counts... , current_phase_one_hot...]
-        Matches the training environment's observation format.
+        Observation = [lane_vehicle_counts (padded to max_lanes), phase_one_hot, elapsed_scalar]
+        Matches the CoLight training environment's observation format (ob_length = max_lanes + num_actions + 1).
+
+        Args:
+            tl_id: Traffic light ID.
+            num_actions: Number of actions (= num_actions from model).
+            max_lanes: Pad lane counts to this length. If None, no padding is applied.
+            elapsed_in_green: Steps elapsed in the current green phase (for duration mode).
+            max_bucket: Largest duration bucket in seconds (default 40 for DURATION_BUCKETS_SEC).
         """
         conn = self._conn()
         controlled_lanes = list(conn.trafficlight.getControlledLanes(tl_id))
@@ -341,6 +351,12 @@ class SumoManager:
                 lane_counts.append(float(conn.lane.getLastStepVehicleNumber(lane)))
             except Exception:
                 lane_counts.append(0.0)
+
+        # Pad to max_lanes so all TLs produce the same-length observation
+        if max_lanes is not None and len(lane_counts) < max_lanes:
+            lane_counts += [0.0] * (max_lanes - len(lane_counts))
+        elif max_lanes is not None:
+            lane_counts = lane_counts[:max_lanes]
 
         try:
             sumo_phase = conn.trafficlight.getPhase(tl_id)
@@ -362,7 +378,10 @@ class SumoManager:
         if 0 <= current_green_idx < num_actions:
             phase_one_hot[current_green_idx] = 1.0
 
-        return lane_counts + phase_one_hot
+        # Elapsed scalar matches CoLight ob format: elapsed / max_bucket, clamped to [0, 1]
+        elapsed_scalar = [min(float(elapsed_in_green) / max_bucket, 1.0)]
+
+        return lane_counts + phase_one_hot + elapsed_scalar
 
     def _resolve_tl_id(self, tl_id: str | None) -> str:
         return tl_id or self.get_tl_id()

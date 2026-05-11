@@ -89,10 +89,10 @@ services:
     build:
       context: ./services/digital_twin
     image: traffic-monitor-digital-twin
+    pull_policy: never
     ports:
       - "8001:8001"
-    environment:
-
+    volumes:
       - ./services/digital_twin/data:/app/data
       - ./services/digital_twin/model:/app/model:ro
       - ./simulation:/simulation
