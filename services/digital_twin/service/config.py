@@ -84,7 +84,7 @@ DEPLOY_SUMO_DIR = Path(os.getenv(
 ))
 DEPLOY_MODEL_DIR = Path(os.getenv(
     "DEPLOY_MODEL_DIR",
-    str(Path("/simulation/models")),
+    str(Path("/app/simulation/models")),
 ))
 DEPLOY_VIDEO_DIR = Path(os.getenv(
     "DEPLOY_VIDEO_DIR",
@@ -93,7 +93,7 @@ DEPLOY_VIDEO_DIR = Path(os.getenv(
 
 SAVED_NETWORKS_DIR = Path(os.getenv(
     "SAVED_NETWORKS_DIR",
-    str(BASE_DIR.parent.parent / "simulation" / "networks"),
+    str(Path("/app/simulation/networks")),
 ))
 
 # Deploy loop timing

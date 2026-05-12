@@ -419,8 +419,14 @@ def start_deploy(model_path: str, tl_id: str | None = None, grid_rows: int = 2, 
         })
 
     # Load model first to determine if it's multi-agent
-    load_result = _model.load(model_path)
-    logger.info("Model loaded: %s", load_result)
+    try:
+        load_result = _model.load(model_path)
+        logger.info("Model loaded: %s", load_result)
+    except Exception:
+        with _deploy_lock:
+            _deploy_active = False
+            _deploy_status["running"] = False
+        raise
 
     with _deploy_lock:
         _deploy_status["is_multi_agent"] = _model.is_multi_agent

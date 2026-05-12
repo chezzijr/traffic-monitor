@@ -95,7 +95,9 @@ services:
     volumes:
       - ./services/digital_twin/data:/app/data
       - ./services/digital_twin/model:/app/model:ro
-      - ./simulation:/simulation
+      - ./services/digital_twin/simulate_real_traffic:/app/simulate_real_traffic
+      - ./services/digital_twin/result:/app/result
+      - ./simulation:/app/simulation
     networks:
       - traffic-network
     deploy:
