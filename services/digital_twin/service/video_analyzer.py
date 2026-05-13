@@ -400,7 +400,6 @@ def _background_loop():
                     continue
 
                 frame_idx, frame = latest
-                frame = cv2.flip(frame, -1)
                 if frame_idx == last_seen_frame:
                     time.sleep(0.005)
                     continue

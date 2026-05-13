@@ -92,6 +92,8 @@ services:
     pull_policy: never
     ports:
       - "8001:8001"
+    environment:
+      - MODEL_PATH=/app/simulate_real_traffic/model/yolo11x.pt
     volumes:
       - ./services/digital_twin/data:/app/data
       - ./services/digital_twin/model:/app/model:ro
