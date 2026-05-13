@@ -1,10 +1,11 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Zap, ZapOff, XCircle, Eye } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useModelStore } from '../../store/modelStore';
 import { deploymentService } from '../../services/deploymentService';
 import { modelService } from '../../services/modelService';
+import { digitalTwinDeployService } from '../../services/digitalTwinDeployService';
 
 export function DeploymentsPanel() {
   const navigate = useNavigate();
@@ -12,24 +13,32 @@ export function DeploymentsPanel() {
   const setDeployments = useModelStore((s) => s.setDeployments);
   const removeDeployment = useModelStore((s) => s.removeDeployment);
 
+  // Real agent state comes from the digital twin service, not the stale backend store
+  const [agentEnabled, setAgentEnabled] = useState(true);
+  const [toggling, setToggling] = useState(false);
+
   useEffect(() => {
     deploymentService.listDeployments()
       .then(setDeployments)
       .catch(() => toast.error('Failed to load deployments'));
   }, [setDeployments]);
 
-  const handleToggle = async (tlId: string, enabled: boolean) => {
+  useEffect(() => {
+    digitalTwinDeployService.getStatus()
+      .then((s) => setAgentEnabled(s.agent_enabled ?? true))
+      .catch(() => {}); // digital twin might not be running yet
+  }, []);
+
+  const handleToggle = async () => {
+    setToggling(true);
     try {
-      await deploymentService.toggleAIControl(tlId, enabled);
-      const current = useModelStore.getState().deployments;
-      setDeployments(
-        current.map((d) =>
-          d.tl_id === tlId ? { ...d, ai_control_enabled: enabled } : d
-        )
-      );
-      toast.success(`AI control ${enabled ? 'enabled' : 'disabled'} for ${tlId}`);
+      const result = await digitalTwinDeployService.toggleAgent(!agentEnabled);
+      setAgentEnabled(result.agent_enabled);
+      toast.success(`AI control ${result.agent_enabled ? 'enabled' : 'disabled'}`);
     } catch {
       toast.error('Failed to toggle AI control');
+    } finally {
+      setToggling(false);
     }
   };
 
@@ -67,21 +76,21 @@ export function DeploymentsPanel() {
             >
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-mono text-gray-700">{dep.tl_id}</span>
-                <span className="text-[10px] text-gray-400">{dep.network_id.slice(0, 8)}...</span>
+                <span className="text-[10px] text-gray-400">{dep.network_id?.slice(0, 8) ?? '—'}</span>
               </div>
 
               <div className="flex items-center justify-between">
-                {/* AI Control toggle */}
                 <button
-                  onClick={() => handleToggle(dep.tl_id, !dep.ai_control_enabled)}
-                  className={`flex items-center gap-1 text-xs px-2 py-1 rounded transition-colors ${
-                    dep.ai_control_enabled
+                  onClick={handleToggle}
+                  disabled={toggling}
+                  className={`flex items-center gap-1 text-xs px-2 py-1 rounded transition-colors disabled:opacity-50 ${
+                    agentEnabled
                       ? 'bg-green-100 text-green-700'
                       : 'bg-gray-100 text-gray-500'
                   }`}
                 >
-                  {dep.ai_control_enabled ? <Zap size={12} /> : <ZapOff size={12} />}
-                  {dep.ai_control_enabled ? 'AI On' : 'AI Off'}
+                  {agentEnabled ? <Zap size={12} /> : <ZapOff size={12} />}
+                  {agentEnabled ? 'AI On' : 'AI Off'}
                 </button>
 
                 <button
@@ -93,7 +102,6 @@ export function DeploymentsPanel() {
                   View
                 </button>
 
-                {/* Undeploy button */}
                 <button
                   onClick={() => handleUndeploy(dep.tl_id)}
                   className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-red-50 text-red-500 hover:bg-red-100 transition-colors"
@@ -110,4 +118,3 @@ export function DeploymentsPanel() {
     </div>
   );
 }
-

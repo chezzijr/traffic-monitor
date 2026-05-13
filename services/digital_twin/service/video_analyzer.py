@@ -229,6 +229,11 @@ class LatestFrameBuffer:
         if not self.cap.isOpened():
             raise RuntimeError(f"Cannot open video {video_path}")
 
+        # Disable WMF auto-rotation on Windows so we can apply it ourselves
+        # consistently across platforms (FFmpeg/Linux never auto-rotates).
+        self.cap.set(cv2.CAP_PROP_ORIENTATION_AUTO, 0)
+        self._rotation = int(self.cap.get(cv2.CAP_PROP_ORIENTATION_META))
+
         self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 30.0
         self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -264,6 +269,13 @@ class LatestFrameBuffer:
                 with self._lock:
                     self._eof = True
                 break
+
+            if self._rotation == 180:
+                frame = cv2.rotate(frame, cv2.ROTATE_180)
+            elif self._rotation == 90:
+                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+            elif self._rotation == 270:
+                frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
             with self._lock:
                 self._frame_idx += 1

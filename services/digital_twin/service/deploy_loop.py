@@ -29,9 +29,18 @@ from service.config import (
     FIXED_GREEN_DURATION,
     FIXED_YELLOW_DURATION,
     SIM_REALTIME_DIR,
-    SAVED_NETWORKS_DIR,
     RESULT_DIR,
 )
+
+# Compute SAVED_NETWORKS_DIR at call time so it works in both Docker (env var set)
+# and local dev (no env var; resolve relative to this file's location at repo root).
+# services/digital_twin/service/deploy_loop.py → .parent×3 → repo root
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_DEFAULT_NETWORKS_DIR = _REPO_ROOT / "simulation" / "networks"
+
+
+def _get_saved_networks_dir() -> Path:
+    return Path(os.getenv("SAVED_NETWORKS_DIR", str(_DEFAULT_NETWORKS_DIR)))
 from service.rl_model import RLModel
 from service.sumo_manager import SumoManager
 from service.video_analyzer import (
@@ -548,19 +557,23 @@ def _deploy_loop(tl_id: str | None, grid_rows: int, grid_cols: int, network_id: 
 
         # ── Step 1: Resolve network ──────────────────────────────────
         if network_id:
-            saved_net = SAVED_NETWORKS_DIR / f"{network_id}.net.xml"
+            saved_networks_dir = _get_saved_networks_dir()
+            saved_net = saved_networks_dir / f"{network_id}.net.xml"
             if saved_net.exists():
                 net_path = saved_net
                 use_saved_network = True
                 logger.info("Using saved OSM network: %s", net_path)
 
                 # Check for existing route file
-                saved_route = SAVED_NETWORKS_DIR / f"{network_id}_moderate.rou.xml"
+                saved_route = saved_networks_dir / f"{network_id}_moderate.rou.xml"
                 if saved_route.exists():
                     route_path = saved_route
                     logger.info("Using saved route file: %s", route_path)
             else:
-                logger.warning("Saved network not found: %s. Falling back to grid.", saved_net)
+                logger.warning(
+                    "Saved network not found: %s (SAVED_NETWORKS_DIR=%s). Falling back to grid.",
+                    saved_net, saved_networks_dir,
+                )
 
         if net_path is None:
             # Generate grid network
