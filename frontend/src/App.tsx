@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+// (useRef already imported)
 import toast, { Toaster } from 'react-hot-toast';
 import {
   MapContainer,
@@ -15,6 +16,8 @@ import { useTrainingStore } from './store/trainingStore';
 import { useModelStore } from './store/modelStore';
 import { mapService } from './services/mapService';
 import { modelService } from './services/modelService';
+import { deploymentService } from './services/deploymentService';
+import { digitalTwinDeployService } from './services/digitalTwinDeployService';
 import { TrainingSSE } from './services/sseService';
 import type { TrainingProgressEvent, TrainingCompletionEvent, Intersection } from './types';
 
@@ -41,6 +44,7 @@ export default function App() {
   const togglePanel = useModelStore((s) => s.togglePanel);
   const setModels = useModelStore((s) => s.setModels);
   const deployments = useModelStore((s) => s.deployments);
+  const setDeployments = useModelStore((s) => s.setDeployments);
 
   // Training progress
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -51,11 +55,166 @@ export default function App() {
   // SSE ref
   const sseRef = useRef<TrainingSSE | null>(null);
 
-  // Deployed junction IDs for map markers
-  const deployedJunctionIds = deployments.map((d) => d.tl_id);
+  // Deployed junction IDs for map markers — flatten multi-agent tl_ids
+  const deployedJunctionIds = deployments.flatMap((d) =>
+    d.tl_ids && d.tl_ids.length > 0 ? d.tl_ids : [d.tl_id],
+  );
 
   // Whether SUMO conversion is done (show selectable markers instead of regular ones)
   const hasSumoData = sumoTrafficLights.length > 0;
+
+  // Poll deployments every 2s so root-map purple markers stay fresh after
+  // deploys/swaps initiated from this or any other tab.
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const list = await deploymentService.listDeployments();
+        if (!cancelled) setDeployments(list);
+      } catch {
+        /* swallow — polling is best-effort */
+      }
+    };
+    refresh();
+    const id = setInterval(refresh, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [setDeployments]);
+
+  // Live TL phase state per deployed junction — same DT snapshot the
+  // /simulation/view canvas consumes. Renders inline on the root map so
+  // the user can verify the simulation is running without clicking
+  // each marker or opening the debug view.
+  const [tlStates, setTlStates] = useState<Record<string, { state: string; phase: number }>>({});
+  // Per-TL approach metadata from DT (one entry per physical road). Static
+  // for a deploy — refreshes only when deploy_id changes.
+  const [tlMetadata, setTlMetadata] = useState<Record<string, {
+    approaches: Array<{ angle_deg: number; link_indices: number[]; from_edge: string }>;
+  }>>({});
+  const lastDeployIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (deployments.length === 0) {
+      setTlStates({});
+      setTlMetadata({});
+      lastDeployIdRef.current = null;
+      return;
+    }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const snap = await digitalTwinDeployService.getSnapshot();
+        if (cancelled) return;
+        const ts = snap.tl_state;
+        const next: Record<string, { state: string; phase: number }> = {};
+        if (ts) {
+          if (typeof ts === 'object' && 'tl_id' in ts && typeof (ts as { tl_id?: string }).tl_id === 'string') {
+            const single = ts as { tl_id: string; state: string; phase: number };
+            next[single.tl_id] = { state: single.state, phase: single.phase };
+          } else {
+            for (const [tlId, v] of Object.entries(ts as Record<string, { state: string; phase: number }>)) {
+              next[tlId] = { state: v.state, phase: v.phase };
+            }
+          }
+        }
+        setTlStates(next);
+
+        const snapDeployId = (snap as { deploy_id?: string | null }).deploy_id ?? null;
+        if (snapDeployId !== lastDeployIdRef.current) {
+          // New deploy → refresh metadata once.
+          lastDeployIdRef.current = snapDeployId;
+          if (snap.tl_link_metadata) {
+            setTlMetadata(snap.tl_link_metadata);
+          } else {
+            setTlMetadata({});
+          }
+        }
+      } catch {
+        /* DT transient — keep last known state */
+      }
+    };
+    poll();
+    const id = window.setInterval(poll, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+    // Depend on the deploy-ID set, not just count — a swap with same number
+    // of deployments (e.g., undeploy A + deploy B same-tick) must restart
+    // polling so lastDeployIdRef is re-evaluated against the new DT state.
+  }, [deployments.length, deployments.map((d) => d.deploy_id ?? d.tl_id).join(',')]);
+
+  // Auto-seed the map from the deployment's saved network so purple
+  // markers render even before the user picks a region. Without this,
+  // an opened-fresh `/` shows an empty map after a deploy from
+  // another session — the deploy is real (visible in /simulation/view)
+  // but the marker overlay has no SUMO data to layer on top of.
+  // Skipped once the user actively selects a region (selectedRegion set)
+  // so we don't fight their training workflow.
+  const currentNetworkId = useMapStore((s) => s.currentNetworkId);
+  const intersections = useMapStore((s) => s.intersections);
+  useEffect(() => {
+    if (deployments.length === 0) return;
+    if (selectedRegion) return; // user-driven flow takes precedence
+    const deployNetworkId = deployments[0].network_id;
+    if (!deployNetworkId) return;
+    if (currentNetworkId === deployNetworkId && intersections.length > 0) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const meta = await mapService.getNetworkMetadata(deployNetworkId);
+        if (cancelled) return;
+        // Synthesize Intersection records from persisted junctions. We
+        // only need lat/lon/sumo_tl_id for marker rendering; the heavier
+        // OSM fields (num_roads, name) are skipped — the modal pulls
+        // them lazily via the camera-feed lookup.
+        const interSeed = meta.junctions.map((j) => ({
+          id: j.id,
+          osm_id: Number.isFinite(Number(j.id)) ? Number(j.id) : 0,
+          lat: j.lat,
+          lon: j.lon,
+          num_roads: 0,
+          has_traffic_light: !!j.tl_id,
+          sumo_tl_id: j.tl_id,
+        }));
+        const tlSeed = meta.junctions
+          .filter((j) => !!j.tl_id)
+          .map((j) => ({
+            id: j.tl_id as string,
+            type: 'traffic_light',
+            program_id: '0',
+            num_phases: 0,
+            lat: j.lat,
+            lon: j.lon,
+          }));
+        const osmSumoMapping: Record<string, string> = {};
+        for (const j of meta.junctions) {
+          if (j.tl_id) osmSumoMapping[j.id] = j.tl_id;
+        }
+
+        setIntersections(interSeed);
+        setSumoTrafficLights(tlSeed);
+        setOsmSumoMapping(osmSumoMapping);
+        setCurrentNetworkId(deployNetworkId);
+      } catch (err) {
+        console.warn('Failed to auto-seed deploy network metadata:', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    deployments,
+    selectedRegion,
+    currentNetworkId,
+    intersections.length,
+    setIntersections,
+    setSumoTrafficLights,
+    setOsmSumoMapping,
+    setCurrentNetworkId,
+  ]);
 
   // Extract region when selected, then auto-convert to SUMO
   useEffect(() => {
@@ -153,7 +312,10 @@ export default function App() {
     connectSSE(taskId);
   }, [connectSSE]);
 
-  const handleIntersectionClick = useCallback((intersection: Intersection) => {
+  // Click on a DEPLOYED (purple) marker opens the live deploy modal.
+  // Green/amber clicks toggle training selection only — the marker
+  // component does NOT fire this callback for non-deployed clicks.
+  const handleDeployedIntersectionClick = useCallback((intersection: Intersection) => {
     setActiveIntersection(intersection);
     setCameraOpen(true);
   }, []);
@@ -190,7 +352,9 @@ export default function App() {
             {hasSumoData && (
               <SelectableIntersectionMarkers
                 deployedJunctionIds={deployedJunctionIds}
-                onIntersectionClick={handleIntersectionClick}
+                tlStates={tlStates}
+                tlMetadata={tlMetadata}
+                onIntersectionClick={handleDeployedIntersectionClick}
               />
             )}
             <RegionSelector />

@@ -108,29 +108,59 @@ function toCanvas(
 }
 
 /**
- * Parse a SUMO TL state string to derive per-direction colors.
- * State chars: G/g = green, y = yellow, r = red.
- * For a standard 4-arm intersection the state is typically split into
- * groups of links per direction. We simplify by splitting the state
- * into 4 quadrants (N/S/E/W-ish) if the link count allows it.
+ * SUMO state has 1 char per controlled link (lane), so a 4-way with 4
+ * lanes per approach emits a 16-char state. Run-length compressing the
+ * normalized state collapses that to 1 entry per approach: 1-way → 1,
+ * 2-way → 2, 4-way → 4 (matching what a driver actually sees).
  */
-function parseTLDirectionColors(stateStr: string): {
-  ns: string;
-  ew: string;
-} {
-  if (!stateStr) return { ns: '#64748b', ew: '#64748b' };
+const APPROACH_COLOR: Record<string, string> = {
+  green: '#22c55e',
+  yellow: '#eab308',
+  red: '#ef4444',
+  off: '#9ca3af',
+};
+function normalizeSumoCharCanvas(c: string): string {
+  if (c === 'G' || c === 'g') return 'green';
+  if (c === 'y' || c === 'Y') return 'yellow';
+  if (c === 'r' || c === 'R') return 'red';
+  return 'off';
+}
 
-  const half = Math.floor(stateStr.length / 2);
-  const firstHalf = stateStr.slice(0, half);
-  const secondHalf = stateStr.slice(half);
+function detectArityCanvas(len: number): number {
+  if (len <= 0) return 0;
+  if (len === 1) return 1;
+  if (len >= 4 && len % 4 === 0) return 4;
+  if (len === 3 || (len === 6 && len % 4 !== 0)) return 3;
+  return 2;
+}
 
-  const colorFor = (s: string): string => {
-    if (s.includes('G') || s.includes('g')) return '#22c55e';
-    if (s.includes('y')) return '#eab308';
-    return '#ef4444';
-  };
+function dominantApproachColorCanvas(chunk: string): string {
+  let g = 0, y = 0, r = 0;
+  for (const c of chunk) {
+    const k = normalizeSumoCharCanvas(c);
+    if (k === 'green') g++;
+    else if (k === 'yellow') y++;
+    else if (k === 'red') r++;
+  }
+  if (y > 0 && y >= Math.max(g, r)) return 'yellow';
+  if (g > r) return 'green';
+  if (r > g) return 'red';
+  if (g === r && g > 0) return 'yellow';
+  return 'off';
+}
 
-  return { ns: colorFor(firstHalf), ew: colorFor(secondHalf) };
+function compressStateToApproachesCanvas(stateStr: string): string[] {
+  if (!stateStr) return [];
+  const arity = detectArityCanvas(stateStr.length);
+  const chunkSize = Math.floor(stateStr.length / arity);
+  if (chunkSize === 0) return [];
+  const result: string[] = [];
+  for (let i = 0; i < arity; i++) {
+    const start = i * chunkSize;
+    const end = i === arity - 1 ? stateStr.length : start + chunkSize;
+    result.push(dominantApproachColorCanvas(stateStr.slice(start, end)));
+  }
+  return result;
 }
 
 function drawNetwork(
@@ -226,32 +256,26 @@ function drawJunctions(
     ctx.lineWidth = isControlled ? 2.5 : 1.5;
     ctx.stroke();
 
-    // Draw TL state indicators (directional lights)
+    // Draw one bulb per approach (run-length compressed state — matches
+    // intersection arity: 1-way → 1 bulb, 2-way → 2, 4-way → 4).
     if (isTL) {
       const st = tlStates[junc.id];
-      const { ns, ew } = parseTLDirectionColors(st.state);
-      const indicatorR = 4;
-      const offset = radius + 6;
-
-      ctx.beginPath();
-      ctx.arc(cx, cy - offset, indicatorR, 0, Math.PI * 2);
-      ctx.fillStyle = ns;
-      ctx.fill();
-
-      ctx.beginPath();
-      ctx.arc(cx, cy + offset, indicatorR, 0, Math.PI * 2);
-      ctx.fillStyle = ns;
-      ctx.fill();
-
-      ctx.beginPath();
-      ctx.arc(cx + offset, cy, indicatorR, 0, Math.PI * 2);
-      ctx.fillStyle = ew;
-      ctx.fill();
-
-      ctx.beginPath();
-      ctx.arc(cx - offset, cy, indicatorR, 0, Math.PI * 2);
-      ctx.fillStyle = ew;
-      ctx.fill();
+      const groups = compressStateToApproachesCanvas(st.state);
+      if (groups.length > 0) {
+        const indicatorR = 4;
+        const offset = radius + 6;
+        const n = groups.length;
+        const startAngle = -Math.PI / 2;
+        for (let i = 0; i < n; i++) {
+          const angle = startAngle + (2 * Math.PI * i) / n;
+          const bx = cx + Math.cos(angle) * offset;
+          const by = cy + Math.sin(angle) * offset;
+          ctx.beginPath();
+          ctx.arc(bx, by, indicatorR, 0, Math.PI * 2);
+          ctx.fillStyle = APPROACH_COLOR[groups[i]] ?? '#64748b';
+          ctx.fill();
+        }
+      }
     }
 
     // AI/OFF badge
@@ -302,6 +326,9 @@ export function SimulationViewPage() {
   const [togglingAgent, setTogglingAgent] = useState(false);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Track deploy_id so we can invalidate the geometry cache when DT swaps to
+  // a different deploy (different model/network) — see Bug C.
+  const lastDeployIdRef = useRef<string | null>(null);
 
   // Resize observer for responsive canvas
   useEffect(() => {
@@ -326,6 +353,19 @@ export function SimulationViewPage() {
           digitalTwinDeployService.getSnapshot(),
           digitalTwinDeployService.getStatus(),
         ]);
+
+        // Invalidate geometry cache when DT swaps deploys (Bug C). Without
+        // this, switching to a different model/network keeps drawing the
+        // old network until a full page reload. Two transitions matter:
+        //   1. id → id'  (active swap to a different deploy)
+        //   2. id → null (stopped) so the next non-null id starts clean
+        const snapDeployId = (snap as DeploySnapshot & { deploy_id?: string | null }).deploy_id ?? null;
+        if (snapDeployId !== lastDeployIdRef.current) {
+          // Any transition (incl. → null) wipes the cache so the next live
+          // deploy redraws from scratch instead of layering on stale geometry.
+          networkCacheRef.current = null;
+          lastDeployIdRef.current = snapDeployId;
+        }
 
         // Cache network geometry only when it is non-empty
         const geometry = snap.network_geometry;

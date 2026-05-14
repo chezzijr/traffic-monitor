@@ -450,6 +450,62 @@ class SumoManager:
         tl_id = self._resolve_tl_id(tl_id)
         return list(conn.trafficlight.getControlledLanes(tl_id))
 
+    def get_tl_link_metadata(self, tl_id: str) -> dict:
+        """Map SUMO state-string indices to physical approaches.
+
+        Each char in the SUMO state string controls one link (a from-lane →
+        to-lane connection). Multiple links share an incoming edge — those
+        belong to the same physical approach. This method groups state-string
+        indices by source edge and computes each approach's compass angle
+        from the edge's last-segment direction toward the junction.
+
+        Returns ``{"approaches": [{"angle_deg": float, "link_indices": [int,...], "from_edge": str}, ...]}``
+        with approaches sorted clockwise from north.
+        """
+        import math
+        conn = self._conn()
+        try:
+            controlled_links = conn.trafficlight.getControlledLinks(tl_id)
+        except Exception:
+            return {"approaches": []}
+
+        edge_to_indices: dict[str, list[int]] = {}
+        edge_to_first_lane: dict[str, str] = {}
+        for state_idx, link_tuples in enumerate(controlled_links):
+            if not link_tuples:
+                continue
+            try:
+                from_lane = link_tuples[0][0]
+                from_edge = conn.lane.getEdgeID(from_lane)
+            except Exception:
+                continue
+            edge_to_indices.setdefault(from_edge, []).append(state_idx)
+            edge_to_first_lane.setdefault(from_edge, from_lane)
+
+        approaches: list[dict] = []
+        for edge_id, indices in edge_to_indices.items():
+            lane_id = edge_to_first_lane[edge_id]
+            angle_deg = 0.0
+            try:
+                shape = conn.lane.getShape(lane_id)
+                if len(shape) >= 2:
+                    # Direction at junction = last 2 shape points (lane points
+                    # INTO the junction, so this is the approach direction).
+                    p1 = shape[-2]
+                    p2 = shape[-1]
+                    # SUMO: +X east, +Y north. Compass: 0=N, 90=E, clockwise.
+                    angle_rad = math.atan2(p2[0] - p1[0], p2[1] - p1[1])
+                    angle_deg = (math.degrees(angle_rad) + 360.0) % 360.0
+            except Exception:
+                pass
+            approaches.append({
+                "angle_deg": round(angle_deg, 1),
+                "link_indices": indices,
+                "from_edge": edge_id,
+            })
+        approaches.sort(key=lambda a: a["angle_deg"])
+        return {"approaches": approaches}
+
     def get_num_phases(self, tl_id: str | None = None) -> int:
         """Return the number of phases in the TL program."""
         conn = self._conn()

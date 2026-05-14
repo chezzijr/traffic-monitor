@@ -301,9 +301,13 @@ def deploy_videos():
 
 @app.post("/deploy/start")
 def deploy_start(request: DeployStartRequest):
-    """Start the deploy loop with the selected model."""
+    """Start the deploy loop with the selected model.
+
+    Returns 409 with a structured body if a deploy is already running.
+    Backend orchestration is expected to issue /deploy/stop first to swap.
+    """
     try:
-        return start_deploy(
+        result = start_deploy(
             request.model_path,
             request.tl_id,
             grid_rows=request.grid_rows,
@@ -313,6 +317,70 @@ def deploy_start(request: DeployStartRequest):
     except Exception as exc:
         logger.exception("Failed to start deploy")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    if result.get("status") == "already_running":
+        raise HTTPException(status_code=409, detail=result)
+    return result
+
+
+@app.get("/deploy/videos/check")
+def deploy_videos_check():
+    """Pre-flight check that the configured video file exists and is readable.
+
+    Returns ``{exists, path, error, hint}``. Used by the backend /precheck
+    proxy to block deploy attempts when git-LFS files are missing.
+    """
+    from service.config import VIDEO_PATH
+
+    path_str = str(VIDEO_PATH)
+    try:
+        exists = VIDEO_PATH.exists() and VIDEO_PATH.is_file()
+    except Exception as exc:
+        return {
+            "exists": False,
+            "path": path_str,
+            "error": f"stat_failed: {exc}",
+            "hint": "Check VIDEO_PATH env var and DT container mounts.",
+        }
+
+    if not exists:
+        return {
+            "exists": False,
+            "path": path_str,
+            "error": "video_missing",
+            "hint": "Run `git lfs pull` in the repo root, then restart the digital-twin container.",
+        }
+
+    # Detect LFS pointer files (small text stub instead of binary). Git-LFS
+    # pointers are ~130 bytes and start with "version https://git-lfs.github.com".
+    try:
+        size = VIDEO_PATH.stat().st_size
+        if size < 1024:
+            with open(VIDEO_PATH, "rb") as fp:
+                head = fp.read(64)
+            if head.startswith(b"version https://git-lfs"):
+                return {
+                    "exists": False,
+                    "path": path_str,
+                    "error": "lfs_pointer_only",
+                    "hint": "Video file is a git-LFS pointer (not pulled). Run `git lfs pull`.",
+                    "size_bytes": size,
+                }
+    except Exception as exc:
+        return {
+            "exists": False,
+            "path": path_str,
+            "error": f"read_failed: {exc}",
+            "hint": "Check file permissions inside the DT container.",
+        }
+
+    return {
+        "exists": True,
+        "path": path_str,
+        "error": None,
+        "hint": None,
+        "size_bytes": size,
+    }
 
 
 @app.post("/deploy/stop")

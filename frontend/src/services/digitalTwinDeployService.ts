@@ -66,7 +66,24 @@ export interface DeploySnapshot {
       }>;
     }>;
   };
+  tl_link_metadata?: TlLinkMetadataMap;
 }
+
+/** One physical incoming road at a traffic light. `angle_deg` is the
+ *  compass bearing (0=N, 90=E, clockwise) of the approach as it enters
+ *  the junction. `link_indices` are the SUMO state-string positions that
+ *  belong to this approach (use to extract the bulb color via majority). */
+export interface ApproachMeta {
+  angle_deg: number;
+  link_indices: number[];
+  from_edge: string;
+}
+
+/** Per-TL link → approach mapping, computed once at deploy start from
+ *  SUMO net topology. Renderers use this to position bulbs at correct
+ *  compass angles. The shape is the single source of truth — both the
+ *  marker icon and the modal import it. */
+export type TlLinkMetadataMap = Record<string, { approaches: ApproachMeta[] }>;
 
 export interface DeployStatus {
   running: boolean;
