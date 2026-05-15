@@ -15,6 +15,7 @@ interface ModelState {
   setDeployments: (deployments: Deployment[]) => void;
   addDeployment: (deployment: Deployment) => void;
   removeDeployment: (tlId: string) => void;
+  clearDeployments: () => void;
   togglePanel: () => void;
   expandedModelId: string | null;
   toggleExpandedModel: (modelId: string) => void;
@@ -43,6 +44,7 @@ export const useModelStore = create<ModelState>((set) => ({
     set((state) => ({
       deployments: state.deployments.filter((d) => d.tl_id !== tlId),
     })),
+  clearDeployments: () => set({ deployments: [] }),
   togglePanel: () =>
     set((state) => ({ isPanelOpen: !state.isPanelOpen })),
   expandedModelId: null,

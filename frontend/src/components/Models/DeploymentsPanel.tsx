@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Zap, ZapOff, XCircle, Eye } from 'lucide-react';
+import { Zap, ZapOff, XCircle, Eye, Square } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useModelStore } from '../../store/modelStore';
 import { deploymentService } from '../../services/deploymentService';
@@ -12,6 +12,8 @@ export function DeploymentsPanel() {
   const deployments = useModelStore((s) => s.deployments);
   const setDeployments = useModelStore((s) => s.setDeployments);
   const removeDeployment = useModelStore((s) => s.removeDeployment);
+  const clearDeployments = useModelStore((s) => s.clearDeployments);
+  const [stoppingAll, setStoppingAll] = useState(false);
 
   // Real agent state comes from the digital twin service, not the stale backend store
   const [agentEnabled, setAgentEnabled] = useState(true);
@@ -56,12 +58,46 @@ export function DeploymentsPanel() {
     navigate('/simulation/view');
   };
 
+  const handleStopAll = async () => {
+    if (deployments.length === 0) return;
+    if (!window.confirm(`Stop the entire deploy? This will stop the Digital Twin simulation and clear all ${deployments.length} deployment(s).`)) {
+      return;
+    }
+    setStoppingAll(true);
+    try {
+      const result = await deploymentService.stopAll();
+      clearDeployments();
+      if (result.error) {
+        toast.error(`Stopped with error: ${result.error}`);
+      } else {
+        toast.success('All deployments stopped');
+      }
+    } catch {
+      toast.error('Failed to stop all deployments');
+    } finally {
+      setStoppingAll(false);
+    }
+  };
+
   return (
     <div className="p-4 border-t border-gray-200">
-      <h2 className="text-base font-semibold text-gray-800 flex items-center gap-2 mb-4">
-        <Zap size={18} />
-        Active Deployments
-      </h2>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-base font-semibold text-gray-800 flex items-center gap-2">
+          <Zap size={18} />
+          Active Deployments
+        </h2>
+        {deployments.length > 0 && (
+          <button
+            onClick={handleStopAll}
+            disabled={stoppingAll}
+            className="flex items-center gap-1 text-xs px-2.5 py-1 rounded bg-red-600 text-white hover:bg-red-700 transition-colors disabled:opacity-50"
+            title="Stop the entire DT simulation and clear all deployments"
+          >
+            <Square size={12} />
+            {stoppingAll ? 'Stopping…' : 'Stop All'}
+          </button>
+        )}
+      </div>
 
       {deployments.length === 0 ? (
         <p className="text-sm text-gray-400 text-center py-4">

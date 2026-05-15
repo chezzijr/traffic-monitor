@@ -17,6 +17,7 @@ import random
 import threading
 import time
 from pathlib import Path
+from uuid import uuid4
 
 import numpy as np
 
@@ -87,6 +88,8 @@ _deploy_lock = threading.Lock()
 _deploy_active = False
 _deploy_thread: threading.Thread | None = None
 _agent_enabled = True  # Runtime toggle: False = fixed-time on all controlled TLs
+_deploy_id: str | None = None  # UUID regenerated on each start_deploy
+_deploy_error_msg: str | None = None  # Last fatal error in deploy loop
 
 _deploy_status: dict = {
     "running": False,
@@ -102,6 +105,9 @@ _deploy_status: dict = {
     "controlled_tl_ids": [],
     "fixed_tl_ids": [],
     "agent_enabled": True,
+    "deploy_id": None,
+    "health": "idle",
+    "error_msg": None,
 }
 _snapshot_data: dict = {}
 
@@ -225,6 +231,9 @@ def _find_boundary_edges_in_network(conn) -> dict:
     }
 
 
+_OSM_SPAWN_DIAG = {"attempts": 0, "primary_fail": 0, "empty_edges": 0, "last_log": 0.0}
+
+
 def _feed_vehicles_osm_network(
     tracked: list[dict],
     vehicle_ids: set[str],
@@ -251,7 +260,17 @@ def _feed_vehicles_osm_network(
 
         if veh_id not in vehicle_ids:
             # New vehicle detected in video — spawn at boundary edges
+            _OSM_SPAWN_DIAG["attempts"] += 1
             if not entry_edges or not exit_edges:
+                _OSM_SPAWN_DIAG["empty_edges"] += 1
+                # Log once every 5 seconds to surface Bug D (vehicles=0 root cause)
+                _now = time.monotonic()
+                if _now - _OSM_SPAWN_DIAG["last_log"] > 5.0:
+                    logger.warning(
+                        "OSM spawn skipped: entry_edges=%d exit_edges=%d (Bug D diagnostic)",
+                        len(entry_edges), len(exit_edges),
+                    )
+                    _OSM_SPAWN_DIAG["last_log"] = _now
                 continue
 
             # Pick a primary entry edge (randomly)
@@ -288,6 +307,18 @@ def _feed_vehicles_osm_network(
                     if _sumo.add_vehicle(extra_id, extra_route, pos=0.1, speed=max(veh.get("speed", 0.0), 1.0)):
                         _sumo.update_vehicle_speed(extra_id, -1)
                         vehicle_ids.add(extra_id)
+            else:
+                _OSM_SPAWN_DIAG["primary_fail"] += 1
+                _now = time.monotonic()
+                if _now - _OSM_SPAWN_DIAG["last_log"] > 5.0:
+                    logger.warning(
+                        "add_vehicle FAIL: route=%s→%s (attempts=%d primary_fail=%d empty_edges=%d)",
+                        primary_entry, primary_exit,
+                        _OSM_SPAWN_DIAG["attempts"],
+                        _OSM_SPAWN_DIAG["primary_fail"],
+                        _OSM_SPAWN_DIAG["empty_edges"],
+                    )
+                    _OSM_SPAWN_DIAG["last_log"] = _now
         else:
             # Known vehicle — also mark all its clones as visible
             for cid in list(vehicle_ids):
@@ -400,15 +431,22 @@ def _feed_vehicles_grid(tracked: list[dict], vehicle_ids: set[str], grid_rows: i
 
 
 def start_deploy(model_path: str, tl_id: str | None = None, grid_rows: int = 2, grid_cols: int = 3, network_id: str | None = None) -> dict:
-    global _deploy_active, _deploy_thread, _snapshot_data, _agent_enabled
+    global _deploy_active, _deploy_thread, _snapshot_data, _agent_enabled, _deploy_id, _deploy_error_msg
 
     with _deploy_lock:
         if _deploy_active:
-            return {"status": "already_running"}
+            return {
+                "status": "already_running",
+                "current_model_path": _deploy_status.get("model_path"),
+                "current_tl_ids": list(_deploy_status.get("controlled_tl_ids") or []),
+                "current_deploy_id": _deploy_id,
+            }
 
         _deploy_active = True
         _agent_enabled = True
         _snapshot_data = {}
+        _deploy_id = uuid4().hex
+        _deploy_error_msg = None
 
         _deploy_status.update({
             "running": True,
@@ -425,20 +463,28 @@ def start_deploy(model_path: str, tl_id: str | None = None, grid_rows: int = 2, 
             "controlled_tl_ids": [],
             "fixed_tl_ids": [],
             "agent_enabled": True,
+            "deploy_id": _deploy_id,
+            "health": "starting",
+            "error_msg": None,
         })
 
     # Load model first to determine if it's multi-agent
     try:
         load_result = _model.load(model_path)
-        logger.info("Model loaded: %s", load_result)
-    except Exception:
+        logger.info("Model loaded: %s (deploy_id=%s)", load_result, _deploy_id)
+    except Exception as exc:
         with _deploy_lock:
             _deploy_active = False
             _deploy_status["running"] = False
+            _deploy_status["health"] = "error"
+            _deploy_status["error_msg"] = f"model_load_failed: {exc}"
+            _deploy_status["deploy_id"] = None
+            _deploy_id = None
         raise
 
     with _deploy_lock:
         _deploy_status["is_multi_agent"] = _model.is_multi_agent
+        _deploy_status["health"] = "ok"
         if _model.is_multi_agent:
             _deploy_status["tl_ids"] = _model.tl_ids
 
@@ -450,31 +496,86 @@ def start_deploy(model_path: str, tl_id: str | None = None, grid_rows: int = 2, 
     )
     _deploy_thread.start()
 
-    return {"status": "started", "is_multi_agent": _model.is_multi_agent}
+    return {
+        "status": "started",
+        "is_multi_agent": _model.is_multi_agent,
+        "deploy_id": _deploy_id,
+    }
 
 
 def stop_deploy() -> dict:
-    global _deploy_active
+    """Stop the deploy loop and wait for the worker thread to fully tear down.
+
+    Joining the thread (C4) avoids a TraCI port collision: without the join,
+    a fast follow-up ``start_deploy`` could open a new SUMO instance while
+    the previous thread is still finishing ``_sumo.stop()``.
+    """
+    global _deploy_active, _deploy_id, _deploy_thread
 
     with _deploy_lock:
+        was_active = _deploy_active
         _deploy_active = False
         _deploy_status["running"] = False
+        _deploy_status["health"] = "idle"
+        prior_deploy_id = _deploy_id
+        _deploy_id = None
+        _deploy_status["deploy_id"] = None
+        thread_to_join = _deploy_thread
+
+    if thread_to_join is not None and thread_to_join.is_alive():
+        thread_to_join.join(timeout=5.0)
+        if thread_to_join.is_alive():
+            logger.warning("Deploy thread did not exit within 5s — proceeding anyway")
 
     _sumo.stop()
-    return {"status": "stopped", "step": _deploy_status["step"]}
+    with _deploy_lock:
+        _deploy_thread = None
+    return {
+        "status": "stopped" if was_active else "not_running",
+        "step": _deploy_status["step"],
+        "prior_deploy_id": prior_deploy_id,
+    }
 
 
 def get_deploy_status() -> dict:
+    """Return deploy status enriched with upstream video stream error (C8).
+
+    The video stream runs in its own thread and may fail mid-deploy
+    (e.g. file truncated, codec error). Without this merge the deploy
+    appears healthy while no vehicles spawn.
+    """
+    from service.video_analyzer import get_stream_error
+
     with _deploy_lock:
-        return dict(_deploy_status)
+        status = dict(_deploy_status)
+
+    stream_err = get_stream_error()
+    if stream_err and status.get("running"):
+        status["health"] = "error"
+        status["error_msg"] = stream_err
+        status["stream_error"] = stream_err
+    return status
 
 
 def get_deploy_snapshot() -> dict:
+    from service.video_analyzer import get_stream_error
+
     with _deploy_lock:
         if _snapshot_data:
             snapshot = dict(_snapshot_data)
         else:
             snapshot = {"step": 0, "running": _deploy_status.get("running", False)}
+        snapshot["deploy_id"] = _deploy_id
+        snapshot["health"] = _deploy_status.get("health", "idle")
+        snapshot["error_msg"] = _deploy_status.get("error_msg")
+        snapshot["model_path"] = _deploy_status.get("model_path")
+        snapshot["network_id"] = _deploy_status.get("network_id")
+
+    # Surface upstream stream errors so the frontend can show a banner (C8).
+    stream_err = get_stream_error()
+    if stream_err and snapshot.get("running"):
+        snapshot["health"] = "error"
+        snapshot["error_msg"] = stream_err
 
     # Backfill geometry if snapshot exists but geometry is missing/empty.
     geometry = snapshot.get("network_geometry")
@@ -696,6 +797,24 @@ def _deploy_loop(tl_id: str | None, grid_rows: int, grid_cols: int, network_id: 
         # ── Cache network geometry (static — only needs to be fetched once) ─
         network_geometry = _sumo.get_network_geometry() if _sumo.running else {}
 
+        # ── Cache TL link → approach metadata so the frontend can render
+        # bulbs at correct compass positions (one bulb per physical road
+        # approach, not per SUMO link). Static for the duration of the
+        # deploy — the network topology doesn't change once SUMO has
+        # started, so we compute it once per controlled TL here. ──
+        tl_link_metadata: dict[str, dict] = {}
+        if _sumo.running:
+            for ctl_id in controlled_tl_ids:
+                try:
+                    tl_link_metadata[ctl_id] = _sumo.get_tl_link_metadata(ctl_id)
+                except Exception as exc:
+                    logger.warning("Failed to fetch link metadata for %s: %s", ctl_id, exc)
+            logger.info(
+                "Cached TL link metadata for %d controlled TLs (approaches per TL: %s)",
+                len(tl_link_metadata),
+                {k: len(v.get("approaches", [])) for k, v in tl_link_metadata.items()},
+            )
+
         start_background_loop()
         reset_video_complete_flag()
         reset_waiting_history()
@@ -840,6 +959,7 @@ def _deploy_loop(tl_id: str | None, grid_rows: int, grid_cols: int, network_id: 
                 "controlled_tl_ids": controlled_tl_ids,
                 "fixed_tl_ids": fixed_tl_ids,
                 "network_geometry": network_geometry,
+                "tl_link_metadata": tl_link_metadata,
             }
 
             with _deploy_lock:
@@ -871,8 +991,11 @@ def _deploy_loop(tl_id: str | None, grid_rows: int, grid_cols: int, network_id: 
 
         logger.info("Deploy loop finished")
 
-    except Exception:
+    except Exception as exc:
         logger.exception("Deploy loop error")
+        with _deploy_lock:
+            _deploy_status["health"] = "error"
+            _deploy_status["error_msg"] = f"deploy_loop_crashed: {exc}"
     finally:
         with _deploy_lock:
             _deploy_active = False

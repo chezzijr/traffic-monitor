@@ -235,10 +235,13 @@ export interface TrainedModel {
 // Deployment
 export interface Deployment {
   tl_id: string;
+  tl_ids?: string[];
   model_id: string;
   model_path: string;
   network_id: string;
   ai_control_enabled: boolean;
+  is_multi_agent?: boolean;
+  deploy_id?: string | null;
 }
 
 // Network metadata

@@ -22,6 +22,15 @@ export interface DeploymentSnapshot {
   }>;
 }
 
+export interface VideoPrecheckResult {
+  ok: boolean;
+  exists?: boolean;
+  path?: string;
+  error?: string | null;
+  hint?: string | null;
+  size_bytes?: number;
+}
+
 export const deploymentService = {
   async listDeployments(): Promise<Deployment[]> {
     const response = await api.get<Deployment[]>('/deployment/');
@@ -34,6 +43,19 @@ export const deploymentService = {
 
   async getSnapshot(tlId: string): Promise<DeploymentSnapshot> {
     const response = await api.get<DeploymentSnapshot>(`/deployment/${tlId}/snapshot`);
+    return response.data;
+  },
+
+  async precheckVideo(modelId?: string): Promise<VideoPrecheckResult> {
+    const params = modelId ? { model_id: modelId } : undefined;
+    const response = await api.get<VideoPrecheckResult>('/deployment/precheck', { params });
+    return response.data;
+  },
+
+  async stopAll(): Promise<{ status: string; dt_stopped: boolean; error?: string }> {
+    const response = await api.post<{ status: string; dt_stopped: boolean; error?: string }>(
+      '/deployment/stop-all',
+    );
     return response.data;
   },
 };

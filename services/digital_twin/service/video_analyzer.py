@@ -118,6 +118,7 @@ _stream_lock = threading.Lock()
 _stream_active = False          # True while the background thread is looping
 _stream_thread: threading.Thread | None = None
 _stream_last_keepalive: float = 0.0   # monotonic time of last start/keepalive
+_stream_error_msg: str | None = None  # Last fatal error surfaced from background loop
 
 # Colours for bounding boxes (BGR for OpenCV)
 _COLOR_MOVING = (144, 238, 144)   # light green
@@ -225,9 +226,18 @@ class LatestFrameBuffer:
     """
 
     def __init__(self, video_path: str):
+        global _stream_error_msg
         self.cap = cv2.VideoCapture(video_path)
         if not self.cap.isOpened():
-            raise RuntimeError(f"Cannot open video {video_path}")
+            from pathlib import Path as _P
+            exists = _P(video_path).exists()
+            if not exists:
+                msg = f"video_missing: file not found at {video_path}. Run `git lfs pull`."
+            else:
+                msg = f"video_unreadable: cv2.VideoCapture failed for {video_path}. Check codec/permissions or LFS pointer."
+            with _stream_lock:
+                _stream_error_msg = msg
+            raise RuntimeError(msg)
 
         # Disable WMF auto-rotation on Windows so we can apply it ourselves
         # consistently across platforms (FFmpeg/Linux never auto-rotates).
@@ -612,7 +622,10 @@ def _background_loop():
 
             logger.info("Stream: video ended at frame %d — looping.", frame_idx)
 
-        except Exception:
+        except Exception as exc:
+            global _stream_error_msg
+            with _stream_lock:
+                _stream_error_msg = f"stream_loop_error: {exc}"
             logger.exception("Stream: loop error — restarting in 3s")
             time.sleep(3)
         finally:
@@ -669,11 +682,26 @@ def get_stream_status() -> dict:
             _stream_thread and _stream_thread.is_alive()
         )
         idle_secs = time.monotonic() - _stream_last_keepalive if _stream_last_keepalive else None
+        error_msg = _stream_error_msg
     return {
         "active": active,
         "idle_seconds": round(idle_secs, 1) if idle_secs is not None else None,
         "idle_timeout": STREAM_IDLE_TIMEOUT,
+        "error_msg": error_msg,
     }
+
+
+def get_stream_error() -> str | None:
+    """Return the last fatal error from the background video loop, if any."""
+    with _stream_lock:
+        return _stream_error_msg
+
+
+def clear_stream_error() -> None:
+    """Clear the surfaced error. Called when a fresh stream is restarted."""
+    global _stream_error_msg
+    with _stream_lock:
+        _stream_error_msg = None
 
 
 # ── Legacy compatibility (used by sync_loop) ──────────────────────────

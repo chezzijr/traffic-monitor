@@ -1,5 +1,5 @@
 import { api } from './api';
-import type { BoundingBox, NetworkInfo, Intersection, SUMOTrafficLight } from '../types';
+import type { BoundingBox, NetworkInfo, Intersection, SUMOTrafficLight, NetworkMetadata } from '../types';
 
 export interface TlCluster {
   cluster_id: string;
@@ -46,6 +46,13 @@ export const mapService = {
   // Get connected components of the TL-to-TL graph for a network
   async getTlClusters(networkId: string): Promise<TlCluster[]> {
     const response = await api.get<TlCluster[]>(`/networks/${networkId}/tl-clusters`);
+    return response.data;
+  },
+
+  // Get persisted network metadata (junctions, bbox, etc.) — used to seed
+  // the map from a deployment without re-running OSM extraction.
+  async getNetworkMetadata(networkId: string): Promise<NetworkMetadata> {
+    const response = await api.get<NetworkMetadata>(`/networks/${networkId}`);
     return response.data;
   },
 };
