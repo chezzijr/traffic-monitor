@@ -252,15 +252,22 @@ class SumoManager:
         return list(conn.trafficlight.getIDList())
 
     def get_vehicles(self) -> list[dict]:
-        """Return detailed state of all vehicles."""
+        """Return detailed state of all vehicles including geographic coordinates."""
         conn = self._conn()
         result = []
         for vid in conn.vehicle.getIDList():
             pos = conn.vehicle.getPosition(vid)
+            try:
+                geo = conn.simulation.convertGeo(pos[0], pos[1])
+                lat, lng = geo[1], geo[0]
+            except Exception:
+                lat, lng = None, None
             result.append({
                 "id": vid,
                 "x": pos[0],
                 "y": pos[1],
+                "lat": lat,
+                "lng": lng,
                 "speed": conn.vehicle.getSpeed(vid),
                 "waiting_time": conn.vehicle.getWaitingTime(vid),
                 "lane": conn.vehicle.getLaneID(vid),

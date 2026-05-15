@@ -26,6 +26,8 @@ export interface DeploySnapshot {
     id: string;
     x: number;
     y: number;
+    lat?: number;
+    lng?: number;
     speed: number;
     waiting_time: number;
     lane: string;
@@ -74,6 +76,7 @@ export interface DeployStatus {
   num_sumo_vehicles: number;
   video_complete: boolean;
   model_path?: string | null;
+  network_id?: string | null;
   tl_id?: string | null;
   tl_ids?: string[];
   last_action?: number | number[] | null;
