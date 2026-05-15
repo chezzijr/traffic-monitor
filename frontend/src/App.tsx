@@ -121,14 +121,26 @@ export default function App() {
         setTlStates(next);
 
         const snapDeployId = (snap as { deploy_id?: string | null }).deploy_id ?? null;
+        const incomingMeta = snap.tl_link_metadata;
+        const hasIncomingMeta = !!incomingMeta && Object.keys(incomingMeta).length > 0;
+
         if (snapDeployId !== lastDeployIdRef.current) {
-          // New deploy → refresh metadata once.
+          // Deploy changed — reset metadata (will be repopulated below if
+          // DT has finished computing it).
           lastDeployIdRef.current = snapDeployId;
-          if (snap.tl_link_metadata) {
-            setTlMetadata(snap.tl_link_metadata);
-          } else {
-            setTlMetadata({});
-          }
+          setTlMetadata(hasIncomingMeta ? incomingMeta! : {});
+        } else if (hasIncomingMeta) {
+          // Same deploy, but DT may have just finished computing metadata
+          // (it's populated asynchronously in _deploy_loop, ~1-3s after
+          // start_deploy returns). Update if our cache is empty or shape
+          // differs, otherwise the heuristic-fallback markers stick
+          // forever until the user reloads.
+          setTlMetadata((prev) => {
+            const prevKeys = Object.keys(prev).length;
+            const newKeys = Object.keys(incomingMeta!).length;
+            if (prevKeys === 0 || prevKeys !== newKeys) return incomingMeta!;
+            return prev;
+          });
         }
       } catch {
         /* DT transient — keep last known state */
