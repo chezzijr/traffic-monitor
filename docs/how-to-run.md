@@ -1,101 +1,160 @@
 # How to Run
 
-Two ways to run the stack: **shell scripts** (local dev, each service in its own terminal) or **Docker Compose** (everything in one command).
+Two ways to run the stack: **local dev** (each service in its own terminal) or **Docker Compose** (all-in-one).
 
 ---
 
-## Option 1 — Shell Scripts (Local Dev)
-
-Each script runs one service. Open a separate terminal for each.
+## Option 1 — Local Dev
 
 ### Prerequisites
 
-- [uv](https://docs.astral.sh/uv/) installed
-- [Bun](https://bun.sh/) installed
-- [SUMO](https://sumo.dlr.de/docs/Installing/index.html) installed with `SUMO_HOME` set
-- [Docker](https://docs.docker.com/get-docker/) installed (needed for Redis)
-- [Redis](https://redis.io/) — started automatically by `run-backend.sh`
+Install these tools before anything else:
 
-### Step 1 — Backend + Redis
+| Tool | Version | Install |
+|------|---------|---------|
+| Python | ≥ 3.11 | https://www.python.org/downloads/ |
+| [uv](https://docs.astral.sh/uv/) | latest | `pip install uv` or `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+| [Bun](https://bun.sh/) | latest | `curl -fsSL https://bun.sh/install \| bash` |
+| [SUMO](https://sumo.dlr.de/docs/Installing/index.html) | ≥ 1.18 | Download installer, then set `SUMO_HOME` env var |
+| [Docker](https://docs.docker.com/get-docker/) | latest | Needed to run Redis |
+| Git LFS | latest | https://git-lfs.com/ — run `git lfs install` then `git lfs pull` after cloning |
 
-```bash
-bash sh/run-backend.sh
-```
+---
 
-Starts a Redis container (`dev-redis` on port 6379) then launches the FastAPI backend on port 8000. Press `Ctrl+C` to stop both.
-
-### Step 2 — Celery Worker
-
-```bash
-bash sh/run-celery.sh
-```
-
-Starts the Celery worker (connects to the Redis started in Step 1). Required for training jobs.
-
-### Step 3 — Digital Twin Service
+### Step 1 — Install Backend Dependencies
 
 ```bash
-bash sh/run-digital-twin.sh
+cd backend
+uv sync
+cd ..
 ```
 
-Starts the Digital Twin video-analysis + SUMO deploy service on port 8001.
+---
 
-### Step 4 — Frontend
+### Step 2 — Install Digital Twin Dependencies
 
 ```bash
-bash sh/run-frontend.sh
+cd services/digital_twin
+uv sync
+cd ../..
 ```
 
-Starts the Vite dev server on port 5173.
+> **No GPU?** Open `services/digital_twin/pyproject.toml`, delete the `[[tool.uv.index]]` block, then rerun `uv sync` to get CPU-only PyTorch.
 
-### Step 5 — Camera Collector (optional)
+---
+
+### Step 3 — Install Camera Collector Dependencies (optional)
+
+Only needed if you want live camera data collection.
 
 ```bash
-bash sh/run-service.sh
+cd services/camera_collector
+uv sync
+cd ../..
 ```
 
-Starts the camera collector service. Only needed if you have live camera feeds configured.
+---
+
+### Step 4 — Install Frontend Dependencies
+
+```bash
+cd frontend
+bun install
+cd ..
+```
+
+---
+
+### Step 5 — Run All Services
+
+Open **four terminals** from the repo root and run one command per terminal in order.
+
+**Terminal 1 — Redis**
+
+```bash
+docker run -d --rm --name dev-redis -p 6379:6379 redis:alpine
+```
+
+**Terminal 2 — Backend API** (port 8000)
+
+```bash
+cd backend && uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+**Terminal 3 — Celery Worker**
+
+```bash
+cd backend && uv run celery -A app.celery_app worker --loglevel=info --pool=solo
+```
+
+**Terminal 4 — Digital Twin Service** (port 8001)
+
+```bash
+cd services/digital_twin && uv run uvicorn service.main:app --host 0.0.0.0 --port 8001
+```
+
+**Terminal 5 — Frontend** (port 5173)
+
+```bash
+cd frontend && bun dev
+```
+
+**Terminal 6 — Camera Collector** (optional)
+
+```bash
+cd services/camera_collector && uv run python -m service.main
+```
+
+---
 
 ### Service URLs
 
-| Service         | URL                        |
-|-----------------|----------------------------|
-| Frontend        | http://localhost:5173       |
-| Backend API     | http://localhost:8000       |
-| Digital Twin    | http://localhost:8001       |
-| Redis           | localhost:6379              |
+| Service | URL |
+|---------|-----|
+| Frontend | http://localhost:5173 |
+| Backend API | http://localhost:8000 |
+| Backend API docs | http://localhost:8000/docs |
+| Digital Twin | http://localhost:8001 |
 
 ---
 
 ## Option 2 — Docker Compose
 
-Builds and runs all services in containers with a single command.
+No local Python/Bun setup needed.
 
 ### Prerequisites
 
 - [Docker](https://docs.docker.com/get-docker/) with Compose v2
-- NVIDIA GPU + drivers (for YOLO inference and Celery GPU tasks)
+- `git lfs pull` after cloning to fetch model/video files
+- NVIDIA GPU + [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (for GPU acceleration)
 
-### Run (with GPU)
+---
+
+### Run — with NVIDIA GPU
 
 ```bash
 docker compose up --build
 ```
 
-### Run (without NVIDIA GPU)
-
-Remove the GPU reservations by passing the no-gpu override file:
+### Run — without NVIDIA GPU
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.no-gpu.yml up --build
 ```
 
-### Run in background
+### Run in the background
 
 ```bash
 docker compose up --build -d
-docker compose logs -f          # stream logs from all services
-docker compose logs frontend -f # stream logs from one service
+```
+
+### View logs
+
+```bash
+docker compose logs -f                  # all services
+docker compose logs -f backend          # backend only
+docker compose logs -f digital-twin     # digital twin only
+docker compose logs -f celery-worker    # celery only
 ```
 
 ### Stop
@@ -104,7 +163,7 @@ docker compose logs frontend -f # stream logs from one service
 docker compose down
 ```
 
-### Rebuild a single service after code changes
+### Rebuild after code changes
 
 ```bash
 docker compose up --build backend celery-worker -d
@@ -112,17 +171,15 @@ docker compose up --build backend celery-worker -d
 
 ### Service URLs (Docker)
 
-| Service         | URL                        |
-|-----------------|----------------------------|
-| Frontend        | http://localhost:5173       |
-| Backend API     | http://localhost:8000       |
-| Digital Twin    | http://localhost:8001       |
-| Redis           | localhost:6379              |
+| Service | URL |
+|---------|-----|
+| Frontend | http://localhost:5173 |
+| Backend API | http://localhost:8000 |
+| Backend API docs | http://localhost:8000/docs |
+| Digital Twin | http://localhost:8001 |
 
 ### Production build
 
 ```bash
 docker compose -f docker-compose.prod.yml up --build
 ```
-
-Serves the frontend via Nginx on port 80 instead of the Vite dev server.

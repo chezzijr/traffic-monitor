@@ -1,42 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
 import { ArrowLeft, Cpu, Activity, Car, Gauge, Zap, Clock, BrainCircuit } from 'lucide-react';
 import {
   digitalTwinDeployService,
   type DeploySnapshot,
   type DeployStatus,
 } from '../services/digitalTwinDeployService';
+import { api } from '../services/api';
+import type { NetworkJunction, NetworkMetadata } from '../types';
 
 // ── Types ──────────────────────────────────────────────────────────────
-
-interface Junction {
-  id: string;
-  x: number;
-  y: number;
-}
-
-interface LaneShape {
-  id: string;
-  shape: Array<{ x: number; y: number }>;
-}
-
-interface EdgeInfo {
-  id: string;
-  lanes: LaneShape[];
-}
-
-interface NetworkGeometry {
-  junctions: Junction[];
-  edges: EdgeInfo[];
-}
-
-interface Vehicle {
-  id: string;
-  x: number;
-  y: number;
-  speed: number;
-  waiting_time: number;
-}
 
 interface TLState {
   tl_id: string;
@@ -45,67 +20,19 @@ interface TLState {
   program: string;
 }
 
-// ── Canvas drawing ─────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────
 
-function computeTransform(
-  geometry: NetworkGeometry,
-  canvasW: number,
-  canvasH: number,
-) {
-  if (!geometry.junctions.length) {
-    return { scale: 1, offsetX: 0, offsetY: 0, flipY: true };
-  }
-
-  let minX = Infinity,
-    maxX = -Infinity,
-    minY = Infinity,
-    maxY = -Infinity;
-
-  for (const j of geometry.junctions) {
-    minX = Math.min(minX, j.x);
-    maxX = Math.max(maxX, j.x);
-    minY = Math.min(minY, j.y);
-    maxY = Math.max(maxY, j.y);
-  }
-
-  // Also consider edge shapes for bounds
-  for (const e of geometry.edges) {
-    for (const lane of e.lanes) {
-      for (const p of lane.shape) {
-        minX = Math.min(minX, p.x);
-        maxX = Math.max(maxX, p.x);
-        minY = Math.min(minY, p.y);
-        maxY = Math.max(maxY, p.y);
-      }
-    }
-  }
-
-  const padding = 60;
-  const dataW = maxX - minX || 1;
-  const dataH = maxY - minY || 1;
-  const scale = Math.min(
-    (canvasW - padding * 2) / dataW,
-    (canvasH - padding * 2) / dataH,
-  );
-  const offsetX = padding + ((canvasW - padding * 2) - dataW * scale) / 2 - minX * scale;
-  const offsetY = padding + ((canvasH - padding * 2) - dataH * scale) / 2 - minY * scale;
-
-  return { scale, offsetX, offsetY, flipY: true };
+function tlStateColor(stateStr: string): string {
+  if (!stateStr) return '#64748b';
+  if (stateStr.includes('G') || stateStr.includes('g')) return '#22c55e';
+  if (stateStr.includes('y')) return '#eab308';
+  return '#ef4444';
 }
 
-function toCanvas(
-  x: number,
-  y: number,
-  transform: ReturnType<typeof computeTransform>,
-  canvasH: number,
-) {
-  const cx = x * transform.scale + transform.offsetX;
-  // SUMO Y-axis is inverted relative to canvas (SUMO: up=+Y, canvas: down=+Y)
-  const cy = transform.flipY
-    ? canvasH - (y * transform.scale + transform.offsetY)
-    : y * transform.scale + transform.offsetY;
-  return { cx, cy };
-}
+// Auto-fit map to junction bounds on first load
+function MapAutoFit({ junctions }: { junctions: NetworkJunction[] }) {
+  const map = useMap();
+  const fitted = useRef(false);
 
 /**
  * SUMO state has 1 char per controlled link (lane), so a 4-way with 4
@@ -314,15 +241,14 @@ function drawVehicles(
 
 // ── Component ──────────────────────────────────────────────────────────
 
+const HCMC_CENTER: [number, number] = [10.8231, 106.6297];
+
 export function SimulationViewPage() {
   const navigate = useNavigate();
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const networkCacheRef = useRef<NetworkGeometry | null>(null);
 
   const [snapshot, setSnapshot] = useState<DeploySnapshot | null>(null);
   const [status, setStatus] = useState<DeployStatus | null>(null);
-  const [canvasSize, setCanvasSize] = useState({ w: 800, h: 600 });
+  const [junctions, setJunctions] = useState<NetworkJunction[]>([]);
   const [togglingAgent, setTogglingAgent] = useState(false);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -330,22 +256,7 @@ export function SimulationViewPage() {
   // a different deploy (different model/network) — see Bug C.
   const lastDeployIdRef = useRef<string | null>(null);
 
-  // Resize observer for responsive canvas
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const { width, height } = entry.contentRect;
-        setCanvasSize({ w: Math.floor(width), h: Math.floor(height) });
-      }
-    });
-    observer.observe(container);
-    return () => observer.disconnect();
-  }, []);
-
-  // Poll snapshot and status
+  // Poll snapshot + status
   useEffect(() => {
     const poll = async () => {
       try {
@@ -395,42 +306,42 @@ export function SimulationViewPage() {
     };
   }, []);
 
-  // Extract TL states as a map
+  // Fetch junction lat/lon from network metadata when network_id is known
+  useEffect(() => {
+    const networkId = status?.network_id;
+    if (!networkId || networkId === loadedNetworkRef.current) return;
+    loadedNetworkRef.current = networkId;
+    api
+      .get<NetworkMetadata>(`/networks/${networkId}`)
+      .then((res) => setJunctions(res.data.junctions ?? []))
+      .catch(() => {});
+  }, [status?.network_id]);
+
+  // TL states keyed by tl_id
   const tlStates = useMemo<Record<string, TLState>>(() => {
     if (!snapshot?.tl_state) return {};
     const st = snapshot.tl_state;
-    // Multi-agent: tl_state is already Record<string, TLState>
     if (typeof st === 'object' && !('tl_id' in st)) {
       return st as Record<string, TLState>;
     }
-    // Single-agent: tl_state has tl_id at top level
     const single = st as TLState;
-    if (single.tl_id) {
-      return { [single.tl_id]: single };
-    }
+    if (single.tl_id) return { [single.tl_id]: single };
     return {};
   }, [snapshot?.tl_state]);
 
   const controlledTlIds = useMemo(
-    () => snapshot?.controlled_tl_ids || status?.controlled_tl_ids || [],
+    () => snapshot?.controlled_tl_ids ?? status?.controlled_tl_ids ?? [],
     [snapshot?.controlled_tl_ids, status?.controlled_tl_ids],
   );
 
-  const vehicles = useMemo<Vehicle[]>(
-    () =>
-      (snapshot?.vehicles || []).map((v) => ({
-        id: v.id,
-        x: v.x,
-        y: v.y,
-        speed: v.speed,
-        waiting_time: v.waiting_time,
-      })),
+  const vehicles = useMemo(
+    () => (snapshot?.vehicles ?? []).filter((v) => v.lat != null && v.lng != null),
     [snapshot?.vehicles],
   );
 
-  const isMultiAgent = status?.is_multi_agent || snapshot?.is_multi_agent;
+  const isMultiAgent = status?.is_multi_agent ?? snapshot?.is_multi_agent;
   const agentEnabled = status?.agent_enabled ?? snapshot?.agent_enabled ?? true;
-  const waitingVehicles = vehicles.filter((v) => v.speed < 0.5).length;
+  const waitingVehicles = (snapshot?.vehicles ?? []).filter((v) => v.speed < 0.5).length;
 
   const handleToggleAgent = async () => {
     setTogglingAgent(true);
@@ -441,74 +352,15 @@ export function SimulationViewPage() {
     }
   };
 
-  // Draw canvas
-  const draw = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const { w, h } = canvasSize;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
-    canvas.style.width = `${w}px`;
-    canvas.style.height = `${h}px`;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    // Background
-    ctx.fillStyle = '#0f172a';
-    ctx.fillRect(0, 0, w, h);
-
-    // Subtle grid
-    ctx.strokeStyle = 'rgba(51, 65, 85, 0.3)';
-    ctx.lineWidth = 0.5;
-    const gridSpacing = 40;
-    for (let x = 0; x < w; x += gridSpacing) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, h);
-      ctx.stroke();
-    }
-    for (let y = 0; y < h; y += gridSpacing) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(w, y);
-      ctx.stroke();
-    }
-
-    const geometry = networkCacheRef.current;
-    if (!geometry || geometry.junctions.length === 0) {
-      // No network data yet
-      ctx.font = '14px "Space Grotesk", sans-serif';
-      ctx.fillStyle = '#94a3b8';
-      ctx.textAlign = 'center';
-      ctx.fillText('Waiting for simulation data…', w / 2, h / 2);
-      return;
-    }
-
-    const transform = computeTransform(geometry, w, h);
-
-    drawNetwork(ctx, geometry, transform, h);
-    drawJunctions(ctx, geometry, transform, h, controlledTlIds, tlStates, agentEnabled);
-    drawVehicles(ctx, vehicles, transform, h);
-  }, [canvasSize, controlledTlIds, tlStates, vehicles, agentEnabled]);
-
-  useEffect(() => {
-    const raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
-  }, [draw]);
-
   return (
     <div
       className="min-h-screen text-white flex flex-col"
       style={{
         fontFamily: '"Space Grotesk", "IBM Plex Sans", sans-serif',
-        background:
-          'radial-gradient(1200px circle at 10% 0%, #1f2937 0%, #0b0f1a 45%, #070b12 100%)',
+        background: 'radial-gradient(1200px circle at 10% 0%, #1f2937 0%, #0b0f1a 45%, #070b12 100%)',
       }}
     >
-      {/* ── Header ───────────────────────────────────────────────── */}
+      {/* Header */}
       <header className="border-b border-white/10 bg-black/40 backdrop-blur shrink-0">
         <div className="max-w-[1600px] mx-auto px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -520,9 +372,7 @@ export function SimulationViewPage() {
             </button>
             <div className="flex items-center gap-2">
               <Cpu size={18} className="text-cyan-400" />
-              <h1 className="text-lg font-semibold tracking-wide">
-                Simulation Viewer
-              </h1>
+              <h1 className="text-lg font-semibold tracking-wide">Simulation Viewer</h1>
             </div>
           </div>
 
@@ -530,9 +380,7 @@ export function SimulationViewPage() {
             <div className="flex items-center gap-2">
               <span
                 className="w-2 h-2 rounded-full"
-                style={{
-                  background: status?.running ? '#22c55e' : '#64748b',
-                }}
+                style={{ background: status?.running ? '#22c55e' : '#64748b' }}
               />
               {status?.running ? 'Running' : 'Idle'}
             </div>
@@ -548,47 +396,93 @@ export function SimulationViewPage() {
         </div>
       </header>
 
-      {/* ── Main ─────────────────────────────────────────────────── */}
+      {/* Main */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Canvas area */}
-        <div ref={containerRef} className="flex-1 relative">
-          <canvas ref={canvasRef} className="absolute inset-0" />
+        {/* Map */}
+        <div className="flex-1 relative">
+          <MapContainer
+            center={HCMC_CENTER}
+            zoom={14}
+            style={{ height: '100%', width: '100%', background: '#0f172a' }}
+            zoomControl={true}
+          >
+            <TileLayer
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+              url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+            />
 
-          {/* Legend overlay */}
-          <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur border border-white/10 rounded-xl px-4 py-3 text-xs text-slate-300 space-y-2">
-            <div className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">
-              Legend
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="w-3 h-3 rounded-full bg-[#38bdf8]" />
-              Moving vehicle
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="w-3 h-3 rounded-full bg-[#fb923c]" />
-              Waiting vehicle
-            </div>
-            <div className="flex items-center gap-2">
-              <span
-                className="w-3 h-3 rounded-full border-2"
-                style={{
-                  background: agentEnabled ? '#1e1b4b' : '#1c0505',
-                  borderColor: agentEnabled ? '#a78bfa' : '#f87171',
+            <MapAutoFit junctions={junctions} />
+
+            {/* Junction markers */}
+            {junctions.map((j) => {
+              const tlState = j.tl_id ? tlStates[j.tl_id] : undefined;
+              const isControlled = j.tl_id ? controlledTlIds.includes(j.tl_id) : false;
+              const isTL = !!tlState;
+
+              const fillColor = isControlled
+                ? agentEnabled ? '#a78bfa' : '#f87171'
+                : tlState
+                  ? tlStateColor(tlState.state)
+                  : '#475569';
+
+              const strokeColor = isControlled
+                ? agentEnabled ? '#c4b5fd' : '#fca5a5'
+                : '#ffffff33';
+
+              const radius = isControlled ? 10 : isTL ? 7 : 4;
+
+              return (
+                <CircleMarker
+                  key={j.id}
+                  center={[j.lat, j.lon]}
+                  radius={radius}
+                  pathOptions={{
+                    fillColor,
+                    color: strokeColor,
+                    fillOpacity: 0.9,
+                    weight: isControlled ? 2 : 1,
+                  }}
+                >
+                  <Tooltip direction="top" offset={[0, -6]} opacity={0.9}>
+                    <span className="text-xs font-mono">
+                      {j.tl_id ?? j.id}
+                      {isControlled && (agentEnabled ? ' · AI' : ' · AI OFF')}
+                      {tlState && ` · P${tlState.phase}`}
+                    </span>
+                  </Tooltip>
+                </CircleMarker>
+              );
+            })}
+
+            {/* Vehicle markers */}
+            {vehicles.map((v) => (
+              <CircleMarker
+                key={v.id}
+                center={[v.lat as number, v.lng as number]}
+                radius={3}
+                pathOptions={{
+                  fillColor: v.speed < 0.5 ? '#fb923c' : '#38bdf8',
+                  color: 'transparent',
+                  fillOpacity: 0.85,
                 }}
               />
-              {agentEnabled ? 'AI-controlled intersection' : 'AI-controlled (disabled)'}
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-[#22c55e]" />
-              <span className="w-2 h-2 rounded-full bg-[#ef4444]" />
-              Traffic light (green / red)
-            </div>
+            ))}
+          </MapContainer>
+
+          {/* Legend */}
+          <div className="absolute bottom-4 left-4 z-[1000] bg-black/70 backdrop-blur border border-white/10 rounded-xl px-4 py-3 text-xs text-slate-300 space-y-1.5">
+            <div className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Legend</div>
+            <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-[#38bdf8]" /> Moving vehicle</div>
+            <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-[#fb923c]" /> Waiting vehicle</div>
+            <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-[#a78bfa]" /> AI-controlled TL</div>
+            <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-[#22c55e]" /> Green phase</div>
+            <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-[#ef4444]" /> Red phase</div>
           </div>
         </div>
 
-        {/* ── Sidebar metrics ────────────────────────────────────── */}
+        {/* Sidebar */}
         <aside className="w-[300px] border-l border-white/10 bg-black/30 backdrop-blur overflow-y-auto shrink-0">
           <div className="p-4 space-y-4">
-            {/* Metrics cards */}
             <div className="space-y-3">
               <div className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold flex items-center gap-1.5">
                 <Activity size={12} className="text-cyan-400" />
@@ -596,39 +490,15 @@ export function SimulationViewPage() {
               </div>
 
               <div className="grid grid-cols-2 gap-2">
-                <MetricCard
-                  icon={<Car size={14} />}
-                  label="Vehicles"
-                  value={snapshot?.metrics?.num_vehicles ?? 0}
-                  color="text-cyan-400"
-                />
-                <MetricCard
-                  icon={<Clock size={14} />}
-                  label="Waiting"
-                  value={waitingVehicles}
-                  color="text-orange-400"
-                />
-                <MetricCard
-                  icon={<Gauge size={14} />}
-                  label="Avg Speed"
-                  value={`${snapshot?.metrics?.avg_speed ?? 0} m/s`}
-                  color="text-emerald-400"
-                />
-                <MetricCard
-                  icon={<Zap size={14} />}
-                  label="Arrived"
-                  value={snapshot?.metrics?.arrived ?? 0}
-                  color="text-violet-400"
-                />
+                <MetricCard icon={<Car size={14} />} label="Vehicles" value={snapshot?.metrics?.num_vehicles ?? 0} color="text-cyan-400" />
+                <MetricCard icon={<Clock size={14} />} label="Waiting" value={waitingVehicles} color="text-orange-400" />
+                <MetricCard icon={<Gauge size={14} />} label="Avg Speed" value={`${snapshot?.metrics?.avg_speed ?? 0} m/s`} color="text-emerald-400" />
+                <MetricCard icon={<Zap size={14} />} label="Arrived" value={snapshot?.metrics?.arrived ?? 0} color="text-violet-400" />
               </div>
 
               <div className="bg-white/5 border border-white/10 rounded-lg p-3">
-                <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1">
-                  Total Wait Time
-                </div>
-                <div className="text-lg font-semibold text-amber-300">
-                  {snapshot?.metrics?.total_waiting_time ?? 0}s
-                </div>
+                <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1">Total Wait Time</div>
+                <div className="text-lg font-semibold text-amber-300">{snapshot?.metrics?.total_waiting_time ?? 0}s</div>
               </div>
             </div>
 
@@ -660,87 +530,52 @@ export function SimulationViewPage() {
                     {agentEnabled ? 'Click to disable' : 'Click to enable'}
                   </span>
                 </button>
-                <p className="text-[10px] text-slate-500 leading-relaxed">
-                  {agentEnabled
-                    ? 'AI is actively controlling the highlighted intersections.'
-                    : 'Controlled intersections have switched to fixed-time cycling.'}
-                </p>
               </div>
             )}
 
-            {/* Traffic lights */}
+            {/* Traffic light list */}
             <div className="space-y-2">
-              <div className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold">
-                Traffic Light States
-              </div>
+              <div className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold">Traffic Light States</div>
               <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
                 {Object.entries(tlStates).map(([id, st]) => {
                   const isAI = controlledTlIds.includes(id);
-                  const { ns, ew } = parseTLDirectionColors(st.state);
+                  const color = tlStateColor(st.state);
                   return (
                     <div
                       key={id}
                       className={`flex items-center gap-2 text-xs px-3 py-2 rounded-lg border ${
                         isAI && agentEnabled
                           ? 'border-violet-500/40 bg-violet-500/10'
-                          : isAI && !agentEnabled
+                          : isAI
                             ? 'border-red-400/40 bg-red-500/10'
                             : 'border-white/10 bg-white/5'
                       }`}
                     >
-                      <div className="flex gap-1">
-                        <span
-                          className="w-2.5 h-2.5 rounded-full"
-                          style={{ background: ns }}
-                          title="N/S"
-                        />
-                        <span
-                          className="w-2.5 h-2.5 rounded-full"
-                          style={{ background: ew }}
-                          title="E/W"
-                        />
-                      </div>
-                      <span className="text-slate-300 font-mono text-[10px] truncate flex-1">
-                        {id}
-                      </span>
-                      <span className="text-slate-500 text-[10px]">
-                        P{st.phase}
-                      </span>
-                      {isAI && agentEnabled ? (
-                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-500/30 text-violet-300">
-                          AI
-                        </span>
-                      ) : isAI && !agentEnabled ? (
-                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-300">
-                          OFF
-                        </span>
-                      ) : (
-                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">
-                          Fixed
-                        </span>
-                      )}
+                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: color }} />
+                      <span className="text-slate-300 font-mono text-[10px] truncate flex-1">{id}</span>
+                      <span className="text-slate-500 text-[10px]">P{st.phase}</span>
+                      {isAI && agentEnabled
+                        ? <span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-500/30 text-violet-300">AI</span>
+                        : isAI
+                          ? <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-300">OFF</span>
+                          : <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">Fixed</span>
+                      }
                     </div>
                   );
                 })}
                 {Object.keys(tlStates).length === 0 && (
-                  <div className="text-xs text-slate-500 text-center py-3">
-                    No traffic light data yet
-                  </div>
+                  <div className="text-xs text-slate-500 text-center py-3">No traffic light data yet</div>
                 )}
               </div>
             </div>
 
-            {/* AI Action */}
+            {/* Last AI action */}
             <div className="bg-white/5 border border-white/10 rounded-lg p-3">
-              <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1">
-                Last AI Action
-              </div>
+              <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1">Last AI Action</div>
               <div className="text-sm font-mono text-slate-200">
                 {snapshot?.ai_action != null
                   ? Array.isArray(snapshot.ai_action)
-                    ? snapshot.ai_action
-                        .map((a, i) => `TL${i}:${a}`)
-                        .join(', ')
+                    ? snapshot.ai_action.map((a, i) => `TL${i}:${a}`).join(', ')
                     : `Action ${snapshot.ai_action}`
                   : '—'}
               </div>
@@ -752,13 +587,8 @@ export function SimulationViewPage() {
   );
 }
 
-// ── Helper components ──────────────────────────────────────────────────
-
 function MetricCard({
-  icon,
-  label,
-  value,
-  color,
+  icon, label, value, color,
 }: {
   icon: React.ReactNode;
   label: string;
@@ -767,7 +597,7 @@ function MetricCard({
 }) {
   return (
     <div className="bg-white/5 border border-white/10 rounded-lg p-3">
-      <div className={`flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-slate-500 mb-1 ${color}`}>
+      <div className={`flex items-center gap-1.5 text-[10px] uppercase tracking-widest mb-1 ${color}`}>
         {icon}
         <span className="text-slate-500">{label}</span>
       </div>
