@@ -15,7 +15,6 @@ export function ModelsPanel() {
   const removeModel = useModelStore((s) => s.removeModel);
   const addDeployment = useModelStore((s) => s.addDeployment);
   const setDeployments = useModelStore((s) => s.setDeployments);
-  const clearDeployments = useModelStore((s) => s.clearDeployments);
   const deployments = useModelStore((s) => s.deployments);
   const expandedModelId = useModelStore((s) => s.expandedModelId);
   const toggleExpandedModel = useModelStore((s) => s.toggleExpandedModel);
@@ -23,14 +22,16 @@ export function ModelsPanel() {
   const setSelectedDeployModelId = useModelStore((s) => s.setSelectedDeployModelId);
   const selectedDeployTlId = useModelStore((s) => s.selectedDeployTlId);
   const setSelectedDeployTlId = useModelStore((s) => s.setSelectedDeployTlId);
+  const isDeploying = useModelStore((s) => s.isDeploying);
+  const setIsDeploying = useModelStore((s) => s.setIsDeploying);
 
   const intersections = useMapStore((s) => s.intersections);
   const sumoTrafficLights = useMapStore((s) => s.sumoTrafficLights);
   const selectedJunctionIds = useMapStore((s) => s.selectedJunctionIds);
   const currentNetworkId = useMapStore((s) => s.currentNetworkId);
+  const clearJunctionSelection = useMapStore((s) => s.clearJunctionSelection);
 
   const [swapPending, setSwapPending] = useState(false);
-  const [isDeploying, setIsDeploying] = useState(false);
 
   useEffect(() => {
     modelService.listModels()
@@ -50,7 +51,13 @@ export function ModelsPanel() {
 
   const handleSelectModel = (model: TrainedModel) => {
     setSelectedDeployModelId(model.model_id);
-    if (!selectedDeployTlId && model.tl_id) {
+    // Switching to a model from a different network invalidates any junction
+    // selection made against the previously-loaded network — clear it and fall
+    // back to the model's own TL so the deploy targets a valid junction.
+    if (currentNetworkId && model.network_id !== currentNetworkId) {
+      clearJunctionSelection();
+      setSelectedDeployTlId(model.tl_id ?? null);
+    } else if (!selectedDeployTlId && model.tl_id) {
       setSelectedDeployTlId(model.tl_id);
     }
   };
@@ -59,6 +66,12 @@ export function ModelsPanel() {
     () => models.find((m) => m.model_id === selectedDeployModelId) || null,
     [models, selectedDeployModelId],
   );
+
+  // The manual TL dropdown lists TLs from the currently-loaded network. When
+  // the selected model belongs to a different network those options are
+  // invalid for it — the model deploys to its own tl_id(s) instead.
+  const modelNetworkMismatch =
+    !!selectedModel && !!currentNetworkId && selectedModel.network_id !== currentNetworkId;
 
   const tlOptions = useMemo(() => {
     const nameByTlId = new Map<string, string>();
@@ -80,10 +93,6 @@ export function ModelsPanel() {
     const isMulti = selectedModel.type === 'multi' || (selectedModel.tl_ids && selectedModel.tl_ids.length > 1);
 
     try {
-      // Backend always issues stop-then-start + clears Redis. Mirror that
-      // on the store so stale purple markers vanish immediately.
-      clearDeployments();
-
       if (isMulti) {
         const primaryTlId = selectedModel.tl_ids?.[0] || selectedModel.tl_id || '';
         const result = await modelService.deployModel({
@@ -148,10 +157,6 @@ export function ModelsPanel() {
       toast.error('Select a model first');
       return;
     }
-    if (currentNetworkId && selectedModel.network_id !== currentNetworkId) {
-      toast.error('Model network does not match the selected map network');
-      return;
-    }
 
     // 1. Pre-check video file exists (git-LFS guard).
     const precheck = await deploymentService.precheckVideo(selectedModel.model_id);
@@ -179,8 +184,7 @@ export function ModelsPanel() {
 
   const isSelectedMulti = selectedModel && (selectedModel.type === 'multi' || (selectedModel.tl_ids && selectedModel.tl_ids.length > 1));
   const canDeploy = !!selectedModel
-    && (selectedJunctionIds.length > 0 || !!selectedDeployTlId || (isSelectedMulti && (selectedModel.tl_ids?.length ?? 0) > 0))
-    && (!currentNetworkId || selectedModel?.network_id === currentNetworkId);
+    && (selectedJunctionIds.length > 0 || !!selectedDeployTlId || (isSelectedMulti && (selectedModel.tl_ids?.length ?? 0) > 0));
 
   const handleDelete = async (modelId: string) => {
     try {
@@ -215,11 +219,6 @@ export function ModelsPanel() {
               <div className="text-xs text-gray-600">
                 Selected model: <span className="font-mono text-gray-800">{selectedModel?.model_id || 'None'}</span>
               </div>
-              {selectedModel && currentNetworkId && selectedModel.network_id !== currentNetworkId && (
-                <div className="text-[10px] text-red-500">
-                  Model network does not match current map network.
-                </div>
-              )}
               <div>
                 <label className="text-xs text-gray-500">Map selection</label>
                 <div className="mt-1 text-xs text-gray-700">
@@ -234,7 +233,7 @@ export function ModelsPanel() {
                   value={selectedDeployTlId ?? ''}
                   onChange={(e) => setSelectedDeployTlId(e.target.value || null)}
                   className="mt-1 w-full text-xs border border-gray-200 rounded px-2 py-1.5 bg-white"
-                  disabled={selectedJunctionIds.length > 0}
+                  disabled={selectedJunctionIds.length > 0 || modelNetworkMismatch}
                 >
                   <option value="">Select intersection</option>
                   {tlOptions.map((opt) => (
@@ -246,8 +245,13 @@ export function ModelsPanel() {
                 {selectedJunctionIds.length > 0 && (
                   <p className="text-[10px] text-gray-400 mt-1">Using map selection. Clear map selection to pick manually.</p>
                 )}
-                {tlOptions.length === 0 && selectedJunctionIds.length === 0 && (
+                {tlOptions.length === 0 && selectedJunctionIds.length === 0 && !modelNetworkMismatch && (
                   <p className="text-[10px] text-gray-400 mt-1">Load SUMO network to list intersections.</p>
+                )}
+                {modelNetworkMismatch && (
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    Model is from another network — it will deploy to its own intersection(s) and load that network.
+                  </p>
                 )}
               </div>
               <button

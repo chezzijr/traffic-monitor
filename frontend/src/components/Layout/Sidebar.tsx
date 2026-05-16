@@ -6,7 +6,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({ children }: SidebarProps) {
-  const { selectionMode, setSelectionMode, currentNetworkId, reset } = useMapStore();
+  const { selectionMode, setSelectionMode, currentNetworkId, networkSource, reset } = useMapStore();
 
   return (
     <aside className="w-80 bg-gray-50 border-r overflow-y-auto flex flex-col">
@@ -28,7 +28,10 @@ export function Sidebar({ children }: SidebarProps) {
         >
           {selectionMode ? 'Cancel Selection' : 'Select Region'}
         </button>
-        {currentNetworkId && (
+        {/* Training-only: in deploy mode there is no training network to
+            discard, and a bare reset() would just be re-seeded from the
+            active deployment. Use "Select Region" to start a fresh region. */}
+        {currentNetworkId && networkSource === 'training' && (
           <div className="mt-2 flex items-center justify-between gap-2">
             <p className="text-sm text-gray-500 truncate flex-1">
               Network: {currentNetworkId}

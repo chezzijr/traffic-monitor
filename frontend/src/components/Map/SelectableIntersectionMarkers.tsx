@@ -17,6 +17,10 @@ interface SelectableIntersectionMarkersProps {
    *  indices belong to it. When present, bulbs render at correct
    *  geographic positions; otherwise we fall back to length-heuristics. */
   tlMetadata?: TlLinkMetadataMap;
+  /** Whether non-deployed TL markers are selectable for training. False in a
+   *  deploy-only context — markers still render but clicking does not toggle
+   *  the training junction selection. Deployed (purple) markers stay clickable. */
+  selectable?: boolean;
   onIntersectionClick?: (intersection: Intersection) => void;
 }
 
@@ -183,7 +187,7 @@ const isTHDTBTIntersection = (intersection: Intersection): boolean =>
   Math.abs(intersection.lat - THD_TBT_LAT) < COORD_TOLERANCE &&
   Math.abs(intersection.lon - THD_TBT_LON) < COORD_TOLERANCE;
 
-export function SelectableIntersectionMarkers({ deployedJunctionIds = [], tlStates = {}, tlMetadata = {}, onIntersectionClick }: SelectableIntersectionMarkersProps) {
+export function SelectableIntersectionMarkers({ deployedJunctionIds = [], tlStates = {}, tlMetadata = {}, selectable = true, onIntersectionClick }: SelectableIntersectionMarkersProps) {
   const intersections = useMapStore((s) => s.intersections);
   const sumoTrafficLights = useMapStore((s) => s.sumoTrafficLights);
   const selectedRegion = useMapStore((s) => s.selectedRegion);
@@ -234,7 +238,7 @@ export function SelectableIntersectionMarkers({ deployedJunctionIds = [], tlStat
         }
 
         const isDeployed = deployedJunctionIds.includes(sumoTlId);
-        const isSelected = selectedJunctionIds.includes(sumoTlId);
+        const isSelected = selectable && selectedJunctionIds.includes(sumoTlId);
         const liveState = isDeployed ? tlStates[sumoTlId] : undefined;
         const meta = isDeployed ? tlMetadata[sumoTlId] : undefined;
         const icon = isDeployed
@@ -249,10 +253,11 @@ export function SelectableIntersectionMarkers({ deployedJunctionIds = [], tlStat
             eventHandlers={{
               click: () => {
                 // Deployed (purple): open live deploy modal, do NOT toggle training.
-                // Non-deployed (green/amber): toggle training selection only.
+                // Non-deployed (green/amber): toggle training selection only when
+                // selectable (i.e. user is in a training context).
                 if (isDeployed) {
                   onIntersectionClick?.(intersection);
-                } else {
+                } else if (selectable) {
                   toggleJunctionSelection(sumoTlId);
                 }
               },
@@ -280,7 +285,7 @@ export function SelectableIntersectionMarkers({ deployedJunctionIds = [], tlStat
       })}
       {unmatchedSumoTls.map((tl) => {
         const isDeployed = deployedJunctionIds.includes(tl.id);
-        const isSelected = selectedJunctionIds.includes(tl.id);
+        const isSelected = selectable && selectedJunctionIds.includes(tl.id);
         const liveState = isDeployed ? tlStates[tl.id] : undefined;
         const meta = isDeployed ? tlMetadata[tl.id] : undefined;
         const icon = isDeployed
@@ -306,7 +311,7 @@ export function SelectableIntersectionMarkers({ deployedJunctionIds = [], tlStat
                     has_traffic_light: true,
                     sumo_tl_id: tl.id,
                   } as Intersection);
-                } else {
+                } else if (selectable) {
                   toggleJunctionSelection(tl.id);
                 }
               },

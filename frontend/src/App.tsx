@@ -32,6 +32,9 @@ export default function App() {
   const setLoading = useMapStore((s) => s.setLoading);
   const setSumoTrafficLights = useMapStore((s) => s.setSumoTrafficLights);
   const setOsmSumoMapping = useMapStore((s) => s.setOsmSumoMapping);
+  const setNetworkSource = useMapStore((s) => s.setNetworkSource);
+  const networkSource = useMapStore((s) => s.networkSource);
+  const reset = useMapStore((s) => s.reset);
   // Training store
   const activeTaskId = useTrainingStore((s) => s.activeTaskId);
   const setActiveTaskId = useTrainingStore((s) => s.setActiveTaskId);
@@ -45,6 +48,7 @@ export default function App() {
   const setModels = useModelStore((s) => s.setModels);
   const deployments = useModelStore((s) => s.deployments);
   const setDeployments = useModelStore((s) => s.setDeployments);
+  const isDeploying = useModelStore((s) => s.isDeploying);
 
   // Training progress
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -210,6 +214,8 @@ export default function App() {
         setSumoTrafficLights(tlSeed);
         setOsmSumoMapping(osmSumoMapping);
         setCurrentNetworkId(deployNetworkId);
+        // Marker-display only — must NOT enable the training panel.
+        setNetworkSource('deploy');
       } catch (err) {
         console.warn('Failed to auto-seed deploy network metadata:', err);
       }
@@ -226,7 +232,22 @@ export default function App() {
     setSumoTrafficLights,
     setOsmSumoMapping,
     setCurrentNetworkId,
+    setNetworkSource,
   ]);
+
+  // After a deploy is stopped (from any path — Stop All, per-TL undeploy, or a
+  // stop issued from another view), the deployment list empties. If the map is
+  // only showing a deploy-seeded network, wipe it so the page returns to a
+  // clean fresh-start state instead of stranding a stale network + markers.
+  // Skipped while a deploy/swap is in flight (`isDeploying`) — the backend
+  // clears Redis between stop and start, so the list briefly empties mid-swap.
+  // Also debounced as defense-in-depth for stops issued outside this page.
+  useEffect(() => {
+    if (deployments.length === 0 && networkSource === 'deploy' && !isDeploying) {
+      const t = setTimeout(() => reset(), 5000);
+      return () => clearTimeout(t);
+    }
+  }, [deployments.length, networkSource, isDeploying, reset]);
 
   // Extract region when selected, then auto-convert to SUMO
   useEffect(() => {
@@ -240,6 +261,7 @@ export default function App() {
         const result = await mapService.extractRegion(selectedRegion);
         setIntersections(result.intersections);
         setCurrentNetworkId(result.network_id);
+        setNetworkSource('training');
         toast.success('Region extracted successfully');
 
         // Step 2: Auto-convert to SUMO
@@ -268,7 +290,7 @@ export default function App() {
     };
 
     extractAndConvert();
-  }, [selectedRegion, setIntersections, setCurrentNetworkId, setError, setLoading, setSumoTrafficLights, setOsmSumoMapping]);
+  }, [selectedRegion, setIntersections, setCurrentNetworkId, setError, setLoading, setSumoTrafficLights, setOsmSumoMapping, setNetworkSource]);
 
   // Connect SSE when a task becomes active
   const connectSSE = useCallback((taskId: string) => {
@@ -347,12 +369,25 @@ export default function App() {
       <Header />
       <div className="flex-1 flex overflow-hidden">
         <Sidebar>
-          {hasSumoData ? (
+          {hasSumoData && networkSource === 'training' ? (
             <>
               <JunctionSelector />
               <TrainingConfigPanel onTrainingStarted={handleTrainingStarted} />
               <ActiveTasksPanel onTaskSelect={handleTaskSelect} />
             </>
+          ) : networkSource === 'deploy' ? (
+            <div className="text-center py-8 text-sm text-gray-400">
+              <p>A model is deployed.</p>
+              <p className="text-xs mt-1 mb-3">Manage or stop it in the Models panel.</p>
+              {!isPanelOpen && (
+                <button
+                  onClick={togglePanel}
+                  className="text-xs px-3 py-1.5 rounded bg-blue-500 text-white hover:bg-blue-600 transition-colors"
+                >
+                  Open Models panel
+                </button>
+              )}
+            </div>
           ) : (
             <div className="text-center py-8 text-sm text-gray-400">
               <p>Select a region on the map to get started.</p>
@@ -366,6 +401,7 @@ export default function App() {
                 deployedJunctionIds={deployedJunctionIds}
                 tlStates={tlStates}
                 tlMetadata={tlMetadata}
+                selectable={networkSource === 'training'}
                 onIntersectionClick={handleDeployedIntersectionClick}
               />
             )}

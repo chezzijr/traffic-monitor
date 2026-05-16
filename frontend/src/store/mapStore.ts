@@ -15,6 +15,10 @@ interface MapState {
   sumoTrafficLights: SUMOTrafficLight[];
   osmSumoMapping: Record<string, string>;
   tlClusters: TlCluster[];
+  // Why a network is loaded: 'training' (user drew a region) vs 'deploy'
+  // (auto-seeded from an active deployment for marker display only). Gates
+  // the training UI so deploying never opens the junction selector.
+  networkSource: 'training' | 'deploy' | null;
 
   // Actions
   setIntersections: (intersections: Intersection[]) => void;
@@ -29,6 +33,7 @@ interface MapState {
   clearJunctionSelection: () => void;
   setSumoTrafficLights: (lights: SUMOTrafficLight[]) => void;
   setOsmSumoMapping: (mapping: Record<string, string>) => void;
+  setNetworkSource: (source: 'training' | 'deploy' | null) => void;
   loadTlClusters: (networkId: string) => Promise<void>;
   selectCluster: (clusterId: string) => void;
   reset: () => void;
@@ -46,6 +51,7 @@ const initialState = {
   sumoTrafficLights: [] as SUMOTrafficLight[],
   osmSumoMapping: {} as Record<string, string>,
   tlClusters: [] as TlCluster[],
+  networkSource: null as 'training' | 'deploy' | null,
 };
 
 export const useMapStore = create<MapState>((set) => ({
@@ -89,6 +95,7 @@ export const useMapStore = create<MapState>((set) => ({
   clearJunctionSelection: () => set({ selectedJunctionIds: [] }),
   setSumoTrafficLights: (lights) => set({ sumoTrafficLights: lights }),
   setOsmSumoMapping: (mapping) => set({ osmSumoMapping: mapping }),
+  setNetworkSource: (networkSource) => set({ networkSource }),
   loadTlClusters: async (networkId) => {
     try {
       const clusters = await mapService.getTlClusters(networkId);
