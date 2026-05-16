@@ -1,5 +1,9 @@
 """FastAPI application entry point."""
 
+import logging
+import threading
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -17,11 +21,32 @@ from app.api.routes import (
     waiting_count_router,
 )
 from app.config import settings
+from app.services import ml_service
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """App lifespan: pre-warm the model list off the request path so the
+    first page load doesn't pay the cold ~25s scan of the simulation/ volume."""
+
+    def _prewarm() -> None:
+        try:
+            ml_service.list_models()
+            logger.info("model-list cache pre-warmed")
+        except Exception:
+            logger.warning("model-list pre-warm failed", exc_info=True)
+
+    threading.Thread(target=_prewarm, name="model-list-prewarm", daemon=True).start()
+    yield
+
 
 app = FastAPI(
     title="Traffic Monitor API",
     description="Real-time traffic monitoring and control system",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # Add CORS middleware
