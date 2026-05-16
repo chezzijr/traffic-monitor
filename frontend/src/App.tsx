@@ -543,10 +543,12 @@ export default function App() {
         </main>
       </div>
 
-      {/* Right panel for models & deployments */}
+      {/* Right panel for models & deployments. Deployments first so the
+          Undeploy / Stop-All controls stay visible without scrolling past a
+          long trained-models list. */}
       <RightPanel isOpen={isPanelOpen} onClose={togglePanel}>
-        <ModelsPanel />
         <DeploymentsPanel />
+        <ModelsPanel />
       </RightPanel>
     </div>
   );
