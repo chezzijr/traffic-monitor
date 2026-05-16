@@ -19,6 +19,7 @@ import { useModelStore } from './store/modelStore';
 import { mapService } from './services/mapService';
 import { modelService } from './services/modelService';
 import { deploymentService } from './services/deploymentService';
+import { taskService } from './services/taskService';
 import { digitalTwinDeployService } from './services/digitalTwinDeployService';
 import { TrainingSSE } from './services/sseService';
 import type { TrainingProgressEvent, TrainingCompletionEvent, Intersection } from './types';
@@ -44,6 +45,7 @@ export default function App() {
   const completeTask = useTrainingStore((s) => s.completeTask);
   const failTask = useTrainingStore((s) => s.failTask);
   const cancelTask = useTrainingStore((s) => s.cancelTask);
+  const setTasks = useTrainingStore((s) => s.setTasks);
 
   // Model store
   const isPanelOpen = useModelStore((s) => s.isPanelOpen);
@@ -97,6 +99,60 @@ export default function App() {
       clearInterval(id);
     };
   }, [setDeployments]);
+
+  // Poll the backend task list every 3s so a training run is visible on any
+  // client — a different machine on the LAN or this tab after a reload. Local
+  // trainingStore.tasks alone only knows runs started in *this* browser.
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const backend = await taskService.listTasks();
+        if (cancelled) return;
+        const local = useTrainingStore.getState().tasks;
+        const backendById = new Map(backend.map((t) => [t.task_id, t]));
+        const localIds = new Set(local.map((t) => t.task_id));
+        // Refresh known tasks from the backend's source-of-truth status/
+        // progress so a run that finished elsewhere flips terminal here too.
+        const merged = local.map((t) => {
+          const bt = backendById.get(t.task_id);
+          if (!bt) return t;
+          // A locally-terminal task — the SSE flow already wrote completed/
+          // failed here — must not be downgraded by a staler backend record.
+          // Local terminal state wins; the poll only promotes, never demotes.
+          if (t.status === 'completed' || t.status === 'failed') return t;
+          return {
+            ...t,
+            status: bt.status,
+            // Progress is monotonic and the SSE flow updates it faster than
+            // this 3s poll, so never let a lagging backend value move the
+            // bar backward.
+            progress: Math.max(t.progress ?? 0, bt.progress ?? 0),
+            error: bt.error ?? t.error,
+            model_path: bt.model_path ?? t.model_path,
+          };
+        });
+        // Add running tasks started on another machine. Only `running` ones —
+        // the backend's tasks:list is never pruned, so importing every entry
+        // would dump the whole completed/failed history into the panel. A
+        // local-only `queued` task is left as-is (not yet in the backend list).
+        for (const bt of backend) {
+          if (bt.status === 'running' && !localIds.has(bt.task_id)) {
+            merged.unshift(bt);
+          }
+        }
+        setTasks(merged);
+      } catch {
+        /* swallow — polling is best-effort */
+      }
+    };
+    refresh();
+    const id = setInterval(refresh, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [setTasks]);
 
   // Load the deploy network's junction coords (once per deploy network) so the
   // always-on deployed-marker overlay can render regardless of which network
