@@ -464,7 +464,8 @@ class SumoManager:
         to-lane connection). Multiple links share an incoming edge — those
         belong to the same physical approach. This method groups state-string
         indices by source edge and computes each approach's compass angle
-        from the edge's last-segment direction toward the junction.
+        as the bearing from the junction toward the incoming road (the side
+        vehicles wait on).
 
         Returns ``{"approaches": [{"angle_deg": float, "link_indices": [int,...], "from_edge": str}, ...]}``
         with approaches sorted clockwise from north.
@@ -496,12 +497,15 @@ class SumoManager:
             try:
                 shape = conn.lane.getShape(lane_id)
                 if len(shape) >= 2:
-                    # Direction at junction = last 2 shape points (lane points
-                    # INTO the junction, so this is the approach direction).
+                    # The incoming lane shape ends AT the junction, so the last
+                    # two points run along the travel direction (into the
+                    # junction). The bulb must sit on the side the road comes
+                    # FROM (where vehicles wait), so take the reverse vector:
+                    # bearing from the junction back toward the incoming road.
                     p1 = shape[-2]
                     p2 = shape[-1]
                     # SUMO: +X east, +Y north. Compass: 0=N, 90=E, clockwise.
-                    angle_rad = math.atan2(p2[0] - p1[0], p2[1] - p1[1])
+                    angle_rad = math.atan2(p1[0] - p2[0], p1[1] - p2[1])
                     angle_deg = (math.degrees(angle_rad) + 360.0) % 360.0
             except Exception:
                 pass

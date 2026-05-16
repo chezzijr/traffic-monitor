@@ -72,9 +72,10 @@ export interface DeploySnapshot {
 }
 
 /** One physical incoming road at a traffic light. `angle_deg` is the
- *  compass bearing (0=N, 90=E, clockwise) of the approach as it enters
- *  the junction. `link_indices` are the SUMO state-string positions that
- *  belong to this approach (use to extract the bulb color via majority). */
+ *  compass bearing (0=N, 90=E, clockwise) from the junction toward the
+ *  incoming road — the side vehicles wait on. `link_indices` are the SUMO
+ *  state-string positions that belong to this approach (use to extract the
+ *  bulb color via majority). */
 export interface ApproachMeta {
   angle_deg: number;
   link_indices: number[];
