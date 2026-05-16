@@ -3,6 +3,7 @@ import { Play, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useMapStore } from '../../store/mapStore';
 import { useTrainingStore } from '../../store/trainingStore';
+import { useModelStore } from '../../store/modelStore';
 import { trainingService } from '../../services/trainingService';
 import type { Algorithm, TrafficScenario } from '../../types';
 
@@ -28,6 +29,8 @@ export function TrainingConfigPanel({ onTrainingStarted }: TrainingConfigPanelPr
   const setTotalTimesteps = useTrainingStore((s) => s.setTotalTimesteps);
   const setScenario = useTrainingStore((s) => s.setScenario);
   const addTask = useTrainingStore((s) => s.addTask);
+  const tasks = useTrainingStore((s) => s.tasks);
+  const deployments = useModelStore((s) => s.deployments);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -37,6 +40,25 @@ export function TrainingConfigPanel({ onTrainingStarted }: TrainingConfigPanelPr
 
   const handleStartTraining = async () => {
     if (!canStart || !currentNetworkId) return;
+
+    // Deployed junctions can be trained safely (training runs in a separate
+    // SUMO simulation) — confirm so the user knows the live deployment is
+    // untouched and the new model is a replacement to swap in later.
+    const deployedJunctionIds = new Set(
+      deployments.flatMap((d) => (d.tl_ids && d.tl_ids.length > 0 ? d.tl_ids : [d.tl_id])),
+    );
+    const deployedSelected = selectedJunctionIds.filter((id) => deployedJunctionIds.has(id));
+    if (
+      deployedSelected.length > 0 &&
+      !window.confirm(
+        `${deployedSelected.length} selected junction(s) are currently deployed. Training builds a new model in a separate simulation — it will not disturb the live deployment; deploy the result later to replace it. Continue?`,
+      )
+    ) {
+      return;
+    }
+
+    // Celery runs one training at a time — a new one queues behind the rest.
+    const willQueue = tasks.some((t) => t.status === 'running' || t.status === 'queued');
     setIsSubmitting(true);
 
     try {
@@ -69,7 +91,11 @@ export function TrainingConfigPanel({ onTrainingStarted }: TrainingConfigPanelPr
         progress: 0,
       });
 
-      toast.success(`Training started for ${junctionCount} junction${junctionCount > 1 ? 's' : ''}`);
+      toast.success(
+        willQueue
+          ? 'Training queued — starts when the current run finishes'
+          : `Training started for ${junctionCount} junction${junctionCount > 1 ? 's' : ''}`,
+      );
       onTrainingStarted?.(response.task_id);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to start training';

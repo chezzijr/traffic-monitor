@@ -7,8 +7,10 @@ import {
   MapLegend,
   SelectableIntersectionMarkers,
 } from './components/Map';
+import { DeployedNetworkMarkers } from './components/Map/DeployedNetworkMarkers';
 import { CameraModal } from './components/Control';
 import { Sidebar, Header, BottomDrawer, RightPanel } from './components/Layout';
+import { ActivityStatusBar } from './components/Layout/ActivityStatusBar';
 import { JunctionSelector, TrainingConfigPanel, ActiveTasksPanel, TrainingProgressPanel } from './components/Training';
 import { ModelsPanel, DeploymentsPanel } from './components/Models';
 import { useMapStore } from './store/mapStore';
@@ -40,6 +42,7 @@ export default function App() {
   const setActiveTaskId = useTrainingStore((s) => s.setActiveTaskId);
   const updateProgress = useTrainingStore((s) => s.updateProgress);
   const completeTask = useTrainingStore((s) => s.completeTask);
+  const failTask = useTrainingStore((s) => s.failTask);
   const cancelTask = useTrainingStore((s) => s.cancelTask);
 
   // Model store
@@ -63,9 +66,17 @@ export default function App() {
   const deployedJunctionIds = deployments.flatMap((d) =>
     d.tl_ids && d.tl_ids.length > 0 ? d.tl_ids : [d.tl_id],
   );
+  const deployNetworkId = deployments[0]?.network_id ?? null;
 
   // Whether SUMO conversion is done (show selectable markers instead of regular ones)
   const hasSumoData = sumoTrafficLights.length > 0;
+
+  // Deploy network's junction coordinates — fetched independently of the
+  // training network so the deployed (purple) markers stay on the map even
+  // when the user is training a different network.
+  const [deployJunctions, setDeployJunctions] = useState<
+    { id: string; lat: number; lon: number; tl_id?: string | null }[]
+  >([]);
 
   // Poll deployments every 2s so root-map purple markers stay fresh after
   // deploys/swaps initiated from this or any other tab.
@@ -86,6 +97,33 @@ export default function App() {
       clearInterval(id);
     };
   }, [setDeployments]);
+
+  // Load the deploy network's junction coords (once per deploy network) so the
+  // always-on deployed-marker overlay can render regardless of which network
+  // is currently on the map.
+  useEffect(() => {
+    if (!deployNetworkId) {
+      setDeployJunctions([]);
+      return;
+    }
+    let cancelled = false;
+    mapService
+      .getNetworkMetadata(deployNetworkId)
+      .then((meta) => {
+        if (cancelled) return;
+        setDeployJunctions(
+          (meta.junctions ?? [])
+            .filter((j) => !!j.tl_id)
+            .map((j) => ({ id: j.id, lat: j.lat, lon: j.lon, tl_id: j.tl_id })),
+        );
+      })
+      .catch(() => {
+        /* transient — overlay just stays empty */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [deployNetworkId]);
 
   // Live TL phase state per deployed junction — same DT snapshot the
   // /simulation/view canvas consumes. Renders inline on the root map so
@@ -326,6 +364,9 @@ export default function App() {
       },
       onError: (data) => {
         toast.error(`Training failed: ${data.error}`);
+        // Mark the task failed so it stops latching the running/queued
+        // guards (Sidebar confirm, activity status bar).
+        failTask(taskId);
       },
       onCancelled: (data) => {
         cancelTask(data.task_id);
@@ -334,7 +375,7 @@ export default function App() {
     });
 
     sse.connect(taskId);
-  }, [updateProgress, setActiveTaskId, setModels, completeTask, cancelTask]);
+  }, [updateProgress, setActiveTaskId, setModels, completeTask, failTask, cancelTask]);
 
   // Handle training started from config panel
   const handleTrainingStarted = useCallback((taskId: string) => {
@@ -367,6 +408,7 @@ export default function App() {
     <div className="h-screen flex flex-col">
       <Toaster position="top-right" />
       <Header />
+      <ActivityStatusBar onViewTraining={connectSSE} />
       <div className="flex-1 flex overflow-hidden">
         <Sidebar>
           {hasSumoData && networkSource === 'training' ? (
@@ -402,6 +444,18 @@ export default function App() {
                 tlStates={tlStates}
                 tlMetadata={tlMetadata}
                 selectable={networkSource === 'training'}
+                onIntersectionClick={handleDeployedIntersectionClick}
+              />
+            )}
+            {/* Always-on overlay: deployed junctions of a *different* network
+                than the one on the map (same-network deploys are already drawn
+                by SelectableIntersectionMarkers above). */}
+            {deployNetworkId && deployNetworkId !== currentNetworkId && (
+              <DeployedNetworkMarkers
+                junctions={deployJunctions}
+                deployedJunctionIds={deployedJunctionIds}
+                tlStates={tlStates}
+                tlMetadata={tlMetadata}
                 onIntersectionClick={handleDeployedIntersectionClick}
               />
             )}
