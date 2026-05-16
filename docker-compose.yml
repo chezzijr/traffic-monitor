@@ -102,6 +102,9 @@ services:
       - ./services/digital_twin/simulate_real_traffic:/app/simulate_real_traffic
       - ./services/digital_twin/result:/app/result
       - ./simulation:/app/simulation
+      # service/ code mounted for dev hot-reload (paired with --reload below)
+      - ./services/digital_twin/service:/app/service:ro
+    command: ["uv", "run", "uvicorn", "service.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload", "--reload-dir", "/app/service"]
     networks:
       - traffic-network
     deploy:
