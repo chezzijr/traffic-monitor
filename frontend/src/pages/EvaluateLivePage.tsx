@@ -11,6 +11,7 @@ export function EvaluateLivePage() {
   const [snapshot, setSnapshot] = useState<SyncSnapshot | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [stopping, setStopping] = useState(false);
+  const [showAnnotated, setShowAnnotated] = useState(true);
   const startTime = useRef(Date.now());
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -56,6 +57,14 @@ export function EvaluateLivePage() {
     const m = Math.floor(s / 60);
     const sec = s % 60;
     return `${m}:${sec.toString().padStart(2, '0')}`;
+  };
+
+  const formatHms = (s: number) => {
+    const total = Math.max(0, Math.floor(s));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const sec = total % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
   };
 
   const isComplete = snapshot?.running === false && snapshot?.evaluation;
@@ -117,16 +126,34 @@ export function EvaluateLivePage() {
         {/* Panel 1: Video feed */}
         <div className="flex-1 flex flex-col min-w-0">
           <div className="bg-gray-900/60 border border-gray-800 rounded-xl flex-1 flex flex-col overflow-hidden">
-            <div className="px-4 py-2.5 border-b border-gray-800/50 text-xs font-semibold text-gray-400 uppercase tracking-wider">
-              Video Feed — Vehicle Tracking
+            <div className="px-4 py-2.5 border-b border-gray-800/50 text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center justify-between">
+              <span>Video Feed — Vehicle Tracking</span>
+              {snapshot?.video_frame_annotated && (
+                <label className="flex items-center gap-2 cursor-pointer select-none text-[10px] text-gray-500 hover:text-gray-300 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={showAnnotated}
+                    onChange={(e) => setShowAnnotated(e.target.checked)}
+                    className="accent-violet-500"
+                  />
+                  Show Bounding Boxes
+                </label>
+              )}
             </div>
             <div className="flex-1 flex items-center justify-center p-2 bg-black/30">
               {snapshot?.video_frame ? (
-                <img
-                  src={`data:image/jpeg;base64,${snapshot.video_frame}`}
-                  alt="Video feed"
-                  className="max-w-full max-h-full object-contain rounded-lg"
-                />
+                <div className="relative max-w-full max-h-full">
+                  <img
+                    src={`data:image/jpeg;base64,${showAnnotated && snapshot.video_frame_annotated ? snapshot.video_frame_annotated : snapshot.video_frame}`}
+                    alt="Video feed"
+                    className="max-w-full max-h-full object-contain rounded-lg"
+                  />
+                  {typeof snapshot.video_timestamp === 'number' && (
+                    <div className="absolute top-2 left-2 rounded bg-black/70 px-2 py-1 text-xs text-white">
+                      Time: 12:00:00 + {formatHms(snapshot.video_timestamp)}
+                    </div>
+                  )}
+                </div>
               ) : (
                 <div className="text-gray-600 text-sm flex flex-col items-center gap-2">
                   <Loader2 size={24} className="animate-spin text-gray-700" />

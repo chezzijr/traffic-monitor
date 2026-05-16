@@ -88,4 +88,10 @@ def detect_region(cx: float, cy: float, regions) -> str | None:
         if cv2.pointPolygonTest(pts, (cx, cy), False) >= 0:
             return name
 
-    return None
+    # Fallback to quadrant logic if no polygon matched
+    # (Assuming the video is 1920x1080 for the digital twin feed)
+    w, h = 1920, 1080
+    if cy < h / 2:
+        return "north" if cx >= w / 2 else "west"
+    else:
+        return "east" if cx >= w / 2 else "south"

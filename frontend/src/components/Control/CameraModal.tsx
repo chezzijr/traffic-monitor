@@ -1,13 +1,170 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import { X, Loader } from 'lucide-react';
+import { X, Loader, Zap } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { cameraService, trafficLightSimService, waitingCountService, digitalTwinLightService } from '../../services';
+import { digitalTwinDeployService } from '../../services/digitalTwinDeployService';
+import type { ApproachMeta } from '../../services/digitalTwinDeployService';
+import { useModelStore } from '../../store/modelStore';
 import type {
     Intersection,
     IntersectionFrames,
     TrafficLightSimState,
     WaitingCountResponse,
 } from '../../types';
+
+// Approach-level color map. SUMO state has 1 char per controlled link
+// (lane), so a 4-way with 4 lanes per arm emits 16 chars. We compress by
+// run-length so the bulb count reflects intersection arity, not lane count.
+const APPROACH_COLOR_MODAL: Record<string, string> = {
+    green: '#22c55e',
+    yellow: '#eab308',
+    red: '#ef4444',
+    off: '#9ca3af',
+};
+
+function normalizeSumoCharModal(c: string): string {
+    if (c === 'G' || c === 'g') return 'green';
+    if (c === 'y' || c === 'Y') return 'yellow';
+    if (c === 'r' || c === 'R') return 'red';
+    return 'off';
+}
+
+function detectArityModal(len: number): number {
+    if (len <= 0) return 0;
+    if (len === 1) return 1;
+    if (len >= 4 && len % 4 === 0) return 4;
+    if (len === 3 || (len === 6 && len % 4 !== 0)) return 3;
+    return 2;
+}
+
+function dominantApproachColorModal(chunk: string): string {
+    let g = 0, y = 0, r = 0;
+    for (const c of chunk) {
+        const k = normalizeSumoCharModal(c);
+        if (k === 'green') g++;
+        else if (k === 'yellow') y++;
+        else if (k === 'red') r++;
+    }
+    if (y > 0 && y >= Math.max(g, r)) return 'yellow';
+    if (g > r) return 'green';
+    if (r > g) return 'red';
+    if (g === r && g > 0) return 'yellow';
+    return 'off';
+}
+
+function compressStateToApproachesModal(stateStr: string): string[] {
+    if (!stateStr) return [];
+    const arity = detectArityModal(stateStr.length);
+    const chunkSize = Math.floor(stateStr.length / arity);
+    if (chunkSize === 0) return [];
+    const result: string[] = [];
+    for (let i = 0; i < arity; i++) {
+        const start = i * chunkSize;
+        const end = i === arity - 1 ? stateStr.length : start + chunkSize;
+        result.push(dominantApproachColorModal(stateStr.slice(start, end)));
+    }
+    return result;
+}
+
+/** Render one bulb per intersection approach. When SUMO net metadata is
+ *  available, bulbs are positioned at their actual compass angles and
+ *  count matches physical roads (1-way → 1, 2-way → 2, etc.). Without
+ *  metadata, falls back to length-heuristic chunking. */
+function DeployStateLights({ stateStr, phase, aiAction, step, metadata }: {
+    stateStr: string;
+    phase: number;
+    aiAction: number | number[] | null | undefined;
+    step: number;
+    metadata?: { approaches: ApproachMeta[] };
+}) {
+    type Bulb = { color: string; angleDeg: number; label: string };
+    let bulbs: Bulb[];
+    if (metadata && metadata.approaches.length > 0) {
+        bulbs = metadata.approaches.map((a, i) => {
+            const chunk = a.link_indices.map((k) => stateStr[k] ?? '').join('');
+            return {
+                color: dominantApproachColorModal(chunk),
+                angleDeg: a.angle_deg,
+                label: `Approach ${i + 1} (${Math.round(a.angle_deg)}°)`,
+            };
+        });
+    } else {
+        const groups = compressStateToApproachesModal(stateStr);
+        bulbs = groups.map((g, i) => ({
+            color: g,
+            angleDeg: (360 * i) / Math.max(groups.length, 1),
+            label: `Approach ${i + 1}`,
+        }));
+    }
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div className="flex items-center gap-2 text-xs text-gray-600">
+                <span>Phase <span className="font-mono font-semibold text-gray-900">{phase}</span></span>
+                <span>•</span>
+                <span>Step <span className="font-mono font-semibold text-gray-900">{step}</span></span>
+                {aiAction !== null && aiAction !== undefined && (
+                    <>
+                        <span>•</span>
+                        <span>AI action <span className="font-mono font-semibold text-purple-700">{Array.isArray(aiAction) ? aiAction.join(',') : aiAction}</span></span>
+                    </>
+                )}
+            </div>
+            {/* Compass-style layout: bulbs positioned at their true SUMO
+                approach angles (when metadata available). The center is
+                the junction; each bulb sits on a circle at its angle. */}
+            <div style={{ position: 'relative', width: 140, height: 140, margin: '8px auto' }}>
+                <div style={{
+                    position: 'absolute', left: '50%', top: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    width: 40, height: 40, borderRadius: '50%',
+                    border: '2px dashed #d1d5db',
+                }} />
+                {bulbs.length === 0 ? (
+                    <span style={{
+                        position: 'absolute', left: '50%', top: '50%',
+                        transform: 'translate(-50%, -50%)',
+                        fontSize: 11, color: '#9ca3af', fontStyle: 'italic',
+                    }}>no signal state yet</span>
+                ) : bulbs.map((b, i) => {
+                    const rad = (b.angleDeg - 90) * (Math.PI / 180);
+                    const radius = 50;
+                    const x = 70 + Math.cos(rad) * radius;
+                    const y = 70 + Math.sin(rad) * radius;
+                    return (
+                        <div
+                            key={i}
+                            title={`${b.label}: ${b.color}`}
+                            style={{
+                                position: 'absolute',
+                                left: x - 14, top: y - 14,
+                                width: 28, height: 28, borderRadius: '50%',
+                                background: APPROACH_COLOR_MODAL[b.color] ?? '#9ca3af',
+                                boxShadow: `0 0 8px ${APPROACH_COLOR_MODAL[b.color] ?? '#9ca3af'}`,
+                                border: '2px solid white',
+                            }}
+                        />
+                    );
+                })}
+                {/* Compass cardinals for orientation reference */}
+                {['N', 'E', 'S', 'W'].map((c, i) => {
+                    const rad = ((i * 90) - 90) * (Math.PI / 180);
+                    const x = 70 + Math.cos(rad) * 65;
+                    const y = 70 + Math.sin(rad) * 65;
+                    return (
+                        <span key={c} style={{
+                            position: 'absolute', left: x - 6, top: y - 8,
+                            fontSize: 10, color: '#9ca3af', fontWeight: 600,
+                        }}>{c}</span>
+                    );
+                })}
+            </div>
+            <div className="text-[10px] text-gray-400 font-mono break-all">
+                {metadata ? `${bulbs.length} approach${bulbs.length === 1 ? '' : 'es'} (SUMO topology)` : `heuristic split: ${bulbs.length}`}
+                {' • '}raw state: {stateStr || '(empty)'}
+            </div>
+        </div>
+    );
+}
 
 const formatDurationSince = (date: Date | null): string => {
     if (!date) return 'N/A';
@@ -113,6 +270,109 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
 
     // Detect if this is the Trần Hưng Đạo × Trần Bình Trọng intersection
     const useDT = useMemo(() => isTHDTBTIntersection(intersection), [intersection]);
+
+    // ── Deploy mode: pull deployment metadata + live DT toggle state ──
+    // When this modal is opened from a purple (deployed) marker, surface the
+    // model_id, deploy_id and let the user toggle the AI agent.
+    const deployments = useModelStore((s) => s.deployments);
+    const matchingDeployment = useMemo(() => {
+        if (!intersection?.sumo_tl_id) return null;
+        const tlId = intersection.sumo_tl_id;
+        return (
+            deployments.find((d) => d.tl_id === tlId) ??
+            deployments.find((d) => (d.tl_ids ?? []).includes(tlId)) ??
+            null
+        );
+    }, [intersection?.sumo_tl_id, deployments]);
+    const isDeployedMode = matchingDeployment !== null;
+    const [agentEnabled, setAgentEnabled] = useState(true);
+    const [agentToggling, setAgentToggling] = useState(false);
+
+    // Per-TL DT live state for the deploy banner — replaces the hardcoded
+    // N/S/E/W simulation-API lookup which doesn't apply to real intersections.
+    type DeployTlSnap = {
+        state: string;     // SUMO state string, variable length per TL
+        phase: number;
+        program?: string;
+    };
+    const [deployTlSnap, setDeployTlSnap] = useState<DeployTlSnap | null>(null);
+    const [deployTlMeta, setDeployTlMeta] = useState<{ approaches: ApproachMeta[] } | undefined>(undefined);
+    const [deployStep, setDeployStep] = useState<number>(0);
+    const [deployAiAction, setDeployAiAction] = useState<number | number[] | null | undefined>(null);
+    const [deployHealth, setDeployHealth] = useState<string>('idle');
+
+    useEffect(() => {
+        if (!isOpen || !isDeployedMode) return;
+        digitalTwinDeployService.getStatus()
+            .then((s) => setAgentEnabled(s.agent_enabled ?? true))
+            .catch(() => { /* DT may be offline; banner still shows */ });
+    }, [isOpen, isDeployedMode]);
+
+    // Poll DT snapshot every second while the deploy modal is open so the
+    // per-link bulbs reflect the actual SUMO controlled state, not the
+    // four-direction guess from `trafficLightSimService`.
+    useEffect(() => {
+        if (!isOpen || !isDeployedMode || !intersection?.sumo_tl_id) return;
+        const tlId = intersection.sumo_tl_id;
+        let cancelled = false;
+
+        const fetchSnap = async () => {
+            try {
+                const snap = await digitalTwinDeployService.getSnapshot();
+                if (cancelled) return;
+                setDeployStep(snap.step ?? 0);
+                setDeployHealth(
+                    (snap as { health?: string }).health ?? 'ok',
+                );
+                // ai_action — for multi-agent it's an array indexed by the
+                // controlled_tl_ids order; for single-agent it's a scalar.
+                const action = snap.ai_action;
+                if (Array.isArray(action) && Array.isArray(snap.controlled_tl_ids)) {
+                    const idx = snap.controlled_tl_ids.indexOf(tlId);
+                    setDeployAiAction(idx >= 0 ? action[idx] : null);
+                } else {
+                    setDeployAiAction(action ?? null);
+                }
+                // tl_state shape differs between single (flat) and multi (record).
+                const ts = snap.tl_state as Record<string, { state: string; phase: number; program?: string }> | { tl_id?: string; state: string; phase: number; program?: string } | undefined;
+                if (!ts) {
+                    setDeployTlSnap(null);
+                    return;
+                }
+                let perTl: { state: string; phase: number; program?: string } | undefined;
+                if ('tl_id' in ts && typeof ts.tl_id === 'string') {
+                    perTl = ts.tl_id === tlId ? ts as { state: string; phase: number; program?: string } : undefined;
+                } else {
+                    perTl = (ts as Record<string, { state: string; phase: number; program?: string }>)[tlId];
+                }
+                setDeployTlSnap(perTl ? { state: perTl.state, phase: perTl.phase, program: perTl.program } : null);
+                const meta = (snap as { tl_link_metadata?: Record<string, { approaches: ApproachMeta[] }> }).tl_link_metadata;
+                setDeployTlMeta(meta?.[tlId]);
+            } catch {
+                /* DT may be transiently offline */
+            }
+        };
+
+        fetchSnap();
+        const id = window.setInterval(fetchSnap, 1000);
+        return () => {
+            cancelled = true;
+            window.clearInterval(id);
+        };
+    }, [isOpen, isDeployedMode, intersection?.sumo_tl_id]);
+
+    const handleToggleAgent = useCallback(async () => {
+        setAgentToggling(true);
+        try {
+            const result = await digitalTwinDeployService.toggleAgent(!agentEnabled);
+            setAgentEnabled(result.agent_enabled);
+            toast.success(`AI control ${result.agent_enabled ? 'enabled' : 'disabled'}`);
+        } catch {
+            toast.error('Failed to toggle AI control');
+        } finally {
+            setAgentToggling(false);
+        }
+    }, [agentEnabled]);
 
     // Combined fetch: load frames + waiting count together, update atomically
     const loadFramesAndCount = useCallback(async () => {
@@ -344,6 +604,67 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
                     </button>
                 </div>
 
+                {/* Deploy-mode banner — visible only when this junction has an
+                    active AI deploy (purple marker). Shows model + deploy_id
+                    + AI on/off toggle + per-link SUMO state derived from the
+                    DT snapshot (variable length — 1 bulb per controlled link,
+                    so 1-way roads show 1, 2-way show 2, 4-way show 4+). */}
+                {isDeployedMode && matchingDeployment && (
+                    <div className="mx-4 mt-4 rounded-lg border border-purple-200 bg-purple-50 p-3 space-y-3">
+                        <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-start gap-2 min-w-0">
+                                <Zap size={16} className="text-purple-600 flex-shrink-0 mt-0.5" />
+                                <div className="min-w-0">
+                                    <p className="text-xs font-semibold text-purple-900">
+                                        AI Model Deployed
+                                        {matchingDeployment.is_multi_agent && ' (multi-agent)'}
+                                        {deployHealth === 'error' && <span className="ml-2 text-red-600">⚠ {deployHealth}</span>}
+                                    </p>
+                                    <p className="text-[11px] font-mono text-purple-700 truncate">
+                                        {matchingDeployment.model_id}
+                                    </p>
+                                    <p className="text-[10px] text-purple-600 mt-0.5">
+                                        deploy_id: {matchingDeployment.deploy_id?.slice(0, 12) ?? 'n/a'}
+                                        {' • '}
+                                        network: {matchingDeployment.network_id?.slice(0, 12)}
+                                    </p>
+                                </div>
+                            </div>
+                            <button
+                                onClick={handleToggleAgent}
+                                disabled={agentToggling}
+                                className={`flex items-center gap-1 text-xs px-3 py-1.5 rounded transition-colors disabled:opacity-50 ${
+                                    agentEnabled
+                                        ? 'bg-green-600 text-white hover:bg-green-700'
+                                        : 'bg-gray-300 text-gray-700 hover:bg-gray-400'
+                                }`}
+                                title={agentEnabled ? 'AI on — click to disable' : 'AI off — click to enable'}
+                            >
+                                <Zap size={12} />
+                                {agentEnabled ? 'AI On' : 'AI Off'}
+                            </button>
+                        </div>
+
+                        {/* Per-link bulbs from DT snapshot — replaces the
+                            hardcoded N/S/E/W simulation-API render. */}
+                        <div className="rounded-md bg-white border border-purple-100 p-3">
+                            {deployTlSnap ? (
+                                <DeployStateLights
+                                    stateStr={deployTlSnap.state}
+                                    phase={deployTlSnap.phase}
+                                    aiAction={deployAiAction}
+                                    step={deployStep}
+                                    metadata={deployTlMeta}
+                                />
+                            ) : (
+                                <p className="text-xs text-gray-500 italic">
+                                    Waiting for DT snapshot… (step {deployStep})
+                                </p>
+                            )}
+                        </div>
+                    </div>
+                )}
+
                 {/* Main content: Camera feed (left) + Traffic light (right) */}
                 <div className="flex flex-col md:flex-row gap-4 p-4">
                     {/* Left: Camera feed */}
@@ -374,6 +695,7 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
                                             <img
                                                 src={`data:image/jpeg;base64,${imgSrc}`}
                                                 className="w-full rounded"
+                                                alt={`Camera feed ${directionName}`}
                                             />
                                             {dirLight ? (
                                                 <DirectionLightRow
@@ -399,8 +721,10 @@ export function CameraModal({ intersection, isOpen, onClose }: CameraModalProps)
                         )}
                     </div>
 
-                    {/* Right: Traffic light diagram + direction cards */}
-                    {lightState && (
+                    {/* Right: Traffic light diagram + direction cards.
+                        Hidden in deploy mode — the DT snapshot bulbs in the
+                        banner above are the authoritative source there. */}
+                    {lightState && !isDeployedMode && (
                         <div className="md:w-[280px] flex-shrink-0 space-y-3">
                             <h3 className="font-semibold text-base">Traffic Light Status</h3>
 

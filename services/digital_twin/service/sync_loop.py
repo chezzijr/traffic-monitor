@@ -23,9 +23,11 @@ from service.coordinate_mapper import (
 from service.config import (
     FIXED_GREEN_DURATION,
     FIXED_YELLOW_DURATION,
+    RESULT_DIR,
 )
 from service.network_gen import get_network_path
 from service.sumo_manager import SumoManager
+from service.chart_export import save_waiting_timeseries_chart, default_chart_path
 
 logger = logging.getLogger(__name__)
 
@@ -183,12 +185,15 @@ def _sync_loop() -> None:
             get_tracked_vehicles,
             is_video_complete,
             reset_video_complete_flag,
+            reset_waiting_history,
+            get_waiting_history,
             start_background_loop,
             get_latest_frame,
         )
 
         start_background_loop()
         reset_video_complete_flag()
+        reset_waiting_history()
 
         veh_ids: set[str] = set()
         _direction_tracker.__init__()  # reset
@@ -208,7 +213,8 @@ def _sync_loop() -> None:
             snapshot = {
                 "step": metrics["step"],
                 "running": True,
-                "video_frame": frame_data.get("image_annotated") or frame_data.get("image"),
+                "video_frame": frame_data.get("image"),
+                "video_frame_annotated": frame_data.get("image_annotated"),
                 "video_timestamp": frame_data.get("timestamp", 0.0),
                 "vehicles": _sumo.get_vehicles() if _sumo.running else [],
                 "tl_state": _sumo.get_traffic_light_state() if _sumo.running else {},
@@ -230,6 +236,13 @@ def _sync_loop() -> None:
                 logger.info("Video completed — sync run finished")
                 with _sync_lock:
                     _sync_status["video_complete"] = True
+                try:
+                    history = get_waiting_history()
+                    chart_path = default_chart_path(RESULT_DIR, tag="sync")
+                    save_waiting_timeseries_chart(history, chart_path)
+                    logger.info("Waiting-count chart saved: %s", chart_path)
+                except Exception:
+                    logger.exception("Failed to save waiting-count chart")
                 break
 
             time.sleep(0.1)  # ~10 Hz

@@ -7,7 +7,9 @@ Supports both legacy SB3 .zip models and new PyTorch .pt models.
 
 import json
 import logging
+import os
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -88,10 +90,69 @@ def get_model_metadata(model_path: str) -> dict[str, Any]:
     if meta_path.exists():
         return _read_json(meta_path)
 
-    return _load_checkpoint_metadata(path)
+    # No sidecar — read metadata out of the checkpoint (slow: a full
+    # torch.load unpickle that holds the GIL) and persist it as a JSON
+    # sidecar so the next list_models() rebuild reads JSON instead. Without
+    # this, listing N sidecar-less models unpickles N checkpoints every call.
+    metadata = _load_checkpoint_metadata(path)
+    if metadata:
+        try:
+            # Unique temp name per pid+thread — two callers writing the same
+            # sidecar concurrently must not os.replace each other's partial file.
+            tmp = Path(f"{meta_path}.{os.getpid()}.{threading.get_ident()}.tmp")
+            with open(tmp, "w") as f:
+                json.dump(metadata, f, indent=2)
+            os.replace(tmp, meta_path)
+        except OSError:
+            pass  # listing still works; this one just won't be cached
+    return metadata
+
+
+# Process-level cache for list_models(). Rebuilding scans ~190 files off the
+# shared simulation/ volume — ~25s when the OS page cache is cold (e.g. a
+# training task evicting pages). The cached list lives in the process heap so
+# it survives page-cache eviction; we rebuild at most every _LIST_TTL seconds.
+_LIST_TTL = 30.0  # seconds
+_list_cache: dict[str, Any] = {"ts": 0.0, "data": []}
+_list_lock = threading.Lock()
 
 
 def list_models() -> list[dict[str, Any]]:
+    """List all available trained models (single + multi-agent), cached.
+
+    The TTL — not in-process invalidation — is what keeps this correct across
+    processes: new models are written by the Celery worker, a separate process,
+    so the only shared source of truth is the filesystem. 30s staleness is
+    invisible since training takes minutes.
+
+    Returns a shallow copy: callers may add/drop entries freely, but the model
+    dicts themselves are shared with the cache and must be treated read-only.
+    """
+    now = time.monotonic()
+    if _list_cache["ts"] > 0 and now - _list_cache["ts"] < _LIST_TTL:
+        return list(_list_cache["data"])
+    # Single-flight: one thread rebuilds while concurrent callers wait on the
+    # lock, then re-read the now-fresh cache — they don't each pay the rebuild.
+    with _list_lock:
+        now = time.monotonic()
+        if _list_cache["ts"] > 0 and now - _list_cache["ts"] < _LIST_TTL:
+            return list(_list_cache["data"])
+        try:
+            data = _build_models_list()
+        except Exception:
+            # A failed rebuild must not propagate to every caller queued on the
+            # lock and re-trigger the cold scan N times. Serve the last good
+            # list if we have one; only raise when the cache was never built.
+            logger.warning("model list rebuild failed", exc_info=True)
+            if _list_cache["data"]:
+                return list(_list_cache["data"])
+            raise
+        _list_cache["data"] = data
+        _list_cache["ts"] = time.monotonic()
+        return list(data)
+
+
+def _build_models_list() -> list[dict[str, Any]]:
     """List all available trained models (single + multi-agent)."""
     models = []
 
@@ -361,6 +422,13 @@ def delete_model(model_path: str) -> dict[str, Any]:
             p = Path(str(path) + suffix)
             if p.exists():
                 p.unlink()
+
+    # Bust the list cache so the deleted model disappears immediately instead
+    # of lingering up to _LIST_TTL seconds. Done under the lock so the bust
+    # can't be lost to an in-flight rebuild that publishes pre-delete data
+    # right afterwards (the rebuild then re-scans on the next call).
+    with _list_lock:
+        _list_cache["ts"] = 0.0
 
     return {"status": "deleted", "path": str(path)}
 

@@ -18,10 +18,16 @@ VIDEO_PATH = Path(os.getenv(
     str(SIM_REALTIME_DIR / "data" / "tphcm" / "output-2p-light.MOV"),
 ))
 
-# YOLO model weights
+# YOLO model weights (Prefer TensorRT engine if available)
+_PT_PATH = SIM_REALTIME_DIR / "model" / "yolo11x.pt"
+# Check for common engine names
+_ENGINE_PATH = SIM_REALTIME_DIR / "model" / "yolo11x.engine"
+if not _ENGINE_PATH.exists():
+    _ENGINE_PATH = SIM_REALTIME_DIR / "model" / "yolo11x_1280.engine"
+
 MODEL_PATH = Path(os.getenv(
     "MODEL_PATH",
-    str(SIM_REALTIME_DIR / "model" / "yolo11x.pt"),
+    str(_ENGINE_PATH if _ENGINE_PATH.exists() else _PT_PATH),
 ))
 
 # Region polygon definitions (sits next to the video file)
@@ -30,16 +36,29 @@ REGIONS_PATH = Path(os.getenv(
     str(SIM_REALTIME_DIR / "regions" / "tphcm" / "regions.json"),
 ))
 
+# Tracker config (BoT-SORT)
+TRACKER_CONFIG = Path(os.getenv(
+    "TRACKER_CONFIG",
+    str(SIM_REALTIME_DIR / "botsort.yaml"),
+))
+
+# Video time annotation base (HH:MM:SS)
+VIDEO_START_TIME = os.getenv("VIDEO_START_TIME", "12:00:00")
+
 # Service port
 PORT = int(os.getenv("PORT", "8001"))
 
 # YOLO tracking constants
-TRACKED_CLASS_IDS = {1, 2, 3, 5, 7}   # bicycle, car, motorcycle, bus, truck
+TRACKED_CLASS_IDS = {2, 3, 5, 7}   # car, motorcycle, bus, truck
 METERS_PER_PIXEL = 50 / 1420
 WAITING_SPEED_THRESHOLD = 2.0       # m/s — below this, vehicle is "waiting"
+WAITING_MIN_FRAMES = int(os.getenv("WAITING_MIN_FRAMES", "3"))
+WAITING_SPEED_THRESHOLD_NORTH = float(os.getenv("WAITING_SPEED_THRESHOLD_NORTH", "1.5"))
 YOLO_CONF = float(os.getenv("YOLO_CONF", "0.25"))  # detection confidence
-YOLO_VID_STRIDE = int(os.getenv("YOLO_VID_STRIDE", "3"))  # process every Nth frame
-YOLO_IMGSZ = int(os.getenv("YOLO_IMGSZ", "960"))
+YOLO_VID_STRIDE = int(os.getenv("YOLO_VID_STRIDE", "1"))  # process every Nth frame
+YOLO_IMGSZ = int(os.getenv("YOLO_IMGSZ", "1280"))
+DETECTION_MODE = os.getenv("DETECTION_MODE", "track").lower()  # track | predict
+COMPARE_PREDICT = os.getenv("COMPARE_PREDICT", "0") == "1"
 
 # Traffic light inference: if waiting vehicles >= this threshold, direction is RED
 WAITING_VEHICLE_RED_THRESHOLD = int(os.getenv("WAITING_VEHICLE_RED_THRESHOLD", "3"))
@@ -65,7 +84,7 @@ DEPLOY_SUMO_DIR = Path(os.getenv(
 ))
 DEPLOY_MODEL_DIR = Path(os.getenv(
     "DEPLOY_MODEL_DIR",
-    str(Path("/simulation/models")),
+    str(BASE_DIR.parent.parent / "simulation" / "models"),
 ))
 DEPLOY_VIDEO_DIR = Path(os.getenv(
     "DEPLOY_VIDEO_DIR",
@@ -87,3 +106,6 @@ DEPLOY_DECISION_INTERVAL_STEPS = int(os.getenv("DEPLOY_DECISION_INTERVAL_STEPS",
 # Fixed-time baseline durations (seconds)
 FIXED_GREEN_DURATION = int(os.getenv("FIXED_GREEN_DURATION", "35"))
 FIXED_YELLOW_DURATION = int(os.getenv("FIXED_YELLOW_DURATION", "3"))
+
+# Result output directory
+RESULT_DIR = Path(os.getenv("RESULT_DIR", str(BASE_DIR / "result")))

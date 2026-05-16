@@ -23,6 +23,7 @@ interface TrainingState {
   updateProgress: (taskId: string, progress: TrainingProgressEvent) => void;
   removeProgress: (taskId: string) => void;
   completeTask: (taskId: string, data: TrainingCompletionEvent) => void;
+  failTask: (taskId: string) => void;
   cancelTask: (taskId: string) => void;
   dismissCompletion: (taskId: string) => void;
 }
@@ -69,6 +70,14 @@ export const useTrainingStore = create<TrainingState>((set) => ({
         t.task_id === taskId
           ? { ...t, status: 'completed' as const, progress: 1.0, model_path: data.model_path }
           : t
+      ),
+    })),
+  // Mark a task failed (terminal). Kept in the list so the user sees it
+  // failed; the 'failed' status excludes it from running/queued guards.
+  failTask: (taskId) =>
+    set((state) => ({
+      tasks: state.tasks.map((t) =>
+        t.task_id === taskId ? { ...t, status: 'failed' as const } : t
       ),
     })),
   cancelTask: (taskId) =>

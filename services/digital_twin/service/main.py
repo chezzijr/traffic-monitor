@@ -10,6 +10,8 @@ import logging
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
+from fastapi.responses import FileResponse
+
 from service.video_analyzer import (
     get_waiting_count,
     get_latest_frame,
@@ -17,7 +19,12 @@ from service.video_analyzer import (
     start_stream,
     stop_stream,
     get_stream_status,
+    set_debug_mode,
+    get_debug_mode,
+    get_waiting_history,
 )
+from service.chart_export import save_waiting_timeseries_chart, default_chart_path
+from service.config import RESULT_DIR
 
 logging.basicConfig(
     level=logging.INFO,
@@ -93,6 +100,8 @@ def frame():
     Response format:
     ``{ frames: [{ number: 1, image: "<base64>", image_annotated: "<base64>" }] }``
     """
+    # Keep the stream alive when the frontend only polls /frame.
+    start_stream()
     data = get_latest_frame()
     img = data.get("image")
     img_ann = data.get("image_annotated")
@@ -168,6 +177,55 @@ def stream_status():
     return get_stream_status()
 
 
+# ── Debug mode ────────────────────────────────────────────────────────
+
+@app.api_route("/debug/toggle", methods=["GET", "POST"])
+def debug_toggle(enabled: bool = Query(..., description="true to enable debug overlays, false to disable")):
+    """Toggle debug mode on the annotated frame.
+
+    When enabled, the annotated frame draws semi-transparent region overlays
+    (north / south / east / west) so you can verify that the direction
+    polygons cover the correct areas of the video.
+    """
+    set_debug_mode(enabled)
+    return {"debug_mode": get_debug_mode()}
+
+
+@app.get("/debug/status")
+def debug_status():
+    """Return the current debug mode state."""
+    return {"debug_mode": get_debug_mode()}
+
+
+# ── Result export endpoints ───────────────────────────────────────────
+
+@app.get("/result/waiting-count-timeseries")
+def result_waiting_timeseries():
+    """Generate and return the waiting-count time-series chart as a PNG.
+
+    Uses the history accumulated since the last sync/deploy run started.
+    Also saves the chart to the ``result/`` directory.
+    Saved filename: ``images/DT-results/waiting-count-timeseries.png``
+    """
+    history = get_waiting_history()
+    if not history:
+        raise HTTPException(
+            status_code=404,
+            detail="No waiting-count history yet. Start a sync or deploy run first.",
+        )
+    try:
+        fixed_path = RESULT_DIR / "images" / "DT-results" / "waiting-count-timeseries.png"
+        save_waiting_timeseries_chart(history, fixed_path)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return FileResponse(
+        path=str(fixed_path),
+        media_type="image/png",
+        filename="waiting-count-timeseries.png",
+    )
+
+
 # ── Sync pipeline endpoints ───────────────────────────────────────────
 
 from service.sync_loop import (
@@ -183,6 +241,7 @@ from service.deploy_loop import (
     stop_deploy,
     get_deploy_status,
     get_deploy_snapshot,
+    toggle_agent,
     list_models as list_deploy_models,
     list_videos as list_deploy_videos,
 )
@@ -242,9 +301,13 @@ def deploy_videos():
 
 @app.post("/deploy/start")
 def deploy_start(request: DeployStartRequest):
-    """Start the deploy loop with the selected model."""
+    """Start the deploy loop with the selected model.
+
+    Returns 409 with a structured body if a deploy is already running.
+    Backend orchestration is expected to issue /deploy/stop first to swap.
+    """
     try:
-        return start_deploy(
+        result = start_deploy(
             request.model_path,
             request.tl_id,
             grid_rows=request.grid_rows,
@@ -254,6 +317,70 @@ def deploy_start(request: DeployStartRequest):
     except Exception as exc:
         logger.exception("Failed to start deploy")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    if result.get("status") == "already_running":
+        raise HTTPException(status_code=409, detail=result)
+    return result
+
+
+@app.get("/deploy/videos/check")
+def deploy_videos_check():
+    """Pre-flight check that the configured video file exists and is readable.
+
+    Returns ``{exists, path, error, hint}``. Used by the backend /precheck
+    proxy to block deploy attempts when git-LFS files are missing.
+    """
+    from service.config import VIDEO_PATH
+
+    path_str = str(VIDEO_PATH)
+    try:
+        exists = VIDEO_PATH.exists() and VIDEO_PATH.is_file()
+    except Exception as exc:
+        return {
+            "exists": False,
+            "path": path_str,
+            "error": f"stat_failed: {exc}",
+            "hint": "Check VIDEO_PATH env var and DT container mounts.",
+        }
+
+    if not exists:
+        return {
+            "exists": False,
+            "path": path_str,
+            "error": "video_missing",
+            "hint": "Run `git lfs pull` in the repo root, then restart the digital-twin container.",
+        }
+
+    # Detect LFS pointer files (small text stub instead of binary). Git-LFS
+    # pointers are ~130 bytes and start with "version https://git-lfs.github.com".
+    try:
+        size = VIDEO_PATH.stat().st_size
+        if size < 1024:
+            with open(VIDEO_PATH, "rb") as fp:
+                head = fp.read(64)
+            if head.startswith(b"version https://git-lfs"):
+                return {
+                    "exists": False,
+                    "path": path_str,
+                    "error": "lfs_pointer_only",
+                    "hint": "Video file is a git-LFS pointer (not pulled). Run `git lfs pull`.",
+                    "size_bytes": size,
+                }
+    except Exception as exc:
+        return {
+            "exists": False,
+            "path": path_str,
+            "error": f"read_failed: {exc}",
+            "hint": "Check file permissions inside the DT container.",
+        }
+
+    return {
+        "exists": True,
+        "path": path_str,
+        "error": None,
+        "hint": None,
+        "size_bytes": size,
+    }
 
 
 @app.post("/deploy/stop")
@@ -272,4 +399,15 @@ def deploy_status():
 def deploy_snapshot():
     """Return deploy loop snapshot for the frontend."""
     return get_deploy_snapshot()
+
+
+@app.post("/deploy/agent/toggle")
+def deploy_agent_toggle(enabled: bool = Query(..., description="true to enable AI agent control, false to switch to fixed-time")):
+    """Toggle the RL agent on or off while the deploy loop is running.
+
+    When disabled, AI-controlled intersections fall back to fixed-time control
+    (33s green / 3s yellow / 30s red). When re-enabled, the agent resumes
+    setting phases on the next decision interval.
+    """
+    return toggle_agent(enabled)
 

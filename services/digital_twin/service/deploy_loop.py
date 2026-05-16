@@ -17,6 +17,7 @@ import random
 import threading
 import time
 from pathlib import Path
+from uuid import uuid4
 
 import numpy as np
 
@@ -29,8 +30,18 @@ from service.config import (
     FIXED_GREEN_DURATION,
     FIXED_YELLOW_DURATION,
     SIM_REALTIME_DIR,
-    SAVED_NETWORKS_DIR,
+    RESULT_DIR,
 )
+
+# Compute SAVED_NETWORKS_DIR at call time so it works in both Docker (env var set)
+# and local dev (no env var; resolve relative to this file's location at repo root).
+# services/digital_twin/service/deploy_loop.py → .parent×3 → repo root
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_DEFAULT_NETWORKS_DIR = _REPO_ROOT / "simulation" / "networks"
+
+
+def _get_saved_networks_dir() -> Path:
+    return Path(os.getenv("SAVED_NETWORKS_DIR", str(_DEFAULT_NETWORKS_DIR)))
 from service.rl_model import RLModel
 from service.sumo_manager import SumoManager
 from service.video_analyzer import (
@@ -38,8 +49,11 @@ from service.video_analyzer import (
     get_tracked_vehicles,
     is_video_complete,
     reset_video_complete_flag,
+    reset_waiting_history,
+    get_waiting_history,
     start_background_loop,
 )
+from service.chart_export import save_waiting_timeseries_chart, default_chart_path
 
 # Import grid network generation from script_network.py (at parent level)
 import sys
@@ -64,11 +78,19 @@ FIXED_RED = 30
 # Spawn deviation for cloned intersections (±20%)
 SPAWN_CLONE_DEVIATION = 0.20
 
+# CoLight duration-mode: must match DURATION_BUCKETS_SEC in colight_env.py
+DURATION_BUCKETS_SEC = (10, 20, 30, 40)
+_MAX_BUCKET = float(max(DURATION_BUCKETS_SEC))
+
 # ── Shared state ──────────────────────────────────────────────────────
 
 _deploy_lock = threading.Lock()
 _deploy_active = False
 _deploy_thread: threading.Thread | None = None
+_agent_enabled = True  # Runtime toggle: False = fixed-time on all controlled TLs
+_deploy_id: str | None = None  # UUID regenerated on each start_deploy
+_deploy_error_msg: str | None = None  # Last fatal error in deploy loop
+
 _deploy_status: dict = {
     "running": False,
     "step": 0,
@@ -82,6 +104,10 @@ _deploy_status: dict = {
     "is_multi_agent": False,
     "controlled_tl_ids": [],
     "fixed_tl_ids": [],
+    "agent_enabled": True,
+    "deploy_id": None,
+    "health": "idle",
+    "error_msg": None,
 }
 _snapshot_data: dict = {}
 
@@ -205,6 +231,9 @@ def _find_boundary_edges_in_network(conn) -> dict:
     }
 
 
+_OSM_SPAWN_DIAG = {"attempts": 0, "primary_fail": 0, "empty_edges": 0, "last_log": 0.0}
+
+
 def _feed_vehicles_osm_network(
     tracked: list[dict],
     vehicle_ids: set[str],
@@ -231,7 +260,17 @@ def _feed_vehicles_osm_network(
 
         if veh_id not in vehicle_ids:
             # New vehicle detected in video — spawn at boundary edges
+            _OSM_SPAWN_DIAG["attempts"] += 1
             if not entry_edges or not exit_edges:
+                _OSM_SPAWN_DIAG["empty_edges"] += 1
+                # Log once every 5 seconds to surface Bug D (vehicles=0 root cause)
+                _now = time.monotonic()
+                if _now - _OSM_SPAWN_DIAG["last_log"] > 5.0:
+                    logger.warning(
+                        "OSM spawn skipped: entry_edges=%d exit_edges=%d (Bug D diagnostic)",
+                        len(entry_edges), len(exit_edges),
+                    )
+                    _OSM_SPAWN_DIAG["last_log"] = _now
                 continue
 
             # Pick a primary entry edge (randomly)
@@ -268,6 +307,18 @@ def _feed_vehicles_osm_network(
                     if _sumo.add_vehicle(extra_id, extra_route, pos=0.1, speed=max(veh.get("speed", 0.0), 1.0)):
                         _sumo.update_vehicle_speed(extra_id, -1)
                         vehicle_ids.add(extra_id)
+            else:
+                _OSM_SPAWN_DIAG["primary_fail"] += 1
+                _now = time.monotonic()
+                if _now - _OSM_SPAWN_DIAG["last_log"] > 5.0:
+                    logger.warning(
+                        "add_vehicle FAIL: route=%s→%s (attempts=%d primary_fail=%d empty_edges=%d)",
+                        primary_entry, primary_exit,
+                        _OSM_SPAWN_DIAG["attempts"],
+                        _OSM_SPAWN_DIAG["primary_fail"],
+                        _OSM_SPAWN_DIAG["empty_edges"],
+                    )
+                    _OSM_SPAWN_DIAG["last_log"] = _now
         else:
             # Known vehicle — also mark all its clones as visible
             for cid in list(vehicle_ids):
@@ -380,14 +431,22 @@ def _feed_vehicles_grid(tracked: list[dict], vehicle_ids: set[str], grid_rows: i
 
 
 def start_deploy(model_path: str, tl_id: str | None = None, grid_rows: int = 2, grid_cols: int = 3, network_id: str | None = None) -> dict:
-    global _deploy_active, _deploy_thread, _snapshot_data
+    global _deploy_active, _deploy_thread, _snapshot_data, _agent_enabled, _deploy_id, _deploy_error_msg
 
     with _deploy_lock:
         if _deploy_active:
-            return {"status": "already_running"}
+            return {
+                "status": "already_running",
+                "current_model_path": _deploy_status.get("model_path"),
+                "current_tl_ids": list(_deploy_status.get("controlled_tl_ids") or []),
+                "current_deploy_id": _deploy_id,
+            }
 
         _deploy_active = True
+        _agent_enabled = True
         _snapshot_data = {}
+        _deploy_id = uuid4().hex
+        _deploy_error_msg = None
 
         _deploy_status.update({
             "running": True,
@@ -403,14 +462,29 @@ def start_deploy(model_path: str, tl_id: str | None = None, grid_rows: int = 2, 
             "is_multi_agent": False,
             "controlled_tl_ids": [],
             "fixed_tl_ids": [],
+            "agent_enabled": True,
+            "deploy_id": _deploy_id,
+            "health": "starting",
+            "error_msg": None,
         })
 
     # Load model first to determine if it's multi-agent
-    load_result = _model.load(model_path)
-    logger.info("Model loaded: %s", load_result)
+    try:
+        load_result = _model.load(model_path)
+        logger.info("Model loaded: %s (deploy_id=%s)", load_result, _deploy_id)
+    except Exception as exc:
+        with _deploy_lock:
+            _deploy_active = False
+            _deploy_status["running"] = False
+            _deploy_status["health"] = "error"
+            _deploy_status["error_msg"] = f"model_load_failed: {exc}"
+            _deploy_status["deploy_id"] = None
+            _deploy_id = None
+        raise
 
     with _deploy_lock:
         _deploy_status["is_multi_agent"] = _model.is_multi_agent
+        _deploy_status["health"] = "ok"
         if _model.is_multi_agent:
             _deploy_status["tl_ids"] = _model.tl_ids
 
@@ -422,31 +496,86 @@ def start_deploy(model_path: str, tl_id: str | None = None, grid_rows: int = 2, 
     )
     _deploy_thread.start()
 
-    return {"status": "started", "is_multi_agent": _model.is_multi_agent}
+    return {
+        "status": "started",
+        "is_multi_agent": _model.is_multi_agent,
+        "deploy_id": _deploy_id,
+    }
 
 
 def stop_deploy() -> dict:
-    global _deploy_active
+    """Stop the deploy loop and wait for the worker thread to fully tear down.
+
+    Joining the thread (C4) avoids a TraCI port collision: without the join,
+    a fast follow-up ``start_deploy`` could open a new SUMO instance while
+    the previous thread is still finishing ``_sumo.stop()``.
+    """
+    global _deploy_active, _deploy_id, _deploy_thread
 
     with _deploy_lock:
+        was_active = _deploy_active
         _deploy_active = False
         _deploy_status["running"] = False
+        _deploy_status["health"] = "idle"
+        prior_deploy_id = _deploy_id
+        _deploy_id = None
+        _deploy_status["deploy_id"] = None
+        thread_to_join = _deploy_thread
+
+    if thread_to_join is not None and thread_to_join.is_alive():
+        thread_to_join.join(timeout=5.0)
+        if thread_to_join.is_alive():
+            logger.warning("Deploy thread did not exit within 5s — proceeding anyway")
 
     _sumo.stop()
-    return {"status": "stopped", "step": _deploy_status["step"]}
+    with _deploy_lock:
+        _deploy_thread = None
+    return {
+        "status": "stopped" if was_active else "not_running",
+        "step": _deploy_status["step"],
+        "prior_deploy_id": prior_deploy_id,
+    }
 
 
 def get_deploy_status() -> dict:
+    """Return deploy status enriched with upstream video stream error (C8).
+
+    The video stream runs in its own thread and may fail mid-deploy
+    (e.g. file truncated, codec error). Without this merge the deploy
+    appears healthy while no vehicles spawn.
+    """
+    from service.video_analyzer import get_stream_error
+
     with _deploy_lock:
-        return dict(_deploy_status)
+        status = dict(_deploy_status)
+
+    stream_err = get_stream_error()
+    if stream_err and status.get("running"):
+        status["health"] = "error"
+        status["error_msg"] = stream_err
+        status["stream_error"] = stream_err
+    return status
 
 
 def get_deploy_snapshot() -> dict:
+    from service.video_analyzer import get_stream_error
+
     with _deploy_lock:
         if _snapshot_data:
             snapshot = dict(_snapshot_data)
         else:
             snapshot = {"step": 0, "running": _deploy_status.get("running", False)}
+        snapshot["deploy_id"] = _deploy_id
+        snapshot["health"] = _deploy_status.get("health", "idle")
+        snapshot["error_msg"] = _deploy_status.get("error_msg")
+        snapshot["model_path"] = _deploy_status.get("model_path")
+        snapshot["network_id"] = _deploy_status.get("network_id")
+
+    # Surface upstream stream errors so the frontend can show a banner (C8).
+    stream_err = get_stream_error()
+    if stream_err and snapshot.get("running"):
+        snapshot["health"] = "error"
+        snapshot["error_msg"] = stream_err
 
     # Backfill geometry if snapshot exists but geometry is missing/empty.
     geometry = snapshot.get("network_geometry")
@@ -469,6 +598,15 @@ def get_deploy_snapshot() -> dict:
             pass
 
     return snapshot
+
+
+def toggle_agent(enabled: bool) -> dict:
+    global _agent_enabled
+    with _deploy_lock:
+        _agent_enabled = enabled
+        _deploy_status["agent_enabled"] = enabled
+    logger.info("Agent control %s", "ENABLED" if enabled else "DISABLED")
+    return {"agent_enabled": enabled}
 
 
 def list_models() -> list[dict]:
@@ -520,19 +658,23 @@ def _deploy_loop(tl_id: str | None, grid_rows: int, grid_cols: int, network_id: 
 
         # ── Step 1: Resolve network ──────────────────────────────────
         if network_id:
-            saved_net = SAVED_NETWORKS_DIR / f"{network_id}.net.xml"
+            saved_networks_dir = _get_saved_networks_dir()
+            saved_net = saved_networks_dir / f"{network_id}.net.xml"
             if saved_net.exists():
                 net_path = saved_net
                 use_saved_network = True
                 logger.info("Using saved OSM network: %s", net_path)
 
                 # Check for existing route file
-                saved_route = SAVED_NETWORKS_DIR / f"{network_id}_moderate.rou.xml"
+                saved_route = saved_networks_dir / f"{network_id}_moderate.rou.xml"
                 if saved_route.exists():
                     route_path = saved_route
                     logger.info("Using saved route file: %s", route_path)
             else:
-                logger.warning("Saved network not found: %s. Falling back to grid.", saved_net)
+                logger.warning(
+                    "Saved network not found: %s (SAVED_NETWORKS_DIR=%s). Falling back to grid.",
+                    saved_net, saved_networks_dir,
+                )
 
         if net_path is None:
             # Generate grid network
@@ -623,6 +765,20 @@ def _deploy_loop(tl_id: str | None, grid_rows: int, grid_cols: int, network_id: 
             controlled_lanes = []
             green_indices = []
 
+        # Per-TL state for CoLight duration-bucket mode
+        _elapsed_in_green: dict[str, int] = {tid: 0 for tid in controlled_tl_ids}
+        _current_green_idx_map: dict[str, int] = {tid: 0 for tid in controlled_tl_ids}
+
+        # Compute max_lanes across all controlled TLs for uniform obs padding
+        _max_lanes: int = 0
+        if is_multi and controlled_tl_ids:
+            for ctl_id in controlled_tl_ids:
+                try:
+                    lanes = list(set(conn.trafficlight.getControlledLanes(ctl_id)))
+                    _max_lanes = max(_max_lanes, len(lanes))
+                except Exception:
+                    pass
+
         # ── Step 5: Detect boundary edges for spawning ───────────────
         boundary_edges = None
         if use_saved_network:
@@ -641,11 +797,31 @@ def _deploy_loop(tl_id: str | None, grid_rows: int, grid_cols: int, network_id: 
         # ── Cache network geometry (static — only needs to be fetched once) ─
         network_geometry = _sumo.get_network_geometry() if _sumo.running else {}
 
+        # ── Cache TL link → approach metadata so the frontend can render
+        # bulbs at correct compass positions (one bulb per physical road
+        # approach, not per SUMO link). Static for the duration of the
+        # deploy — the network topology doesn't change once SUMO has
+        # started, so we compute it once per controlled TL here. ──
+        tl_link_metadata: dict[str, dict] = {}
+        if _sumo.running:
+            for ctl_id in controlled_tl_ids:
+                try:
+                    tl_link_metadata[ctl_id] = _sumo.get_tl_link_metadata(ctl_id)
+                except Exception as exc:
+                    logger.warning("Failed to fetch link metadata for %s: %s", ctl_id, exc)
+            logger.info(
+                "Cached TL link metadata for %d controlled TLs (approaches per TL: %s)",
+                len(tl_link_metadata),
+                {k: len(v.get("approaches", [])) for k, v in tl_link_metadata.items()},
+            )
+
         start_background_loop()
         reset_video_complete_flag()
+        reset_waiting_history()
 
         veh_ids: set[str] = set()
         _direction_tracker.__init__()
+        _prev_agent_on = True  # track previous tick to detect transitions
 
         while _deploy_active:
             start_background_loop()
@@ -664,14 +840,32 @@ def _deploy_loop(tl_id: str | None, grid_rows: int, grid_cols: int, network_id: 
             metrics = _sumo.step()
             last_action = _deploy_status.get("last_action")
 
+            # ── Agent toggle: install fixed-time when agent is switched off ──
+            agent_on = _agent_enabled
+            if not agent_on and _prev_agent_on:
+                # Switched OFF: put AI-controlled TLs onto fixed-time so they keep cycling
+                _sumo.install_fixed_time_on_all(
+                    green_duration=FIXED_GREEN,
+                    yellow_duration=FIXED_YELLOW,
+                    red_duration=FIXED_RED,
+                    exclude_tl_ids=fixed_tl_ids,
+                )
+                logger.info("Agent disabled — installed fixed-time on controlled TLs")
+            _prev_agent_on = agent_on
+
             # ── AI decision step ─────────────────────────────────────
-            if DEPLOY_DECISION_INTERVAL_STEPS > 0 and metrics["step"] % DEPLOY_DECISION_INTERVAL_STEPS == 0:
+            if agent_on and DEPLOY_DECISION_INTERVAL_STEPS > 0 and metrics["step"] % DEPLOY_DECISION_INTERVAL_STEPS == 0:
                 if is_multi:
                     # Multi-agent: build observations for all controlled TLs
                     observations = []
                     for ctl_id in controlled_tl_ids:
-                        obs = _sumo.build_observation_for_tl(ctl_id, _model.num_actions)
-                        # Pad/trim to match expected ob_length
+                        obs = _sumo.build_observation_for_tl(
+                            ctl_id,
+                            _model.num_actions,
+                            max_lanes=_max_lanes if _max_lanes > 0 else None,
+                            elapsed_in_green=_elapsed_in_green.get(ctl_id, 0),
+                            max_bucket=_MAX_BUCKET,
+                        )
                         obs_arr = np.array(obs, dtype=np.float32)
                         if obs_arr.size < _model.ob_length:
                             obs_arr = np.concatenate([
@@ -689,23 +883,33 @@ def _deploy_loop(tl_id: str | None, grid_rows: int, grid_cols: int, network_id: 
                     obs_matrix = np.stack(observations[:_model.num_intersections])
                     actions = _model.predict_multi(obs_matrix)
 
-                    # Apply actions to controlled TLs
+                    # Apply duration-bucket logic (matches CoLight training in colight_env.py)
                     for i, ctl_id in enumerate(controlled_tl_ids):
                         if i >= len(actions):
                             break
                         action = int(actions[i])
-                        # Map action to SUMO phase
                         gi = _get_green_phase_indices(conn, ctl_id)
-                        if gi and action < len(gi):
-                            sumo_phase = gi[action]
-                        elif gi:
-                            sumo_phase = gi[0]
-                        else:
-                            sumo_phase = action
-                        try:
-                            conn.trafficlight.setPhase(ctl_id, int(sumo_phase))
-                        except Exception as exc:
-                            logger.debug("Failed to set phase on %s: %s", ctl_id, exc)
+                        num_green = len(gi)
+                        current_idx = _current_green_idx_map.get(ctl_id, 0)
+
+                        if num_green > 1:
+                            bucket = action % len(DURATION_BUCKETS_SEC)
+                            target_age = DURATION_BUCKETS_SEC[bucket]
+                            elapsed = _elapsed_in_green.get(ctl_id, 0)
+
+                            if elapsed >= target_age:
+                                new_idx = (current_idx + 1) % num_green
+                                sumo_phase = gi[new_idx]
+                                try:
+                                    conn.trafficlight.setPhase(ctl_id, int(sumo_phase))
+                                except Exception as exc:
+                                    logger.debug("Failed to set phase on %s: %s", ctl_id, exc)
+                                _current_green_idx_map[ctl_id] = new_idx
+                                _elapsed_in_green[ctl_id] = 0
+
+                    # Advance elapsed counters for all controlled TLs
+                    for ctl_id in controlled_tl_ids:
+                        _elapsed_in_green[ctl_id] = _elapsed_in_green.get(ctl_id, 0) + DEPLOY_DECISION_INTERVAL_STEPS
 
                     last_action = actions.tolist() if len(actions) > 1 else int(actions[0])
 
@@ -738,7 +942,8 @@ def _deploy_loop(tl_id: str | None, grid_rows: int, grid_cols: int, network_id: 
             snapshot = {
                 "step": metrics["step"],
                 "running": True,
-                "video_frame": frame_data.get("image_annotated") or frame_data.get("image"),
+                "video_frame": frame_data.get("image"),
+                "video_frame_annotated": frame_data.get("image_annotated"),
                 "video_timestamp": frame_data.get("timestamp", 0.0),
                 "vehicles": _sumo.get_vehicles() if _sumo.running else [],
                 "tl_state": tl_states,
@@ -750,9 +955,11 @@ def _deploy_loop(tl_id: str | None, grid_rows: int, grid_cols: int, network_id: 
                 },
                 "ai_action": last_action,
                 "is_multi_agent": is_multi,
+                "agent_enabled": agent_on,
                 "controlled_tl_ids": controlled_tl_ids,
                 "fixed_tl_ids": fixed_tl_ids,
                 "network_geometry": network_geometry,
+                "tl_link_metadata": tl_link_metadata,
             }
 
             with _deploy_lock:
@@ -766,6 +973,13 @@ def _deploy_loop(tl_id: str | None, grid_rows: int, grid_cols: int, network_id: 
                 logger.info("Video completed — deploy run finished")
                 with _deploy_lock:
                     _deploy_status["video_complete"] = True
+                try:
+                    history = get_waiting_history()
+                    chart_path = default_chart_path(RESULT_DIR, tag="deploy")
+                    save_waiting_timeseries_chart(history, chart_path)
+                    logger.info("Waiting-count chart saved: %s", chart_path)
+                except Exception:
+                    logger.exception("Failed to save waiting-count chart")
                 break
 
             time.sleep(0.1)
@@ -777,8 +991,11 @@ def _deploy_loop(tl_id: str | None, grid_rows: int, grid_cols: int, network_id: 
 
         logger.info("Deploy loop finished")
 
-    except Exception:
+    except Exception as exc:
         logger.exception("Deploy loop error")
+        with _deploy_lock:
+            _deploy_status["health"] = "error"
+            _deploy_status["error_msg"] = f"deploy_loop_crashed: {exc}"
     finally:
         with _deploy_lock:
             _deploy_active = False

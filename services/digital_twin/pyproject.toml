@@ -10,6 +10,13 @@ dependencies = [
     "opencv-python-headless>=4.10.0",
     "lap>=0.5.12",
     "numpy>=1.26.0",
+    "matplotlib>=3.8.0",
     "torch>=2.2.0",
     "sahi",
+    "tensorrt>=10.16.1.11",
+    "torchvision>=0.21.0",
+    "torchaudio>=2.6.0",
 ]
+
+[[tool.uv.index]]
+url = "https://download.pytorch.org/whl/cu124"

@@ -89,13 +89,22 @@ services:
     build:
       context: ./services/digital_twin
     image: traffic-monitor-digital-twin
+    pull_policy: never
     ports:
       - "8001:8001"
     environment:
-
+      - MODEL_PATH=/app/simulate_real_traffic/model/yolo11x.pt
+      - SAVED_NETWORKS_DIR=/app/simulation/networks
+      - DEPLOY_MODEL_DIR=/app/simulation/models
+    volumes:
       - ./services/digital_twin/data:/app/data
       - ./services/digital_twin/model:/app/model:ro
-      - ./simulation:/simulation
+      - ./services/digital_twin/simulate_real_traffic:/app/simulate_real_traffic
+      - ./services/digital_twin/result:/app/result
+      - ./simulation:/app/simulation
+      # service/ code mounted for dev hot-reload (paired with --reload below)
+      - ./services/digital_twin/service:/app/service:ro
+    command: ["uv", "run", "uvicorn", "service.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload", "--reload-dir", "/app/service"]
     networks:
       - traffic-network
     deploy:

@@ -1,10 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Play, Square, Gauge, Cpu, Video, AlertTriangle, Map, Layers, Eye } from 'lucide-react';
+import { ArrowLeft, Play, Square, Gauge, Video, AlertTriangle, Map, Eye } from 'lucide-react';
 import { digitalTwinDeployService, type DeploySnapshot, type DeployStatus } from '../services/digitalTwinDeployService';
 import { mapService } from '../services/mapService';
 import { modelService } from '../services/modelService';
 import type { TrainedModel } from '../types';
+
+const VIDEO_START_TIME = '12:00:00';
+
+const formatHms = (seconds: number): string => {
+  const total = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+};
 
 export function DigitalTwinDeployPage() {
   const navigate = useNavigate();
@@ -19,6 +29,7 @@ export function DigitalTwinDeployPage() {
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showAnnotated, setShowAnnotated] = useState(true);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -63,6 +74,13 @@ export function DigitalTwinDeployPage() {
 
   const handleStart = async () => {
     if (!selectedModel) return;
+    // Stop polling immediately so transitional SUMO-startup data can't crash the render
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    setSnapshot(null);
+    setStatus(null);
     setStarting(true);
     setError(null);
     try {
@@ -73,11 +91,23 @@ export function DigitalTwinDeployPage() {
         selectedNetwork || undefined,
         tlIds,
       );
+      navigate('/');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to start deploy';
       setError(msg);
-    } finally {
       setStarting(false);
+      // Restart polling after a failed deploy
+      const poll = async () => {
+        try {
+          const [snap, stat] = await Promise.all([
+            digitalTwinDeployService.getSnapshot(),
+            digitalTwinDeployService.getStatus(),
+          ]);
+          setSnapshot(snap);
+          setStatus(stat);
+        } catch { /* ignore */ }
+      };
+      pollRef.current = setInterval(poll, 250);
     }
   };
 
@@ -134,23 +164,24 @@ export function DigitalTwinDeployPage() {
       }}
     >
       {/* Header */}
-      <header className="border-b border-white/10 bg-black/40 backdrop-blur">
+      <header className="border-b border-white/10 bg-black/30 backdrop-blur-sm">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
               onClick={() => navigate('/')}
               className="p-2 rounded-lg hover:bg-white/10 transition-colors"
+              aria-label="Back"
             >
               <ArrowLeft size={18} />
             </button>
-            <div className="flex items-center gap-2">
-              <Cpu size={18} className="text-cyan-400" />
-              <h1 className="text-lg font-semibold tracking-wide">Digital Twin Deploy</h1>
-            </div>
+            <h1 className="text-lg font-semibold tracking-wide">Digital Twin Deploy</h1>
           </div>
           <div className="flex items-center gap-3 text-xs text-slate-300">
             <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full" style={{ background: status?.running ? '#22c55e' : '#64748b' }} />
+              <span
+                className="w-2 h-2 rounded-full"
+                style={{ background: status?.running ? '#22c55e' : '#64748b' }}
+              />
               {status?.running ? 'Running' : 'Idle'}
             </div>
             <div className="px-2.5 py-1 rounded-full bg-white/5 border border-white/10">
@@ -323,14 +354,27 @@ export function DigitalTwinDeployPage() {
         {/* Live panels */}
         <section className="space-y-6">
           <div className="bg-white/5 border border-white/10 rounded-2xl overflow-hidden shadow-lg shadow-black/30">
-            <div className="px-4 py-2 border-b border-white/10 text-xs uppercase tracking-widest text-slate-400 flex items-center gap-2">
-              <Video size={14} className="text-cyan-400" />
-              Live Video Feed
+            <div className="px-4 py-2.5 border-b border-white/10 text-xs uppercase tracking-widest text-slate-400 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Video size={14} className="text-cyan-400" />
+                Live Video Feed
+              </div>
+              {snapshot?.video_frame_annotated && (
+                <label className="flex items-center gap-2 cursor-pointer select-none text-[10px] text-slate-400 hover:text-slate-200 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={showAnnotated}
+                    onChange={(e) => setShowAnnotated(e.target.checked)}
+                    className="accent-cyan-400"
+                  />
+                  Show Bounding Boxes
+                </label>
+              )}
             </div>
             <div className="h-[420px] bg-black/40 flex items-center justify-center">
               {snapshot?.video_frame ? (
                 <img
-                  src={`data:image/jpeg;base64,${snapshot.video_frame}`}
+                  src={`data:image/jpeg;base64,${showAnnotated && snapshot.video_frame_annotated ? snapshot.video_frame_annotated : snapshot.video_frame}`}
                   alt="Digital twin video"
                   className="max-h-full max-w-full object-contain"
                 />
@@ -347,7 +391,7 @@ export function DigitalTwinDeployPage() {
                 <div className="space-y-2 max-h-[120px] overflow-y-auto pr-1">
                   {Object.entries(snapshot.tl_state as Record<string, { tl_id: string; phase: number; state: string; program: string }>).map(([id, st]) => {
                     const isControlled = snapshot.controlled_tl_ids?.includes(id);
-                    const stState = st.state || '';
+                    const stState = st?.state || '';
                     const color = stState.includes('G') || stState.includes('g') ? 'bg-emerald-500'
                       : stState.includes('y') ? 'bg-amber-400' : 'bg-red-500';
                     return (

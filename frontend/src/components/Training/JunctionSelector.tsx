@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { CheckSquare, Square, Network } from 'lucide-react';
 import { useMapStore } from '../../store/mapStore';
+import { useModelStore } from '../../store/modelStore';
 
 export function JunctionSelector() {
   const sumoTrafficLights = useMapStore((s) => s.sumoTrafficLights);
@@ -13,6 +14,13 @@ export function JunctionSelector() {
   const loadTlClusters = useMapStore((s) => s.loadTlClusters);
   const selectCluster = useMapStore((s) => s.selectCluster);
   const currentNetworkId = useMapStore((s) => s.currentNetworkId);
+  const deployments = useModelStore((s) => s.deployments);
+
+  // TLs that currently have a model deployed — flagged in the list so the user
+  // knows training one builds a replacement (it does not disturb the deploy).
+  const deployedJunctionIds = new Set(
+    deployments.flatMap((d) => (d.tl_ids && d.tl_ids.length > 0 ? d.tl_ids : [d.tl_id])),
+  );
 
   // Restrict the list to TLs inside the user's bbox with a renderable coord.
   // netconvert's buffer leaks tlLogics beyond the drawn rectangle; listing
@@ -93,6 +101,7 @@ export function JunctionSelector() {
       <div className="max-h-48 overflow-y-auto space-y-1">
         {visibleTls.map((tl) => {
           const isSelected = selectedJunctionIds.includes(tl.id);
+          const isDeployed = deployedJunctionIds.has(tl.id);
           return (
             <button
               key={tl.id}
@@ -109,6 +118,14 @@ export function JunctionSelector() {
                 <Square size={14} className="text-gray-400 shrink-0" />
               )}
               <span className="truncate font-mono text-xs">{tl.id}</span>
+              {isDeployed && (
+                <span
+                  className="text-[9px] px-1 py-0.5 rounded bg-purple-100 text-purple-700 font-medium shrink-0"
+                  title="A model is currently deployed here — training builds a replacement"
+                >
+                  deployed
+                </span>
+              )}
               <span className="text-xs text-gray-400 ml-auto">{tl.num_phases}p</span>
             </button>
           );

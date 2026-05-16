@@ -18,12 +18,16 @@ export interface DeployVideoInfo {
 export interface DeploySnapshot {
   step: number;
   running: boolean;
-  video_frame?: string | null;
+  agent_enabled?: boolean;
+  video_frame?: string;
+  video_frame_annotated?: string;
   video_timestamp?: number;
   vehicles?: Array<{
     id: string;
     x: number;
     y: number;
+    lat?: number;
+    lng?: number;
     speed: number;
     waiting_time: number;
     lane: string;
@@ -64,7 +68,25 @@ export interface DeploySnapshot {
       }>;
     }>;
   };
+  tl_link_metadata?: TlLinkMetadataMap;
 }
+
+/** One physical incoming road at a traffic light. `angle_deg` is the
+ *  compass bearing (0=N, 90=E, clockwise) from the junction toward the
+ *  incoming road — the side vehicles wait on. `link_indices` are the SUMO
+ *  state-string positions that belong to this approach (use to extract the
+ *  bulb color via majority). */
+export interface ApproachMeta {
+  angle_deg: number;
+  link_indices: number[];
+  from_edge: string;
+}
+
+/** Per-TL link → approach mapping, computed once at deploy start from
+ *  SUMO net topology. Renderers use this to position bulbs at correct
+ *  compass angles. The shape is the single source of truth — both the
+ *  marker icon and the modal import it. */
+export type TlLinkMetadataMap = Record<string, { approaches: ApproachMeta[] }>;
 
 export interface DeployStatus {
   running: boolean;
@@ -72,12 +94,14 @@ export interface DeployStatus {
   num_sumo_vehicles: number;
   video_complete: boolean;
   model_path?: string | null;
+  network_id?: string | null;
   tl_id?: string | null;
   tl_ids?: string[];
   last_action?: number | number[] | null;
   is_multi_agent?: boolean;
   controlled_tl_ids?: string[];
   fixed_tl_ids?: string[];
+  agent_enabled?: boolean;
 }
 
 export const digitalTwinDeployService = {
@@ -113,6 +137,15 @@ export const digitalTwinDeployService = {
 
   async getStatus(): Promise<DeployStatus> {
     const res = await axios.get<DeployStatus>(`${DIGITAL_TWIN_BASE}/deploy/status`);
+    return res.data;
+  },
+
+  async toggleAgent(enabled: boolean): Promise<{ agent_enabled: boolean }> {
+    const res = await axios.post<{ agent_enabled: boolean }>(
+      `${DIGITAL_TWIN_BASE}/deploy/agent/toggle`,
+      null,
+      { params: { enabled } },
+    );
     return res.data;
   },
 };
